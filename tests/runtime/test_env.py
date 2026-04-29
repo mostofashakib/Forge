@@ -136,3 +136,79 @@ def test_invalid_action_count_in_task_dict_passed_to_reward():
     env.step({"type": "nonexistent_action"})  # invalid — increments count
     env.step({"type": "increment"})           # valid step — reward is called
     assert received_task.get("invalid_action_count") == 1
+
+
+# --- Appended for M5 telemetry tests ---
+
+class MockTelemetry:
+    def __init__(self):
+        self.steps = []
+        self.completions = []
+
+    def record_step(self, snapshot):
+        self.steps.append(snapshot)
+
+    def complete_episode(self, total_reward, passed, total_steps):
+        self.completions.append({"total_reward": total_reward, "passed": passed, "total_steps": total_steps})
+
+
+def build_env_with_telemetry(telemetry, max_steps: int = 10) -> ForgeEnv:
+    spec = EnvironmentSpec(name="test_env", domain="test", max_steps=max_steps)
+    te = TransitionEngine()
+    te.register("increment", increment_transition)
+    ve = VerifierEngine()
+    ve.register("check_counter", check_counter_verifier)
+    re = RewardEngine()
+    return ForgeEnv(
+        env_spec=spec,
+        initial_state_factory=FixedStateFactory(),
+        transition_engine=te,
+        verifier_engine=ve,
+        reward_engine=re,
+        telemetry=telemetry,
+    )
+
+
+def test_forgeenv_telemetry_defaults_to_none():
+    env = build_env()
+    assert env._telemetry is None
+
+
+def test_forgeenv_action_types_returns_registered_types():
+    env = build_env()
+    assert "increment" in env.action_types
+
+
+def test_forgeenv_telemetry_records_step_on_valid_action():
+    telemetry = MockTelemetry()
+    env = build_env_with_telemetry(telemetry)
+    env.reset(seed=1)
+    env.step({"type": "increment"})
+    assert len(telemetry.steps) == 1
+    assert telemetry.steps[0].step_index == 0
+    assert telemetry.steps[0].action == {"type": "increment"}
+
+
+def test_forgeenv_telemetry_records_step_on_invalid_action():
+    telemetry = MockTelemetry()
+    env = build_env_with_telemetry(telemetry)
+    env.reset(seed=1)
+    env.step({"type": "nonexistent_action"})
+    assert len(telemetry.steps) == 1
+
+
+def test_forgeenv_telemetry_calls_complete_episode_on_truncation():
+    telemetry = MockTelemetry()
+    env = build_env_with_telemetry(telemetry, max_steps=1)
+    env.reset(seed=1)
+    _, reward, terminated, truncated, _ = env.step({"type": "increment"})
+    assert truncated is True
+    assert len(telemetry.completions) == 1
+    assert telemetry.completions[0]["passed"] is False
+    assert telemetry.completions[0]["total_steps"] == 1
+
+
+def test_forgeenv_telemetry_none_does_not_raise():
+    env = build_env()  # no telemetry
+    env.reset(seed=1)
+    env.step({"type": "increment"})  # must not raise
