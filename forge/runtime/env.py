@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 import gymnasium as gym
 from forge.runtime.action import ActionValidator
 from forge.runtime.context import RuntimeContext
@@ -10,6 +10,9 @@ from forge.runtime.state import StateStore
 from forge.runtime.trajectory import TrajectoryStore
 from forge.runtime.transition import TransitionEngine
 from forge.runtime.verifier import VerifierEngine
+
+if TYPE_CHECKING:
+    from forge.runtime.telemetry import TelemetryClient
 
 
 class InitialStateFactory(Protocol):
@@ -26,6 +29,7 @@ class ForgeEnv(gym.Env):
         transition_engine: TransitionEngine,
         verifier_engine: VerifierEngine,
         reward_engine: RewardEngine,
+        telemetry: "TelemetryClient | None" = None,
     ) -> None:
         super().__init__()
         self.env_spec = env_spec
@@ -34,6 +38,7 @@ class ForgeEnv(gym.Env):
         self._verifier_engine = verifier_engine
         self._reward_engine = reward_engine
         self._action_validator = ActionValidator(transition_engine.action_types)
+        self._telemetry = telemetry
 
         self.observation_space = gym.spaces.Dict({})
         self.action_space = gym.spaces.Dict({})
@@ -45,6 +50,11 @@ class ForgeEnv(gym.Env):
         self._step_count: int = 0
         self._episode_id: str | None = None
         self._invalid_action_count: int = 0
+        self._total_reward: float = 0.0
+
+    @property
+    def action_types(self) -> frozenset:
+        return frozenset(self._action_validator._valid_types)
 
     def reset(
         self, seed: int | None = None, options: dict | None = None
@@ -61,6 +71,7 @@ class ForgeEnv(gym.Env):
         self._current_task = opts.get("task", self.env_spec.default_task)
         self._step_count = 0
         self._invalid_action_count = 0
+        self._total_reward = 0.0
 
         return self._state_store.get(), {
             "episode_id": self._episode_id,
@@ -104,6 +115,7 @@ class ForgeEnv(gym.Env):
         )
 
         self._step_count += 1
+        self._total_reward += reward_breakdown.total_reward
         terminated = any(vr.passed for vr in verifier_results)
         truncated = self._step_count >= self.env_spec.max_steps
 
@@ -122,6 +134,11 @@ class ForgeEnv(gym.Env):
         )
         self._traj_store.record(snapshot)
 
+        if self._telemetry:
+            self._telemetry.record_step(snapshot)
+        if (terminated or truncated) and self._telemetry:
+            self._telemetry.complete_episode(self._total_reward, terminated, self._step_count)
+
         return state_after, reward_breakdown.total_reward, terminated, truncated, {
             "episode_id": self._episode_id,
             "verifier_results": [vr.model_dump() for vr in verifier_results],
@@ -132,18 +149,19 @@ class ForgeEnv(gym.Env):
     def _record_invalid_step(self, hash_before: str, action: dict) -> None:
         self._step_count += 1
         self._invalid_action_count += 1
-        self._traj_store.record(
-            StepSnapshot(
-                episode_id=self._episode_id,
-                step_index=self._step_count - 1,
-                state_hash_before=hash_before,
-                state_hash_after=hash_before,
-                action=action,
-                events=[],
-                reward=0.0,
-                verifier_results=[],
-                diff={"added": {}, "changed": {}, "removed": {}},
-                terminated=False,
-                truncated=False,
-            )
+        snapshot = StepSnapshot(
+            episode_id=self._episode_id,
+            step_index=self._step_count - 1,
+            state_hash_before=hash_before,
+            state_hash_after=hash_before,
+            action=action,
+            events=[],
+            reward=0.0,
+            verifier_results=[],
+            diff={"added": {}, "changed": {}, "removed": {}},
+            terminated=False,
+            truncated=False,
         )
+        self._traj_store.record(snapshot)
+        if self._telemetry:
+            self._telemetry.record_step(snapshot)
