@@ -87,3 +87,14 @@ def test_cluster_skips_episodes_with_no_failed_checks():
     ]
     clusters = FailureClusterer().cluster(records)
     assert clusters == []
+
+
+def test_cluster_skips_steps_with_malformed_json():
+    ep = MagicMock()
+    ep.id = "ep_bad"
+    ep.passed = False
+    step = MagicMock()
+    step.verifier_results = "not valid json"
+    record = EpisodeRecord(episode=ep, steps=[step])
+    clusters = FailureClusterer().cluster([record])
+    assert clusters == []

@@ -36,7 +36,10 @@ class FailureClusterer:
 
     def _first_failed_check(self, record: EpisodeRecord) -> str | None:
         for step in record.steps:
-            results = json.loads(step.verifier_results)
+            try:
+                results = json.loads(step.verifier_results)
+            except (json.JSONDecodeError, TypeError):
+                continue
             for vr in results:
                 for check in vr.get("checks", []):
                     if not check.get("passed", True):
