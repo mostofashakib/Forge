@@ -1,0 +1,16 @@
+from __future__ import annotations
+from generated_envs.{{ project_name }}.gym_wrapper import build_{{ project_name }}_env
+
+
+def test_same_seed_produces_same_observation():
+    env = build_{{ project_name }}_env()
+    obs1, _ = env.reset(seed=42)
+    obs2, _ = env.reset(seed=42)
+    assert obs1 == obs2
+
+
+def test_env_builds_and_resets():
+    env = build_{{ project_name }}_env()
+    obs, info = env.reset(seed=0)
+    assert isinstance(obs, dict)
+    assert "episode_id" in info

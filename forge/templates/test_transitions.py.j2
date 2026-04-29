@@ -1,0 +1,46 @@
+from __future__ import annotations
+from forge.runtime.context import RuntimeContext
+from generated_envs.{{ project_name }}.initial_state import {{ project_name | pascal_case }}InitialStateFactory
+
+{% for action in actions %}
+from generated_envs.{{ project_name }}.transitions.{{ action.name }} import apply_{{ action.name }}
+{% endfor %}
+
+
+def make_state(seed: int = 0):
+    ctx = RuntimeContext(seed=seed)
+    state = {{ project_name | pascal_case }}InitialStateFactory().create(ctx, {})
+    return state, ctx
+
+{% for action in actions %}
+{% if action.params %}
+def test_{{ action.name }}_returns_transition_result():
+    state, ctx = make_state()
+{% set primary_entity = action.mutates[0].split('.')[0] if action.mutates else none %}
+{% if primary_entity %}
+    entity_id = next(iter(state.get("{{ primary_entity | plural }}", {"_": None})))
+    action = {"type": "{{ action.name }}", "{{ action.params[0].name }}": entity_id}
+{% else %}
+    action = {"type": "{{ action.name }}"{% for p in action.params %}, "{{ p.name }}": "test"{% endfor %}}
+{% endif %}
+    result = apply_{{ action.name }}(state, action, ctx)
+    assert result.state is not None
+    assert isinstance(result.events, list)
+
+
+def test_{{ action.name }}_does_not_mutate_original():
+    state, ctx = make_state()
+    import copy
+    original = copy.deepcopy(state)
+{% set primary_entity = action.mutates[0].split('.')[0] if action.mutates else none %}
+{% if primary_entity %}
+    entity_id = next(iter(state.get("{{ primary_entity | plural }}", {"_": None})))
+    action_dict = {"type": "{{ action.name }}", "{{ action.params[0].name }}": entity_id}
+{% else %}
+    action_dict = {"type": "{{ action.name }}"{% for p in action.params %}, "{{ p.name }}": "test"{% endfor %}}
+{% endif %}
+    apply_{{ action.name }}(state, action_dict, ctx)
+    assert state == original
+
+{% endif %}
+{% endfor %}
