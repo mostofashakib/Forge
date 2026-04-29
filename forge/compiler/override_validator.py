@@ -1,9 +1,7 @@
 from __future__ import annotations
-import importlib.util
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from forge.customization.hooks import clear_registry, get_registry
+from forge.customization.hooks import clear_registry, get_registry, import_custom_file
 from forge.extraction.schemas import CompilerInput
 
 
@@ -20,13 +18,16 @@ class OverrideValidator:
             return OverrideValidationResult(valid=True)
 
         clear_registry()
+        errors: list[str] = []
         for py_file in sorted(custom_dir.glob("*.py")):
             if py_file.name.startswith("_"):
                 continue
-            _import_file(py_file)
+            try:
+                import_custom_file(py_file, "_forge_override_check")
+            except Exception as exc:
+                errors.append(f"Failed to load '{py_file.name}': {exc}")
 
         registry = get_registry()
-        errors: list[str] = []
         action_names = {a.name for a in compiler_input.actions}
         task_names = {t.name for t in compiler_input.tasks}
 
@@ -50,16 +51,3 @@ class OverrideValidator:
                 )
 
         return OverrideValidationResult(valid=len(errors) == 0, errors=errors)
-
-
-def _import_file(path: Path) -> None:
-    module_name = f"_forge_override_check_{path.stem}"
-    spec = importlib.util.spec_from_file_location(module_name, path)
-    if spec is None or spec.loader is None:
-        return
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    try:
-        spec.loader.exec_module(module)
-    except Exception:
-        pass

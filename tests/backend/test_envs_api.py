@@ -67,3 +67,9 @@ def test_put_config_writes_yaml(client, tmp_path, monkeypatch, env_with_config):
     assert response.status_code == 200
     config_path = env_with_config / "my_env" / "custom" / "config.yaml"
     assert config_path.read_text() == new_yaml
+
+
+def test_get_config_rejects_path_traversal(client):
+    response = client.get("/api/envs/../etc/passwd/config")
+    # FastAPI will either reject the path or return 400/404
+    assert response.status_code in (400, 404, 422)
