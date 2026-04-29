@@ -1,0 +1,28 @@
+from __future__ import annotations
+from pydantic import BaseModel, Field
+{% set needs_literal = namespace(value=false) %}
+{% for entity in entities %}
+{% for field in entity.fields %}
+{% if field.type == "enum" and field.values %}
+{% set needs_literal.value = true %}
+{% endif %}
+{% endfor %}
+{% endfor %}
+{% if needs_literal.value %}
+from typing import Literal
+{% endif %}
+
+
+{% for entity in entities %}
+class {{ entity.name | pascal_case }}(BaseModel):
+{% for field in entity.fields %}
+{% set ann = field | py_type %}
+{% set dflt = field | default_repr %}
+{% if dflt %}
+    {{ field.name }}: {{ ann }} = {{ dflt }}
+{% else %}
+    {{ field.name }}: {{ ann }}
+{% endif %}
+{% endfor %}
+
+{% endfor %}

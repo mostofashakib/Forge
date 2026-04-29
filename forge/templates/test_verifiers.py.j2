@@ -1,0 +1,27 @@
+from __future__ import annotations
+from forge.runtime.trajectory import Trajectory
+from generated_envs.{{ project_name }}.initial_state import {{ project_name | pascal_case }}InitialStateFactory
+from forge.runtime.context import RuntimeContext
+{% for task in tasks %}
+from generated_envs.{{ project_name }}.verifiers.{{ task.name }} import verify_{{ task.name }}
+{% endfor %}
+
+
+def empty_trajectory():
+    return Trajectory(episode_id="ep_0", steps=[])
+
+
+def make_state(seed: int = 0):
+    ctx = RuntimeContext(seed=seed)
+    state = {{ project_name | pascal_case }}InitialStateFactory().create(ctx, {})
+    return state, ctx
+
+{% for task in tasks %}
+def test_{{ task.name }}_verifier_returns_result():
+    state, ctx = make_state()
+    task = {"name": "{{ task.name }}", "verifier_id": "{{ task.name }}", "inputs": {}}
+    result = verify_{{ task.name }}(state, empty_trajectory(), task)
+    assert hasattr(result, "passed")
+    assert hasattr(result, "score")
+
+{% endfor %}
