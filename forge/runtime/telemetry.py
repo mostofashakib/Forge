@@ -42,6 +42,8 @@ class TelemetryClient:
         self, total_reward: float, passed: bool, total_steps: int
     ) -> None:
         ep = self._db.get(Episode, self._episode_id)
+        if ep is None:
+            return
         ep.status = "completed"
         ep.total_reward = total_reward
         ep.passed = passed

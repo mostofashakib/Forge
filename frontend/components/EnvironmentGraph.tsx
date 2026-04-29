@@ -196,9 +196,12 @@ export default function EnvironmentGraph({
             if (!n.id.startsWith("entity_")) return n;
             const entityName = n.id.replace("entity_", "");
             const updates: Record<string, unknown> = { ...(n.data.fieldValues as Record<string, unknown>) };
+            const entityCollection = `${entityName}s`;  // simple pluralisation
             Object.entries(changed).forEach(([key, val]) => {
-              if (key.startsWith(`${entityName}.`)) {
-                const field = key.split(".").slice(2).join(".");
+              if (key.startsWith(`${entityCollection}.`)) {
+                const parts = key.split(".");
+                // parts[0] = collection, parts[1] = entity_id, parts[2+] = field path
+                const field = parts.slice(2).join(".");
                 updates[field] = (val as { after: unknown }).after;
               }
             });
