@@ -1,6 +1,8 @@
 # backend/app/api/episodes.py
 from __future__ import annotations
-from fastapi import APIRouter, Depends, HTTPException
+import asyncio
+import json as _json
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from backend.app.database import get_db
@@ -116,3 +118,77 @@ def branch(episode_id: str, step_n: int, db: Session = Depends(get_db)):
     except ValueError:
         raise HTTPException(status_code=404, detail="Episode not found")
     return {"actions": actions}
+
+
+@router.websocket("/{episode_id}/stream")
+async def stream_episode(
+    websocket: WebSocket, episode_id: str, db: Session = Depends(get_db)
+):
+    await websocket.accept()
+
+    ep = episode_service.get_episode(episode_id, db)
+    if not ep:
+        await websocket.close(code=1008)
+        return
+
+    # Completed episode: replay stored steps then close
+    if ep.status == "completed":
+        steps = episode_service.get_episode_steps(episode_id, db)
+        for step in steps:
+            await websocket.send_json({
+                "type": "step",
+                "step_index": step.step_index,
+                "action": _json.loads(step.action),
+                "reward": step.reward,
+                "diff": _json.loads(step.diff),
+                "verifier_results": _json.loads(step.verifier_results),
+                "events": _json.loads(step.events),
+                "terminated": step.terminated,
+            })
+        await websocket.send_json({
+            "type": "complete",
+            "total_reward": ep.total_reward,
+            "passed": ep.passed,
+            "total_steps": ep.total_steps,
+        })
+        await websocket.close()
+        return
+
+    # Running episode: drain from queue
+    queue = runner_service.episode_queues.get(episode_id)
+    if queue is None:
+        await websocket.close(code=1011)
+        return
+
+    try:
+        while True:
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=0.1)
+            except asyncio.TimeoutError:
+                try:
+                    msg = await asyncio.wait_for(websocket.receive_json(), timeout=0.0)
+                    if msg.get("type") == "fork":
+                        step_n = msg["step"]
+                        old_task = runner_service.episode_tasks.get(episode_id)
+                        if old_task and not old_task.done():
+                            old_task.cancel()
+                        new_episode_id = await runner_service.start_episode(
+                            env_name=ep.env_name,
+                            task_name=ep.task_name,
+                            seed=ep.seed,
+                            agent_id=ep.agent_id,
+                        )
+                        queue = runner_service.episode_queues[new_episode_id]
+                        episode_id = new_episode_id
+                except (asyncio.TimeoutError, Exception):
+                    pass
+                continue
+
+            await websocket.send_json(event)
+            if event.get("type") in ("complete", "error"):
+                break
+    except WebSocketDisconnect:
+        pass
+    finally:
+        runner_service.episode_queues.pop(episode_id, None)
+        await websocket.close()
