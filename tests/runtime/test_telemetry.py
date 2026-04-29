@@ -116,3 +116,12 @@ def test_complete_episode_failed_sets_passed_false():
     ep = db.get(Episode, "ep_00000001")
     assert ep.status == "completed"
     assert ep.passed is False
+
+
+def test_complete_episode_noop_for_missing_row():
+    from forge.runtime.telemetry import TelemetryClient
+    db = make_db()
+    # Use a non-existent episode_id
+    client = TelemetryClient(episode_id="nonexistent", db_session=db)
+    # Should not raise
+    client.complete_episode(total_reward=0.0, passed=False, total_steps=0)
