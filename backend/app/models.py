@@ -57,3 +57,36 @@ class EpisodeStep(Base):
     state_hash_after: Mapped[str] = mapped_column(String)
     terminated: Mapped[bool] = mapped_column(Boolean)
     truncated: Mapped[bool] = mapped_column(Boolean)
+
+
+class RolloutJob(Base):
+    __tablename__ = "rollout_jobs"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    env_name: Mapped[str] = mapped_column(String, index=True)
+    task_name: Mapped[str] = mapped_column(String)
+    agent_id: Mapped[str] = mapped_column(String)
+    num_episodes: Mapped[int] = mapped_column(Integer)
+    seed_start: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String, default="pending")
+    episodes_completed: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc)
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class ExportJob(Base):
+    __tablename__ = "export_jobs"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    env_name: Mapped[str] = mapped_column(String, index=True)
+    formats: Mapped[str] = mapped_column(Text)
+    output_path: Mapped[str | None] = mapped_column(String, nullable=True)
+    status: Mapped[str] = mapped_column(String, default="pending")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc)
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
