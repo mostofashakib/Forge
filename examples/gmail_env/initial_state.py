@@ -3,6 +3,10 @@ from forge.runtime.context import RuntimeContext
 
 class GmailInitialStateFactory:
     def create(self, ctx: RuntimeContext, options: dict) -> dict:
+        # Advance the clock by a seed-dependent offset so each seed produces a
+        # unique timestamp (and therefore a unique state hash).
+        ctx.clock.advance(ctx.seed % 86400)
+
         user_id = ctx.id_generator.next("user")
         ctx.actor_id = user_id
 

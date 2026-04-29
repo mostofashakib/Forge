@@ -9,6 +9,12 @@ def compute_diff(before: dict, after: dict) -> dict:
         before_col = before.get(collection, {})
         after_col = after.get(collection, {})
 
+        # Skip non-dict collection values (e.g. scalar fields like actor_id)
+        if not isinstance(before_col, dict) or not isinstance(after_col, dict):
+            if before_col != after_col:
+                changed[collection] = {"before": before_col, "after": after_col}
+            continue
+
         before_ids = set(before_col.keys())
         after_ids = set(after_col.keys())
 
