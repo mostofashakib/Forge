@@ -111,3 +111,144 @@ def test_get_stats_returns_zero_stats_for_empty_env():
     assert stats["policy_violation_count"] == 0
     assert stats["top_failures"] == []
     db.close()
+
+
+# --- REST API tests ---
+import pytest
+from fastapi.testclient import TestClient
+from backend.app.main import app
+
+
+@pytest.fixture
+def api_client(tmp_path, monkeypatch):
+    monkeypatch.setenv("FORGE_DB_URL", f"sqlite:///{tmp_path}/test.db")
+    monkeypatch.setenv("FORGE_GENERATED_ENVS_DIR", str(tmp_path / "generated_envs"))
+    from backend.app import database
+    database._engine = None
+    database._SessionLocal = None
+    database.init_db()
+    return TestClient(app)
+
+
+@pytest.fixture
+def api_client_with_episode(tmp_path, monkeypatch):
+    """Client with one completed episode pre-inserted."""
+    monkeypatch.setenv("FORGE_DB_URL", f"sqlite:///{tmp_path}/test.db")
+    monkeypatch.setenv("FORGE_GENERATED_ENVS_DIR", str(tmp_path / "generated_envs"))
+    from backend.app import database
+    database._engine = None
+    database._SessionLocal = None
+    database.init_db()
+    from backend.app.models import Episode, EpisodeStep
+    SessionFactory = database.get_session_factory()
+    db = SessionFactory()
+    ep = Episode(
+        id="ep_0000002a",
+        env_name="test_env",
+        task_name="test_task",
+        seed=42,
+        agent_id="random_policy",
+        status="completed",
+        total_steps=2,
+        total_reward=0.8,
+        passed=True,
+        started_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        completed_at=datetime(2026, 1, 1, 0, 0, 5, tzinfo=timezone.utc),
+    )
+    db.add(ep)
+    for i in range(2):
+        db.add(EpisodeStep(
+            episode_id="ep_0000002a",
+            step_index=i,
+            action=f'{{"type": "action_{i}"}}',
+            reward=0.4,
+            verifier_results="[]",
+            diff="{}",
+            events="[]",
+            state_hash_before="abc",
+            state_hash_after="def",
+            terminated=(i == 1),
+            truncated=False,
+        ))
+    db.commit()
+    db.close()
+    return TestClient(app)
+
+
+def test_post_episodes_returns_episode_id(api_client, monkeypatch):
+    async def fake_start_episode(env_name, task_name, seed, agent_id):
+        return f"ep_{seed:08x}"
+    import backend.app.services.runner_service as rs
+    monkeypatch.setattr(rs, "start_episode", fake_start_episode)
+    resp = api_client.post("/api/episodes/", json={
+        "env_name": "test_env",
+        "task_name": "test_task",
+        "seed": 1,
+        "agent_id": "random_policy",
+    })
+    assert resp.status_code == 200
+    assert resp.json()["episode_id"] == "ep_00000001"
+
+
+def test_get_episode_returns_full_record(api_client_with_episode):
+    resp = api_client_with_episode.get("/api/episodes/ep_0000002a")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["id"] == "ep_0000002a"
+    assert data["status"] == "completed"
+    assert len(data["steps"]) == 2
+
+
+def test_get_episode_returns_404_for_unknown(api_client):
+    resp = api_client.get("/api/episodes/ep_unknown")
+    assert resp.status_code == 404
+
+
+def test_list_episodes_filters_by_env_name(api_client_with_episode):
+    resp = api_client_with_episode.get("/api/episodes/?env_name=test_env")
+    assert resp.status_code == 200
+    ids = [ep["id"] for ep in resp.json()]
+    assert "ep_0000002a" in ids
+
+
+def test_branch_returns_action_sequence(api_client_with_episode):
+    resp = api_client_with_episode.get("/api/episodes/ep_0000002a/steps/1/branch")
+    assert resp.status_code == 200
+    actions = resp.json()["actions"]
+    assert len(actions) == 1
+    assert actions[0] == {"type": "action_0"}
+
+
+def test_get_env_stats_returns_pass_rate(api_client_with_episode):
+    resp = api_client_with_episode.get("/api/envs/test_env/stats")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "pass_rate" in data
+    assert data["pass_rate"] == 1.0
+    assert "top_failures" in data
+
+
+def test_get_compiler_input_returns_json(api_client, tmp_path, monkeypatch):
+    monkeypatch.setenv("FORGE_DB_URL", f"sqlite:///{tmp_path}/test.db")
+    from backend.app import database
+    database._engine = None
+    database._SessionLocal = None
+    database.init_db()
+    from backend.app.models import CompileJob
+    from forge.extraction.schemas import CompilerInput
+    SessionFactory = database.get_session_factory()
+    db = SessionFactory()
+    ci = CompilerInput(project_name="test_env", domain="test", entities=[], actions=[], tasks=[])
+    job = CompileJob(
+        id="job_001",
+        project_name="test_env",
+        status="complete",
+        prompt="test",
+        compiler_input_json=ci.model_dump_json(),
+    )
+    db.add(job)
+    db.commit()
+    db.close()
+    resp = api_client.get("/api/envs/test_env/compiler-input")
+    assert resp.status_code == 200
+    assert resp.json()["project_name"] == "test_env"
