@@ -137,7 +137,7 @@ export default function EnvironmentGraph({
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [stepLabel, setStepLabel] = useState<string>("");
-  const wsRef = useRef<WebSocket | null>(null);
+  const timeoutRefs = useRef<ReturnType<typeof setTimeout>[]>([]);
 
   useEffect(() => {
     if (!compilerInput) return;
@@ -149,7 +149,6 @@ export default function EnvironmentGraph({
   useEffect(() => {
     if (!episodeId) return;
     const ws = new WebSocket(`ws://localhost:8000/api/episodes/${episodeId}/stream`);
-    wsRef.current = ws;
 
     ws.onmessage = (event) => {
       const data: StepEvent = JSON.parse(event.data as string);
@@ -164,7 +163,7 @@ export default function EnvironmentGraph({
             if (n.id === `action_${actionType}`) {
               return {
                 ...n,
-                data: { ...n.data, active: true },
+                data: { ...n.data, active: true, label: `⚡ ${String(n.data.label)}` },
                 style: {
                   ...n.style,
                   border: "2px solid #f59e0b",
@@ -235,13 +234,27 @@ export default function EnvironmentGraph({
           );
         }
 
-        setTimeout(() => {
+        // Update task check counters from verifier_results
+        if (data.verifier_results && data.verifier_results.length > 0) {
+          setNodes((nds) =>
+            nds.map((n) => {
+              if (!n.id.startsWith("task_")) return n;
+              const taskId = n.id.replace("task_", "");
+              const result = data.verifier_results!.find((r) => r.verifier_id === taskId);
+              if (!result) return n;
+              const passed = result.checks.filter((c) => c.passed).length;
+              return { ...n, data: { ...n.data, checksPassed: passed } };
+            })
+          );
+        }
+
+        const t = setTimeout(() => {
           setNodes((nds) =>
             nds.map((n) => {
               if (n.id === `action_${actionType}`) {
                 return {
                   ...n,
-                  data: { ...n.data, active: false },
+                  data: { ...n.data, active: false, label: String(n.data.label).replace(/^⚡ /, "") },
                   style: {
                     border: "1px solid #334155",
                     background: "#1e293b",
@@ -256,6 +269,7 @@ export default function EnvironmentGraph({
             })
           );
         }, 1500);
+        timeoutRefs.current.push(t);
       }
 
       if (data.type === "complete") {
@@ -266,6 +280,8 @@ export default function EnvironmentGraph({
 
     return () => {
       ws.close();
+      timeoutRefs.current.forEach(clearTimeout);
+      timeoutRefs.current = [];
     };
   }, [episodeId, setNodes]);
 
