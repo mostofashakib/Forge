@@ -154,7 +154,7 @@ async def stream_episode(
         await websocket.close()
         return
 
-    # Running episode: drain from queue
+    # Running episode: drain from queue with concurrent fork detection
     queue = runner_service.episode_queues.get(episode_id)
     if queue is None:
         await websocket.close(code=1011)
@@ -162,12 +162,34 @@ async def stream_episode(
 
     try:
         while True:
-            try:
-                event = await asyncio.wait_for(queue.get(), timeout=0.1)
-            except asyncio.TimeoutError:
+            get_event = asyncio.ensure_future(queue.get())
+            get_msg = asyncio.ensure_future(websocket.receive_json())
+
+            done, pending = await asyncio.wait(
+                {get_event, get_msg},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+
+            for t in pending:
+                t.cancel()
                 try:
-                    msg = await asyncio.wait_for(websocket.receive_json(), timeout=0.0)
-                    if msg.get("type") == "fork":
+                    await t
+                except (asyncio.CancelledError, Exception):
+                    pass
+
+            if get_event in done:
+                try:
+                    event = get_event.result()
+                    await websocket.send_json(event)
+                    if event.get("type") in ("complete", "error"):
+                        break
+                except Exception:
+                    break
+
+            if get_msg in done:
+                try:
+                    msg = get_msg.result()
+                    if isinstance(msg, dict) and msg.get("type") == "fork":
                         step_n = msg["step"]
                         old_task = runner_service.episode_tasks.get(episode_id)
                         if old_task and not old_task.done():
@@ -180,13 +202,9 @@ async def stream_episode(
                         )
                         queue = runner_service.episode_queues[new_episode_id]
                         episode_id = new_episode_id
-                except (asyncio.TimeoutError, Exception):
-                    pass
-                continue
+                except (asyncio.CancelledError, Exception):
+                    break
 
-            await websocket.send_json(event)
-            if event.get("type") in ("complete", "error"):
-                break
     except WebSocketDisconnect:
         pass
     finally:
