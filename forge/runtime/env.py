@@ -44,6 +44,7 @@ class ForgeEnv(gym.Env):
         self._current_task: dict | None = None
         self._step_count: int = 0
         self._episode_id: str | None = None
+        self._invalid_action_count: int = 0
 
     def reset(
         self, seed: int | None = None, options: dict | None = None
@@ -59,6 +60,7 @@ class ForgeEnv(gym.Env):
         self._traj_store = TrajectoryStore(self._episode_id)
         self._current_task = opts.get("task", self.env_spec.default_task)
         self._step_count = 0
+        self._invalid_action_count = 0
 
         return self._state_store.get(), {
             "episode_id": self._episode_id,
@@ -96,8 +98,9 @@ class ForgeEnv(gym.Env):
         verifier_results = self._verifier_engine.run_all(
             state_after, trajectory, self._current_task
         )
+        task_with_meta = {**(self._current_task or {}), "invalid_action_count": self._invalid_action_count}
         reward_breakdown = self._reward_engine.compute(
-            state_after, trajectory, verifier_results, self._current_task
+            state_after, trajectory, verifier_results, task_with_meta
         )
 
         self._step_count += 1
@@ -128,6 +131,7 @@ class ForgeEnv(gym.Env):
 
     def _record_invalid_step(self, hash_before: str, action: dict) -> None:
         self._step_count += 1
+        self._invalid_action_count += 1
         self._traj_store.record(
             StepSnapshot(
                 episode_id=self._episode_id,
