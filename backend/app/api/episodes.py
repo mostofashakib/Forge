@@ -111,5 +111,8 @@ def branch(episode_id: str, step_n: int, db: Session = Depends(get_db)):
     ep = episode_service.get_episode(episode_id, db)
     if not ep:
         raise HTTPException(status_code=404, detail="Episode not found")
-    actions = ReplayService().branch_from(episode_id, step_n, db)
+    try:
+        actions = ReplayService().branch_from(episode_id, step_n, db)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Episode not found")
     return {"actions": actions}
