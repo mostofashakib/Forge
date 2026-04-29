@@ -103,3 +103,36 @@ def test_same_seed_produces_same_initial_observation():
     obs1, _ = env.reset(seed=42)
     obs2, _ = env.reset(seed=42)
     assert obs1 == obs2
+
+
+def test_invalid_action_count_tracked():
+    env = build_env()
+    env.reset(seed=1)
+    env.step({"type": "nonexistent_action"})
+    env.step({"type": "another_nonexistent"})
+    assert env._invalid_action_count == 2
+
+
+def test_invalid_action_count_resets_on_reset():
+    env = build_env()
+    env.reset(seed=1)
+    env.step({"type": "nonexistent_action"})
+    assert env._invalid_action_count == 1
+    env.reset(seed=2)
+    assert env._invalid_action_count == 0
+
+
+def test_invalid_action_count_in_task_dict_passed_to_reward():
+    received_task = {}
+
+    def capturing_reward(state, trajectory, verifier_results, task=None):
+        received_task.update(task or {})
+        from forge.runtime.reward import RewardBreakdown, RewardComponent
+        return RewardBreakdown(total_reward=0.0, components=[])
+
+    env = build_env()
+    env._reward_engine.set_default(capturing_reward)
+    env.reset(seed=1)
+    env.step({"type": "nonexistent_action"})  # invalid — increments count
+    env.step({"type": "increment"})           # valid step — reward is called
+    assert received_task.get("invalid_action_count") == 1
