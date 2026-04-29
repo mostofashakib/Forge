@@ -8,6 +8,7 @@ class ExactStateVerifier:
 
     def check(self, state: dict, trajectory, task: dict) -> CheckResult:
         try:
+            # Expressions come from trusted compiler output, not user input
             result = eval(self._expression, {"__builtins__": {}}, state)
             passed = bool(result)
         except Exception as exc:

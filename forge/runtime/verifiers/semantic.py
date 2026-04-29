@@ -72,7 +72,7 @@ class SemanticVerifier:
             )
             raw = self._llm_client.judge(prompt)
             match = re.search(r"\b([01](?:\.\d+)?|\d*\.\d+)\b", raw)
-            return float(match.group(1)) if match else 0.0
+            return min(1.0, max(0.0, float(match.group(1)))) if match else 0.0
         except Exception:
             return 0.0
 
@@ -94,11 +94,12 @@ class SemanticVerifier:
             if row is not None:
                 return float(row[0])
             score = self._live_score(text)
-            con.execute(
-                "INSERT INTO semantic_cache VALUES (?, ?, ?)",
-                (rubric_hash, text_hash, score),
-            )
-            con.commit()
+            if self._llm_client is not None:
+                con.execute(
+                    "INSERT INTO semantic_cache VALUES (?, ?, ?)",
+                    (rubric_hash, text_hash, score),
+                )
+                con.commit()
             return score
         finally:
             con.close()
