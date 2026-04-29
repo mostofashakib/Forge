@@ -4,6 +4,7 @@ import asyncio
 import importlib
 import json
 import os
+import secrets
 import sys
 from pathlib import Path
 from forge.runtime.policy import RandomPolicy
@@ -38,7 +39,11 @@ async def start_episode(
     agent_id: str,
 ) -> str:
     """Create Episode row, initialise queue, spawn background task, return episode_id."""
-    episode_id = f"ep_{seed:08x}"
+    episode_id = f"ep_{seed:08x}_{secrets.token_hex(4)}"
+
+    # Compute jsonl_path here so it can be stored in the Episode row
+    envs_root = Path(os.environ.get("FORGE_GENERATED_ENVS_DIR", "generated_envs"))
+    jsonl_path = envs_root / env_name / "episodes" / f"{episode_id}.jsonl"
 
     # Create Episode row synchronously so it's immediately queryable
     SessionFactory = get_session_factory()
@@ -51,13 +56,14 @@ async def start_episode(
             seed=seed,
             agent_id=agent_id,
             db=db,
+            jsonl_path=str(jsonl_path),
         )
     finally:
         db.close()
 
     episode_queues[episode_id] = asyncio.Queue()
     task = asyncio.create_task(
-        _run_episode(episode_id, env_name, task_name, seed, agent_id)
+        _run_episode(episode_id, env_name, task_name, seed, agent_id, jsonl_path)
     )
     episode_tasks[episode_id] = task
     return episode_id
@@ -69,15 +75,13 @@ async def _run_episode(
     task_name: str,
     seed: int,
     agent_id: str,
+    jsonl_path: Path,
 ) -> None:
     queue = episode_queues.get(episode_id)
     SessionFactory = get_session_factory()
     db = SessionFactory()
     try:
-        envs_root = Path(os.environ.get("FORGE_GENERATED_ENVS_DIR", "generated_envs"))
-        jsonl_dir = envs_root / env_name / "episodes"
-        jsonl_dir.mkdir(parents=True, exist_ok=True)
-        jsonl_path = jsonl_dir / f"{episode_id}.jsonl"
+        jsonl_path.parent.mkdir(parents=True, exist_ok=True)
 
         telemetry = TelemetryClient(
             episode_id=episode_id,
@@ -116,9 +120,11 @@ async def _run_episode(
         }
         if queue:
             await queue.put(complete_event)
+        await asyncio.sleep(0)  # yield so consumers can drain before cleanup
     except Exception as exc:
         if queue:
             await queue.put({"type": "error", "message": str(exc)})
     finally:
         db.close()
         episode_tasks.pop(episode_id, None)
+        episode_queues.pop(episode_id, None)  # safe: consumer had a chance to drain above
