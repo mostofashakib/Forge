@@ -83,3 +83,13 @@ def test_validator_fails_for_stale_reward_override(tmp_path):
     result = OverrideValidator().validate(tmp_path, _counter_input())
     assert not result.valid
     assert any("nonexistent_task" in e for e in result.errors)
+
+
+def test_validator_reports_error_for_broken_custom_file(tmp_path):
+    clear_registry()
+    custom_dir = tmp_path / "custom"
+    custom_dir.mkdir()
+    (custom_dir / "transitions.py").write_text("this is not valid python {{{{")
+    result = OverrideValidator().validate(tmp_path, _counter_input())
+    assert not result.valid
+    assert any("transitions.py" in e for e in result.errors)
