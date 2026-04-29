@@ -1,4 +1,6 @@
 from __future__ import annotations
+from pathlib import Path
+from forge.customization.loader import CustomizationLoader
 from forge.runtime.env import ForgeEnv
 from forge.runtime.reward import RewardEngine
 from forge.runtime.snapshot import EnvironmentSpec
@@ -31,6 +33,9 @@ def build_{{ project_name }}_env(max_steps: int = 20) -> ForgeEnv:
 {% if tasks %}
     re.set_default(compute_{{ tasks[0].name }}_reward)
 {% endif %}
+
+    _pkg_dir = Path(__file__).parent
+    CustomizationLoader(_pkg_dir).apply(te, ve, re)
 
     return ForgeEnv(
         env_spec=spec,

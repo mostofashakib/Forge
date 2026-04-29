@@ -111,3 +111,23 @@ def test_test_suite_generator_produces_valid_python():
     assert "test_verifiers" in files
     for name, code in files.items():
         assert _is_valid_python(code), f"Invalid Python in {name}:\n{code}"
+
+
+def test_gym_wrapper_contains_customization_loader():
+    from forge.compiler.generators.gym_wrapper import GymWrapperGenerator
+    code = GymWrapperGenerator().generate(_counter_input())
+    assert "CustomizationLoader" in code
+    assert "from forge.customization.loader import CustomizationLoader" in code
+    assert "_pkg_dir = Path(__file__).parent" in code
+
+
+def test_package_builder_custom_stubs_include_hooks_import():
+    from forge.compiler.package_builder import PackageBuilder
+    import tempfile
+    from pathlib import Path
+    with tempfile.TemporaryDirectory() as tmpdir:
+        pkg_dir = PackageBuilder(Path(tmpdir)).build(_counter_input())
+        transitions_stub = (pkg_dir / "custom" / "transitions.py").read_text()
+        assert "override_transition" in transitions_stub
+        config_stub = (pkg_dir / "custom" / "config.yaml").read_text()
+        assert "base_success" in config_stub
