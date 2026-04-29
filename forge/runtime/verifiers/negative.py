@@ -3,6 +3,8 @@ from forge.runtime.verification import CheckResult
 
 
 class NegativeVerifier:
+    # Semantically identical to PolicyVerifier but represents a task-level negative constraint.
+    # The distinction is meaningful to the compiler template (negative_check vs policy_check).
     def __init__(self, prohibited_action: str) -> None:
         self._prohibited_action = prohibited_action
 
