@@ -11,6 +11,8 @@ class RewardConfig:
     policy_violation_penalty: float = 1.0
     max_reward: float = 1.0
     min_reward: float = -1.0
+    semantic_weight: float = 0.0
+    invalid_action_penalty: float = 0.5
 
 
 @dataclass
@@ -41,6 +43,8 @@ def load_config(pkg_dir: Path) -> EnvConfig:
             policy_violation_penalty=float(reward_raw.get("policy_violation_penalty", 1.0)),
             max_reward=float(reward_raw.get("max_reward", 1.0)),
             min_reward=float(reward_raw.get("min_reward", -1.0)),
+            semantic_weight=float(reward_raw.get("semantic_weight", 0.0)),
+            invalid_action_penalty=float(reward_raw.get("invalid_action_penalty", 0.5)),
         ),
         observation=ObservationConfig(
             mode=obs_raw.get("mode", "full"),
