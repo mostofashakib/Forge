@@ -1,5 +1,6 @@
 # backend/app/services/episode_service.py
 from __future__ import annotations
+import json
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 from backend.app.models import Episode, EpisodeStep
@@ -80,15 +81,20 @@ def get_stats(env_name: str, db: Session) -> dict:
     avg_steps = sum(ep.total_steps for ep in episodes) / n
 
     episode_ids = [ep.id for ep in episodes]
-    violation_steps = (
+    all_steps = (
         db.query(EpisodeStep)
-        .filter(
-            EpisodeStep.episode_id.in_(episode_ids),
-            EpisodeStep.events.contains("policy_violation"),
-        )
+        .filter(EpisodeStep.episode_id.in_(episode_ids))
         .all()
     )
-    policy_violation_count = len({s.episode_id for s in violation_steps})
+    violation_episode_ids: set[str] = set()
+    for step in all_steps:
+        try:
+            events = json.loads(step.events)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if any(e.get("type") == "policy_violation" for e in events):
+            violation_episode_ids.add(step.episode_id)
+    policy_violation_count = len(violation_episode_ids)
 
     failed_episodes = [ep for ep in episodes if not ep.passed]
     replay = ReplayService()
