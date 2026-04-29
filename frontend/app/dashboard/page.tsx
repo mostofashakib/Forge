@@ -91,7 +91,7 @@ export default async function DashboardPage({
         <section>
           <h2 className="text-sm font-semibold text-muted-foreground uppercase mb-3">Top Failure Modes</h2>
           <div className="space-y-2">
-            {stats.top_failures.map((f) => {
+            {stats.top_failures.slice(0, 5).map((f) => {
               const maxCount = stats.top_failures[0].count;
               const pct = maxCount > 0 ? (f.count / maxCount) * 100 : 0;
               return (
