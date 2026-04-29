@@ -11,6 +11,11 @@ def _envs_root() -> Path:
     return Path(os.environ.get("FORGE_GENERATED_ENVS_DIR", "generated_envs"))
 
 
+def _validate_env_name(env_name: str) -> None:
+    if ".." in env_name or "/" in env_name or "\\" in env_name:
+        raise HTTPException(status_code=400, detail="Invalid environment name")
+
+
 class ConfigPayload(BaseModel):
     yaml: str
 
@@ -25,6 +30,7 @@ def list_envs() -> list[str]:
 
 @router.get("/{env_name}/config", response_model=ConfigPayload)
 def get_config(env_name: str) -> ConfigPayload:
+    _validate_env_name(env_name)
     config_path = _envs_root() / env_name / "custom" / "config.yaml"
     if not config_path.exists():
         raise HTTPException(status_code=404, detail=f"Config not found for '{env_name}'")
@@ -33,6 +39,7 @@ def get_config(env_name: str) -> ConfigPayload:
 
 @router.put("/{env_name}/config", response_model=ConfigPayload)
 def update_config(env_name: str, payload: ConfigPayload) -> ConfigPayload:
+    _validate_env_name(env_name)
     custom_dir = _envs_root() / env_name / "custom"
     if not custom_dir.exists():
         raise HTTPException(status_code=404, detail=f"Environment '{env_name}' not found")

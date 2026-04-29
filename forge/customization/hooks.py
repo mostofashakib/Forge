@@ -1,4 +1,7 @@
 from __future__ import annotations
+import importlib.util
+import sys
+from pathlib import Path
 from typing import Callable
 
 _registry: dict[str, dict[str, Callable]] = {
@@ -52,3 +55,14 @@ def policy_rule(name: str) -> Callable:
         _registry["policy_rules"][name] = fn
         return fn
     return decorator
+
+
+def import_custom_file(path: Path, module_prefix: str = "_forge_custom") -> None:
+    """Import a Python file by path into sys.modules."""
+    module_name = f"{module_prefix}_{path.stem}"
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        return
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
