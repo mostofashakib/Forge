@@ -70,6 +70,8 @@ _CUSTOM_STUBS = {
         "  policy_violation_penalty: 1.0\n"
         "  max_reward: 1.0\n"
         "  min_reward: -1.0\n"
+        "  semantic_weight: 0.0\n"
+        "  invalid_action_penalty: 0.5\n"
         "\n"
         "observation:\n"
         "  mode: full\n"
