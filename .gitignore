@@ -44,3 +44,7 @@ __pycache__/
 
 # git worktrees
 .worktrees/
+
+# generated environments
+generated_envs/*
+!generated_envs/.gitkeep
