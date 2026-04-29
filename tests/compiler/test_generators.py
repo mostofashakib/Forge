@@ -191,3 +191,16 @@ def test_verifier_template_uses_semantic_verifier():
     assert "Must acknowledge the issue" in code
     assert 'mode="mock"' in code
     assert _is_valid_python(code)
+
+
+def test_reward_template_has_five_components():
+    from forge.compiler.generators.reward import RewardGenerator
+    ci = _counter_input()
+    code = RewardGenerator().generate(ci)["reach_target"]
+    assert "task_success_reward" in code
+    assert "policy_compliance_reward" in code
+    assert "semantic_quality_reward" in code
+    assert "action_cost" in code
+    assert "invalid_action_penalty" in code
+    assert "load_config" in code
+    assert _is_valid_python(code)
