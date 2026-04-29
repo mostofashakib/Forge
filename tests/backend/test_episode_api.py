@@ -252,3 +252,63 @@ def test_get_compiler_input_returns_json(api_client, tmp_path, monkeypatch):
     resp = api_client.get("/api/envs/test_env/compiler-input")
     assert resp.status_code == 200
     assert resp.json()["project_name"] == "test_env"
+
+
+# --- WebSocket tests ---
+
+def test_websocket_stream_replays_completed_episode(api_client_with_episode):
+    with api_client_with_episode.websocket_connect("/api/episodes/ep_0000002a/stream") as ws:
+        events = []
+        while True:
+            msg = ws.receive_json()
+            events.append(msg)
+            if msg["type"] in ("complete", "error"):
+                break
+    step_events = [e for e in events if e["type"] == "step"]
+    complete_events = [e for e in events if e["type"] == "complete"]
+    assert len(step_events) == 2
+    assert len(complete_events) == 1
+    assert complete_events[0]["passed"] is True
+
+
+def test_websocket_stream_running_episode(api_client, monkeypatch):
+    import asyncio
+    from backend.app.services import runner_service
+
+    episode_id = "ep_00000099"
+    runner_service.episode_queues[episode_id] = asyncio.Queue()
+
+    from backend.app import database
+    SessionFactory = database.get_session_factory()
+    db = SessionFactory()
+    from backend.app.models import Episode
+    ep = Episode(
+        id=episode_id,
+        env_name="test_env",
+        task_name="test_task",
+        seed=0x99,
+        agent_id="random_policy",
+        status="running",
+        total_steps=0,
+        total_reward=0.0,
+        passed=False,
+        started_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    db.add(ep)
+    db.commit()
+    db.close()
+
+    runner_service.episode_queues[episode_id].put_nowait({
+        "type": "step", "step_index": 0, "action": {"type": "a"},
+        "reward": 0.5, "diff": {}, "verifier_results": [], "events": [], "terminated": False,
+    })
+    runner_service.episode_queues[episode_id].put_nowait({
+        "type": "complete", "total_reward": 0.5, "passed": False, "total_steps": 1,
+    })
+
+    with api_client.websocket_connect(f"/api/episodes/{episode_id}/stream") as ws:
+        msg1 = ws.receive_json()
+        msg2 = ws.receive_json()
+
+    assert msg1["type"] == "step"
+    assert msg2["type"] == "complete"
