@@ -131,3 +131,63 @@ def test_package_builder_custom_stubs_include_hooks_import():
         assert "override_transition" in transitions_stub
         config_stub = (pkg_dir / "custom" / "config.yaml").read_text()
         assert "base_success" in config_stub
+
+
+def test_verifier_template_uses_exact_state_verifier():
+    from forge.compiler.generators.verifier import VerifierGenerator
+    ci = CompilerInput(
+        project_name="test_env",
+        domain="test",
+        entities=[EntityDef(name="item", fields=[FieldDef(name="id", type="string")])],
+        actions=[ActionDef(name="use", params=[ActionParam(name="id", type="string")])],
+        tasks=[TaskTemplate(
+            name="my_task",
+            description="test",
+            success_conditions=[SuccessCondition(type="state_check", expression="x > 0")],
+        )],
+    )
+    code = VerifierGenerator().generate(ci)["my_task"]
+    assert "ExactStateVerifier" in code
+    assert "from forge.runtime.verifiers import" in code
+    assert _is_valid_python(code)
+
+
+def test_verifier_template_uses_event_verifier():
+    from forge.compiler.generators.verifier import VerifierGenerator
+    ci = CompilerInput(
+        project_name="test_env",
+        domain="test",
+        entities=[EntityDef(name="item", fields=[FieldDef(name="id", type="string")])],
+        actions=[ActionDef(name="use", params=[ActionParam(name="id", type="string")])],
+        tasks=[TaskTemplate(
+            name="my_task",
+            description="test",
+            success_conditions=[SuccessCondition(type="event_check", expression="item_used")],
+        )],
+    )
+    code = VerifierGenerator().generate(ci)["my_task"]
+    assert "EventVerifier" in code
+    assert _is_valid_python(code)
+
+
+def test_verifier_template_uses_semantic_verifier():
+    from forge.compiler.generators.verifier import VerifierGenerator
+    ci = CompilerInput(
+        project_name="test_env",
+        domain="test",
+        entities=[EntityDef(name="item", fields=[FieldDef(name="id", type="string")])],
+        actions=[ActionDef(name="use", params=[ActionParam(name="id", type="string")])],
+        tasks=[TaskTemplate(
+            name="my_task",
+            description="test",
+            success_conditions=[SuccessCondition(
+                type="semantic_check", expression="reply_field",
+                rubric="Must acknowledge the issue"
+            )],
+        )],
+    )
+    code = VerifierGenerator().generate(ci)["my_task"]
+    assert "SemanticVerifier" in code
+    assert "Must acknowledge the issue" in code
+    assert 'mode="mock"' in code
+    assert _is_valid_python(code)
