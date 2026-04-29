@@ -45,6 +45,9 @@ __pycache__/
 # git worktrees
 .worktrees/
 
+# visual companion brainstorm sessions
+.superpowers/
+
 # generated environments
 generated_envs/*
 !generated_envs/.gitkeep
