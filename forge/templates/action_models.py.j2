@@ -1,0 +1,12 @@
+from typing import TypedDict
+
+
+{% for action in actions %}
+class {{ action.name | pascal_case }}Action(TypedDict):
+    type: str  # "{{ action.name }}"
+{% for param in action.params %}
+{% set ann = param | py_type %}
+    {{ param.name }}: {{ ann }}
+{% endfor %}
+
+{% endfor %}
