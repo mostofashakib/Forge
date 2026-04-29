@@ -1,8 +1,14 @@
+# backend/app/api/envs.py
 from __future__ import annotations
 import os
 from pathlib import Path
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
+from backend.app.database import get_db
+from backend.app.models import CompileJob
+from backend.app.services import episode_service
+from forge.extraction.schemas import CompilerInput
 
 router = APIRouter(prefix="/api/envs")
 
@@ -46,3 +52,23 @@ def update_config(env_name: str, payload: ConfigPayload) -> ConfigPayload:
     config_path = custom_dir / "config.yaml"
     config_path.write_text(payload.yaml)
     return ConfigPayload(yaml=payload.yaml)
+
+
+@router.get("/{env_name}/stats")
+def get_env_stats(env_name: str, db: Session = Depends(get_db)):
+    _validate_env_name(env_name)
+    return episode_service.get_stats(env_name, db)
+
+
+@router.get("/{env_name}/compiler-input")
+def get_compiler_input(env_name: str, db: Session = Depends(get_db)):
+    _validate_env_name(env_name)
+    job = (
+        db.query(CompileJob)
+        .filter_by(project_name=env_name)
+        .order_by(CompileJob.created_at.desc())
+        .first()
+    )
+    if not job or not job.compiler_input_json:
+        raise HTTPException(status_code=404, detail=f"No compiler input found for '{env_name}'")
+    return CompilerInput.model_validate_json(job.compiler_input_json)
