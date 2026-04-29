@@ -8,6 +8,7 @@ from forge.compiler.generators.reward import RewardGenerator
 from forge.compiler.generators.initial_state import InitialStateGenerator
 from forge.compiler.generators.gym_wrapper import GymWrapperGenerator
 from forge.compiler.generators.test_suite import TestSuiteGenerator
+from forge.compiler.generators.adversarial_test import AdversarialTestGenerator
 from forge.extraction.schemas import CompilerInput
 
 _CUSTOM_STUBS = {
@@ -111,6 +112,8 @@ class PackageBuilder:
         tests_dir.mkdir(exist_ok=True)
         _write(tests_dir / "__init__.py", "")
         for name, code in TestSuiteGenerator().generate(compiler_input).items():
+            _write(tests_dir / f"{name}.py", code)
+        for name, code in AdversarialTestGenerator().generate(compiler_input).items():
             _write(tests_dir / f"{name}.py", code)
 
         custom_dir = pkg / "custom"
