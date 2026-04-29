@@ -4,6 +4,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.app.api.compile import router as compile_router
 from backend.app.api.envs import router as envs_router
 from backend.app.api.episodes import router as episodes_router
+from backend.app.api.rollouts import router as rollouts_router
+from backend.app.api.exports import router as exports_router
 from backend.app.database import init_db
 
 app = FastAPI(title="Forge API", version="0.3.0")
@@ -19,6 +21,8 @@ app.add_middleware(
 app.include_router(compile_router)
 app.include_router(envs_router)
 app.include_router(episodes_router)
+app.include_router(rollouts_router)
+app.include_router(exports_router)
 
 
 @app.on_event("startup")
