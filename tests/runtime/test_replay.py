@@ -82,3 +82,10 @@ def test_branch_from_step_0_returns_empty():
     insert_episode_with_steps(db, 3)
     actions = ReplayService().branch_from("ep_00000001", 0, db)
     assert actions == []
+
+
+def test_load_episode_raises_for_missing_id():
+    import pytest
+    db = make_db()
+    with pytest.raises(ValueError, match="not found"):
+        ReplayService().load_episode("nonexistent", db)
