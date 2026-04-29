@@ -39,6 +39,7 @@ export default function EpisodeReplayClient({
 
   const handleBranch = async (index: number) => {
     const res = await fetch(`${API}/api/episodes/${episodeId}/steps/${index}/branch`);
+    if (!res.ok) return;
     const data = await res.json();
     router.push(`/environments/${envName}/graph?actions=${encodeURIComponent(JSON.stringify(data.actions))}`);
   };
