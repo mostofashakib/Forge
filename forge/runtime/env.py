@@ -53,7 +53,7 @@ class ForgeEnv(gym.Env):
         opts = options or {}
 
         self._ctx = RuntimeContext(seed=actual_seed)
-        self._episode_id = self._ctx.id_generator.next("ep")
+        self._episode_id = f"ep_{actual_seed:08x}"
         initial_state = self._factory.create(self._ctx, opts)
         self._state_store = StateStore(initial_state)
         self._traj_store = TrajectoryStore(self._episode_id)
@@ -90,7 +90,9 @@ class ForgeEnv(gym.Env):
         self._ctx.clock.advance()
 
         diff = compute_diff(state_before, state_after)
-        trajectory = self._traj_store.to_trajectory()
+        # Build a trajectory that includes the current step's events so verifiers
+        # can see actions taken in this step (e.g. email_replied for reply_to_customer).
+        trajectory = self._traj_store.to_trajectory_with_events(result.events)
         verifier_results = self._verifier_engine.run_all(
             state_after, trajectory, self._current_task
         )
