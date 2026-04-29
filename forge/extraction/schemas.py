@@ -39,8 +39,9 @@ class PolicyRule(BaseModel):
 
 
 class SuccessCondition(BaseModel):
-    type: str  # state_check, event_check, temporal_check, negative_check
+    type: str  # state_check, event_check, temporal_check, policy_check, semantic_check, negative_check
     expression: str
+    rubric: str = ""
     description: str = ""
 
 
