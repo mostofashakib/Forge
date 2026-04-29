@@ -1,0 +1,35 @@
+import pytest
+from pydantic import BaseModel
+from forge.extraction.llm_client import MockLLMClient, LLMClient
+from forge.extraction.schemas import EntityDef, FieldDef
+
+
+class _SimpleSchema(BaseModel):
+    value: str
+
+
+def test_mock_returns_predefined_response():
+    response = _SimpleSchema(value="hello")
+    client = MockLLMClient({"_SimpleSchema": response})
+    result = client.extract("system", "user", _SimpleSchema)
+    assert result.value == "hello"
+
+
+def test_mock_raises_for_unknown_schema():
+    client = MockLLMClient({})
+    with pytest.raises(ValueError, match="No mock response"):
+        client.extract("system", "user", _SimpleSchema)
+
+
+def test_mock_client_satisfies_llmclient_protocol():
+    client = MockLLMClient({"_SimpleSchema": _SimpleSchema(value="x")})
+    assert isinstance(client, LLMClient)
+
+
+def test_mock_retry_client_fails_then_succeeds():
+    from forge.extraction.llm_client import RetryMockLLMClient
+    response = _SimpleSchema(value="ok")
+    client = RetryMockLLMClient(fail_times=2, then_return={"_SimpleSchema": response})
+    result = client.extract("s", "u", _SimpleSchema)
+    assert result.value == "ok"
+    assert client.call_count == 3

@@ -1,0 +1,41 @@
+from __future__ import annotations
+from forge.runtime.env import ForgeEnv
+from forge.runtime.reward import RewardEngine
+from forge.runtime.snapshot import EnvironmentSpec
+from forge.runtime.transition import TransitionEngine
+from forge.runtime.verifier import VerifierEngine
+from generated_envs.{{ project_name }}.initial_state import {{ project_name | pascal_case }}InitialStateFactory
+{% for action in actions %}
+from generated_envs.{{ project_name }}.transitions.{{ action.name }} import apply_{{ action.name }}
+{% endfor %}
+{% for task in tasks %}
+from generated_envs.{{ project_name }}.verifiers.{{ task.name }} import verify_{{ task.name }}
+from generated_envs.{{ project_name }}.rewards.{{ task.name }} import compute_{{ task.name }}_reward
+{% endfor %}
+
+
+def build_{{ project_name }}_env(max_steps: int = 20) -> ForgeEnv:
+    spec = EnvironmentSpec(name="{{ project_name }}", domain="{{ domain }}", max_steps=max_steps)
+
+    te = TransitionEngine()
+{% for action in actions %}
+    te.register("{{ action.name }}", apply_{{ action.name }})
+{% endfor %}
+
+    ve = VerifierEngine()
+{% for task in tasks %}
+    ve.register("{{ task.name }}", verify_{{ task.name }})
+{% endfor %}
+
+    re = RewardEngine()
+{% if tasks %}
+    re.set_default(compute_{{ tasks[0].name }}_reward)
+{% endif %}
+
+    return ForgeEnv(
+        env_spec=spec,
+        initial_state_factory={{ project_name | pascal_case }}InitialStateFactory(),
+        transition_engine=te,
+        verifier_engine=ve,
+        reward_engine=re,
+    )
