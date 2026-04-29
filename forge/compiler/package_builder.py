@@ -11,10 +11,72 @@ from forge.compiler.generators.test_suite import TestSuiteGenerator
 from forge.extraction.schemas import CompilerInput
 
 _CUSTOM_STUBS = {
-    "transitions.py": "# Override transitions here using @override_transition decorator\n",
-    "verifiers.py": "# Override verifiers here using @verifier decorator\n",
-    "rewards.py": "# Override rewards here using @reward decorator\n",
-    "config.yaml": "# Custom reward and observation config\n",
+    "transitions.py": (
+        "# Override transitions here using @override_transition decorator\n"
+        "from forge.customization.hooks import override_transition\n"
+        "\n"
+        "# Example:\n"
+        "# @override_transition('my_action')\n"
+        "# def custom_my_action(state, action, ctx):\n"
+        "#     import copy\n"
+        "#     new_state = copy.deepcopy(state)\n"
+        "#     # your logic here\n"
+        "#     from forge.runtime.transition import TransitionResult\n"
+        "#     return TransitionResult(state=new_state, events=[])\n"
+    ),
+    "verifiers.py": (
+        "# Override verifiers here using @verifier decorator\n"
+        "from forge.customization.hooks import verifier\n"
+        "\n"
+        "# Example:\n"
+        "# @verifier('my_task')\n"
+        "# def custom_verifier(state, trajectory, task):\n"
+        "#     from forge.runtime.verification import CheckResult, VerificationResult\n"
+        "#     checks = [CheckResult(name='custom_check', passed=True, score=1.0)]\n"
+        "#     return VerificationResult.from_checks('my_task', checks)\n"
+    ),
+    "rewards.py": (
+        "# Override rewards here using @reward decorator\n"
+        "from forge.customization.hooks import reward\n"
+        "\n"
+        "# Example:\n"
+        "# @reward('my_task')\n"
+        "# def custom_reward(state, trajectory, verifier_results, task=None):\n"
+        "#     from forge.runtime.reward import RewardBreakdown, RewardComponent\n"
+        "#     return RewardBreakdown(total_reward=1.0, components=[])\n"
+    ),
+    "observations.py": (
+        "# Override observations here using @observation_transform decorator\n"
+        "from forge.customization.hooks import observation_transform\n"
+        "\n"
+        "# Example:\n"
+        "# @observation_transform('agent_view')\n"
+        "# def agent_view(state, actor):\n"
+        "#     return {k: v for k, v in state.items() if k != 'hidden_field'}\n"
+    ),
+    "policies.py": (
+        "# Override policy rules here using @policy_rule decorator\n"
+        "from forge.customization.hooks import policy_rule\n"
+        "\n"
+        "# Example:\n"
+        "# @policy_rule('no_action_without_context')\n"
+        "# def no_action_without_context(state, action, ctx):\n"
+        "#     return True  # return True to allow, False to block\n"
+    ),
+    "config.yaml": (
+        "reward:\n"
+        "  base_success: 1.0\n"
+        "  step_penalty: 0.01\n"
+        "  policy_violation_penalty: 1.0\n"
+        "  max_reward: 1.0\n"
+        "  min_reward: -1.0\n"
+        "\n"
+        "observation:\n"
+        "  mode: full\n"
+        "  actor_role: agent\n"
+        "  visible_entities: []\n"
+        "  hidden_entities: []\n"
+    ),
 }
 
 
