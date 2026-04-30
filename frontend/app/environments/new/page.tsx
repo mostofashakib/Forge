@@ -25,7 +25,7 @@ const ENV_TYPES: { id: EnvType; label: string; subtitle: string; description: st
   {
     id: "general",
     label: "General Purpose",
-    subtitle: "LLM-generated FastAPI app",
+    subtitle: "High fidelity app",
     description: "Describe a real-world application and our agents will generate a full-stack environment with observability, policy rules, and reward functions.",
   },
 ];
