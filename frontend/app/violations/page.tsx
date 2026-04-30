@@ -1,4 +1,6 @@
 import ViolationTable from "@/components/ViolationTable";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -28,23 +30,27 @@ export default async function ViolationsPage({
     : [];
 
   return (
-    <main className="max-w-7xl mx-auto p-6 space-y-6">
-      <h1 className="text-2xl font-bold">Policy Violations</h1>
+    <div className="space-y-8">
+      <div>
+        <h1 className="text-2xl font-semibold tracking-tight">Policy Violations</h1>
+        <p className="text-muted-foreground text-sm mt-1.5">
+          Audit log of policy rule violations per episode and step.
+        </p>
+      </div>
+
       <form method="get" className="flex items-center gap-3">
-        <input
+        <Input
           name="env"
           defaultValue={envName}
           placeholder="Environment name"
-          className="border border-gray-300 rounded px-3 py-2 text-sm w-64"
+          className="w-64"
         />
-        <button
-          type="submit"
-          className="bg-blue-600 text-white px-4 py-2 rounded text-sm font-medium hover:bg-blue-700"
-        >
+        <Button type="submit" variant="secondary">
           Filter
-        </button>
+        </Button>
       </form>
+
       <ViolationTable initialViolations={violations} />
-    </main>
+    </div>
   );
 }

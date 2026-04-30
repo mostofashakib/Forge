@@ -60,50 +60,62 @@ export default async function DashboardPage({
   ]);
 
   return (
-    <div className="p-8 max-w-5xl mx-auto space-y-8">
+    <div className="space-y-8">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Dashboard</h1>
-        <span className="text-sm text-muted-foreground font-mono">{envName}</span>
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
+          <p className="text-muted-foreground text-sm mt-1">
+            Episode metrics for{" "}
+            <span className="font-mono text-foreground">{envName}</span>
+          </p>
+        </div>
       </div>
 
-      {/* Stat cards */}
       {stats ? (
-        <div className="grid grid-cols-4 gap-4">
+        <div className="grid grid-cols-4 gap-3">
           <StatCard
             label="Pass Rate"
             value={`${(stats.pass_rate * 100).toFixed(1)}%`}
-            highlight={stats.pass_rate >= 0.7 ? "green" : "red"}
+            accent={stats.pass_rate >= 0.7 ? "green" : "red"}
           />
           <StatCard label="Avg Reward" value={stats.avg_reward.toFixed(3)} />
           <StatCard label="Avg Steps" value={stats.avg_steps.toFixed(1)} />
           <StatCard
             label="Policy Violations"
             value={String(stats.policy_violation_count)}
-            highlight={stats.policy_violation_count > 0 ? "red" : undefined}
+            accent={stats.policy_violation_count > 0 ? "red" : undefined}
           />
         </div>
       ) : (
         <p className="text-muted-foreground text-sm">No stats available for {envName}.</p>
       )}
 
-      {/* Top Failure Modes */}
       {stats && stats.top_failures.length > 0 && (
-        <section>
-          <h2 className="text-sm font-semibold text-muted-foreground uppercase mb-3">Top Failure Modes</h2>
-          <div className="space-y-2">
-            {stats.top_failures.slice(0, 5).map((f) => {
+        <section className="space-y-3">
+          <h2 className="text-xs font-medium text-muted-foreground uppercase tracking-widest">
+            Top Failure Modes
+          </h2>
+          <div className="rounded-lg border border-border overflow-hidden">
+            {stats.top_failures.slice(0, 5).map((f, i) => {
               const maxCount = stats.top_failures[0].count;
               const pct = maxCount > 0 ? (f.count / maxCount) * 100 : 0;
               return (
-                <div key={f.check_name} className="flex items-center gap-3 text-sm">
-                  <span className="w-48 truncate font-mono text-xs text-foreground">{f.check_name}</span>
-                  <div className="flex-1 bg-muted rounded h-3 overflow-hidden">
+                <div
+                  key={f.check_name}
+                  className={`flex items-center gap-4 px-4 py-3 text-sm ${i < stats.top_failures.length - 1 ? "border-b border-border" : ""}`}
+                >
+                  <span className="w-48 truncate font-mono text-xs text-muted-foreground">
+                    {f.check_name}
+                  </span>
+                  <div className="flex-1 bg-muted rounded-full h-1.5 overflow-hidden">
                     <div
-                      className="h-full bg-red-500"
+                      className="h-full bg-destructive rounded-full"
                       style={{ width: `${pct}%` }}
                     />
                   </div>
-                  <span className="text-xs text-muted-foreground w-8 text-right">{f.count}</span>
+                  <span className="text-xs text-muted-foreground w-6 text-right tabular-nums">
+                    {f.count}
+                  </span>
                 </div>
               );
             })}
@@ -111,43 +123,59 @@ export default async function DashboardPage({
         </section>
       )}
 
-      {/* Recent Episodes */}
-      <section>
-        <h2 className="text-sm font-semibold text-muted-foreground uppercase mb-3">Recent Episodes</h2>
+      <section className="space-y-3">
+        <h2 className="text-xs font-medium text-muted-foreground uppercase tracking-widest">
+          Recent Episodes
+        </h2>
         {episodes.length === 0 ? (
-          <p className="text-muted-foreground text-sm">No episodes yet.</p>
+          <div className="rounded-lg border border-border px-4 py-8 text-center text-muted-foreground text-sm">
+            No episodes recorded yet.
+          </div>
         ) : (
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left text-xs text-muted-foreground border-b">
-                <th className="pb-2 font-medium">Episode</th>
-                <th className="pb-2 font-medium">Status</th>
-                <th className="pb-2 font-medium">Reward</th>
-                <th className="pb-2 font-medium">Steps</th>
-              </tr>
-            </thead>
-            <tbody>
-              {episodes.slice(0, 20).map((ep) => (
-                <tr key={ep.id} className="border-b border-muted/30 hover:bg-muted/20">
-                  <td className="py-1.5">
-                    <Link
-                      href={`/environments/${ep.env_name}/replay/${ep.id}`}
-                      className="font-mono text-xs text-blue-400 hover:underline"
-                    >
-                      {ep.id}
-                    </Link>
-                  </td>
-                  <td className="py-1.5">
-                    <span className={`text-xs ${ep.passed ? "text-green-400" : "text-red-400"}`}>
-                      {ep.passed ? "✓ pass" : "✗ fail"}
-                    </span>
-                  </td>
-                  <td className="py-1.5 font-mono text-xs">{ep.total_reward.toFixed(3)}</td>
-                  <td className="py-1.5 font-mono text-xs">{ep.total_steps}</td>
+          <div className="rounded-lg border border-border overflow-hidden">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border bg-muted/30">
+                  <th className="px-4 py-2.5 text-left text-xs font-medium text-muted-foreground">Episode</th>
+                  <th className="px-4 py-2.5 text-left text-xs font-medium text-muted-foreground">Result</th>
+                  <th className="px-4 py-2.5 text-left text-xs font-medium text-muted-foreground">Reward</th>
+                  <th className="px-4 py-2.5 text-left text-xs font-medium text-muted-foreground">Steps</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {episodes.slice(0, 20).map((ep, i) => (
+                  <tr
+                    key={ep.id}
+                    className={`hover:bg-muted/20 transition-colors ${i < episodes.length - 1 ? "border-b border-border/50" : ""}`}
+                  >
+                    <td className="px-4 py-2.5">
+                      <Link
+                        href={`/environments/${ep.env_name}/replay/${ep.id}`}
+                        className="font-mono text-xs text-primary hover:underline"
+                      >
+                        {ep.id}
+                      </Link>
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <span
+                        className={`inline-flex items-center gap-1 text-xs font-medium ${
+                          ep.passed ? "text-emerald-400" : "text-destructive"
+                        }`}
+                      >
+                        {ep.passed ? "● pass" : "○ fail"}
+                      </span>
+                    </td>
+                    <td className="px-4 py-2.5 font-mono text-xs tabular-nums text-muted-foreground">
+                      {ep.total_reward.toFixed(3)}
+                    </td>
+                    <td className="px-4 py-2.5 font-mono text-xs tabular-nums text-muted-foreground">
+                      {ep.total_steps}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </section>
     </div>
@@ -157,21 +185,21 @@ export default async function DashboardPage({
 function StatCard({
   label,
   value,
-  highlight,
+  accent,
 }: {
   label: string;
   value: string;
-  highlight?: "green" | "red";
+  accent?: "green" | "red";
 }) {
   return (
-    <div className="bg-muted rounded-lg p-4 space-y-1">
+    <div className="rounded-lg border border-border bg-card px-4 py-4 space-y-1.5">
       <div className="text-xs text-muted-foreground">{label}</div>
       <div
-        className={`text-2xl font-bold font-mono ${
-          highlight === "green"
-            ? "text-green-400"
-            : highlight === "red"
-            ? "text-red-400"
+        className={`text-2xl font-semibold font-mono tabular-nums ${
+          accent === "green"
+            ? "text-emerald-400"
+            : accent === "red"
+            ? "text-destructive"
             : "text-foreground"
         }`}
       >
