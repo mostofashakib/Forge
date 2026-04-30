@@ -101,7 +101,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         />
       </head>
       <body className={`${plexSans.className} ${plexMono.variable}`}>
-        <div className="min-h-screen bg-background">
+        <div className="min-h-screen bg-background flex flex-col">
           <header className="border-b border-border/60 px-6 h-14 flex items-center justify-between">
             <Link href="/environments/new" className="flex items-center gap-2.5">
               <div className="w-6 h-6 rounded bg-primary flex items-center justify-center">
@@ -126,7 +126,21 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             </nav>
           </header>
 
-          <main className="container mx-auto px-6 py-8 max-w-5xl">{children}</main>
+          <main className="container mx-auto px-6 py-8 max-w-5xl flex-1">{children}</main>
+
+          <footer className="border-t border-border/60 mt-auto py-4 px-6 flex items-center justify-center">
+            <p className="text-xs text-muted-foreground">
+              Developed by{" "}
+              <a
+                href="https://www.mostofashakib.com/"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-foreground font-medium hover:text-primary transition-colors"
+              >
+                Mostofa Shakib
+              </a>
+            </p>
+          </footer>
         </div>
       </body>
     </html>
