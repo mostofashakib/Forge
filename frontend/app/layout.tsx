@@ -6,7 +6,7 @@ const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
   title: "Forge",
-  description: "RL Environment Generator",
+  description: "Forge",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -16,7 +16,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <div className="min-h-screen bg-background">
           <header className="border-b px-6 py-3 flex items-center gap-3">
             <span className="font-semibold text-lg">Forge</span>
-            <span className="text-muted-foreground text-sm">RL Environment Generator</span>
+
           </header>
           <main className="container mx-auto px-6 py-8 max-w-4xl">{children}</main>
         </div>
