@@ -98,6 +98,126 @@ def run_episode_task(self, rollout_job_id: str, episode_index: int, seed: int) -
     return episode_id
 
 
+@celery.task(name="backend.app.worker.tasks.build_sandbox_task")
+def build_sandbox_task(
+    job_id: str,
+    env_name: str,
+    description: str,
+    domain: str,
+    policy_requirements: str,
+    reward_requirements: str,
+) -> None:
+    """Run sandbox orchestration + Docker build in a worker, stream progress via Redis pub/sub."""
+    import asyncio
+    import json
+    import redis as _redis
+    from backend.app.database import get_session_factory
+    from backend.app.models import SandboxEnvironment
+    from backend.app.services import extraction_service
+    from backend.app.services.env_orchestrator import EnvironmentOrchestrator
+    from forge.envgen.container import ContainerRuntime
+
+    logger.info("[task:build_sandbox] STARTED — env_name=%s job_id=%s", env_name, job_id)
+
+    redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+    r = _redis.from_url(redis_url)
+    channel = f"forge:progress:{env_name}"
+
+    def publish(msg: dict) -> None:
+        r.publish(channel, json.dumps(msg))
+
+    SessionLocal = get_session_factory()
+
+    async def _orchestrate() -> None:
+        logger.info("[task:build_sandbox] _orchestrate started for %s", env_name)
+        publish({"log": f"[forge] picked up job for '{env_name}'"})
+
+        with SessionLocal() as db:
+            sandbox = db.get(SandboxEnvironment, env_name)
+            if sandbox:
+                sandbox.status = "building"
+                db.commit()
+        logger.info("[task:build_sandbox] DB status → building for %s", env_name)
+
+        async def on_progress(artifact_name: str, _value) -> None:
+            label = {
+                "app_code":          "App Generator",
+                "instrumented_code": "Telemetry Instrumentation",
+                "state_bridge_code": "State Bridge",
+                "policy_dsl":        "Policy Rules",
+                "reward_fn_code":    "Reward Function",
+            }.get(artifact_name, artifact_name)
+            logger.info("[task:build_sandbox] agent done: %s (%s)", label, env_name)
+            publish({"log": f"[agent] {label} — done ✓"})
+            publish({"artifact": artifact_name, "status": "done"})
+
+        logger.info("[task:build_sandbox] starting extraction (LLM pass 1) for %s", env_name)
+        publish({"log": "[forge] running extraction (LLM pass 1)…"})
+        loop = asyncio.get_running_loop()
+        compiler_input = await loop.run_in_executor(
+            None,
+            lambda: extraction_service.run_extraction(
+                prompt=description,
+                project_name=env_name,
+                domain=domain or "localhost",
+            ),
+        )
+        logger.info("[task:build_sandbox] extraction complete for %s", env_name)
+        publish({"log": "[forge] extraction complete — starting 5 parallel agents…"})
+
+        logger.info("[task:build_sandbox] starting 5 parallel agents for %s", env_name)
+        orchestrator = EnvironmentOrchestrator(on_progress=on_progress)
+        await orchestrator.run(
+            env_name=env_name,
+            description=description,
+            compiler_input=compiler_input,
+            policy_requirements=policy_requirements,
+            reward_requirements=reward_requirements,
+        )
+        logger.info("[task:build_sandbox] all agents complete for %s", env_name)
+        publish({"log": "[forge] all agents finished — building Docker image…"})
+
+        envs_root = Path(os.environ.get("FORGE_GENERATED_ENVS_DIR", "generated_envs"))
+        app_dir = envs_root / env_name / "app"
+        logger.info("[task:build_sandbox] building Docker image from %s", app_dir)
+        runtime = ContainerRuntime()
+
+        def _docker_ops() -> tuple[str, str, int]:
+            image_tag = runtime.build(env_name, app_dir)
+            container_id, port = runtime.run(env_name, image_tag)
+            return image_tag, container_id, port
+
+        image_tag, container_id, port = await loop.run_in_executor(None, _docker_ops)
+        logger.info("[task:build_sandbox] container running — port=%s env_name=%s", port, env_name)
+        publish({"log": f"[forge] container running on port {port} ✓"})
+
+        with SessionLocal() as db:
+            sandbox = db.get(SandboxEnvironment, env_name)
+            if sandbox:
+                sandbox.status = "running"
+                sandbox.container_id = container_id
+                sandbox.container_port = port
+                sandbox.image_tag = image_tag
+                db.commit()
+        logger.info("[task:build_sandbox] DB status → running for %s", env_name)
+
+    try:
+        asyncio.run(_orchestrate())
+        logger.info("[task:build_sandbox] COMPLETED — env_name=%s", env_name)
+        publish({"done": True})
+    except Exception as exc:
+        logger.exception("[task:build_sandbox] FAILED — env_name=%s error=%s", env_name, exc)
+        publish({"log": f"[forge] ERROR: {exc}"})
+        with SessionLocal() as db:
+            sandbox = db.get(SandboxEnvironment, env_name)
+            if sandbox:
+                sandbox.status = "error"
+                db.commit()
+        publish({"done": True, "error": f"Build failed: {exc}"})
+    finally:
+        r.close()
+
+
 @celery.task
 def cleanup_expired_sandboxes() -> None:
     from datetime import datetime, timezone
@@ -130,17 +250,19 @@ def run_rollout_task(self, rollout_job_id: str) -> None:
     """Dispatch all episode subtasks for a RolloutJob."""
     from backend.app.database import get_session_factory
 
+    logger.info("[task:run_rollout] STARTED — rollout_job_id=%s", rollout_job_id)
     SessionLocal = get_session_factory()
 
     with SessionLocal() as db:
         job = db.get(RolloutJob, rollout_job_id)
         if job is None:
-            logger.error("RolloutJob %s not found", rollout_job_id)
+            logger.error("[task:run_rollout] RolloutJob %s not found", rollout_job_id)
             return
         job.status = "running"
         num_episodes = job.num_episodes
         seed_start = job.seed_start
         db.commit()
+        logger.info("[task:run_rollout] dispatching %d episodes for job %s", num_episodes, rollout_job_id)
 
     try:
         subtasks = group(

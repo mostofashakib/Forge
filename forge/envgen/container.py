@@ -16,8 +16,14 @@ CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
 
 class ContainerRuntime:
     def __init__(self) -> None:
-        self._docker = docker.from_env()
+        self._docker_client: docker.DockerClient | None = None
         self._redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+
+    @property
+    def _docker(self) -> docker.DockerClient:
+        if self._docker_client is None:
+            self._docker_client = docker.from_env()
+        return self._docker_client
 
     def build(self, env_name: str, app_dir: Path) -> str:
         dockerfile = app_dir / "Dockerfile"
