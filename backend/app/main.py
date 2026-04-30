@@ -40,3 +40,26 @@ app.include_router(sandbox_router)
 @app.on_event("startup")
 def startup():
     init_db()
+    _reattach_containers()
+
+
+def _reattach_containers() -> None:
+    try:
+        from forge.envgen.container import ContainerRuntime
+        from backend.app.database import get_session_factory
+        from backend.app.models import SandboxEnvironment
+        runtime = ContainerRuntime()
+        managed = runtime.reattach_all()
+        if not managed:
+            return
+        SessionLocal = get_session_factory()
+        with SessionLocal() as db:
+            for env_name, container_id, port in managed:
+                sandbox = db.get(SandboxEnvironment, env_name)
+                if sandbox:
+                    sandbox.container_id = container_id
+                    sandbox.container_port = port
+                    sandbox.status = "running"
+            db.commit()
+    except Exception:
+        pass  # Docker not available in test/CI environments
