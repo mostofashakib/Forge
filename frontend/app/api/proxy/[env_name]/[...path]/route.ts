@@ -34,12 +34,20 @@ async function proxyRequest(
 
   const body = method !== "GET" && method !== "HEAD" ? await req.arrayBuffer() : undefined;
 
-  const upstream = await fetch(url, {
-    method,
-    headers,
-    body: body ? Buffer.from(body) : undefined,
-    redirect: "manual",
-  });
+  let upstream: Response;
+  try {
+    upstream = await fetch(url, {
+      method,
+      headers,
+      body: body ? Buffer.from(body) : undefined,
+      redirect: "manual",
+    });
+  } catch {
+    return NextResponse.json(
+      { error: "Container unreachable — it may have stopped" },
+      { status: 503 }
+    );
+  }
 
   const responseHeaders = new Headers(upstream.headers);
   responseHeaders.delete("access-control-allow-origin");

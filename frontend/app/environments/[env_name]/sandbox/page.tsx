@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { use, useEffect, useState } from "react";
 import { API_BASE } from "@/lib/api";
 import { SandboxEventFeed } from "@/components/SandboxEventFeed";
 import { SandboxTerminal } from "@/components/SandboxTerminal";
@@ -13,11 +13,11 @@ interface SandboxInfo {
 }
 
 interface Props {
-  params: { env_name: string };
+  params: Promise<{ env_name: string }>;
 }
 
 export default function SandboxPage({ params }: Props) {
-  const { env_name } = params;
+  const { env_name } = use(params);
   const [info, setInfo] = useState<SandboxInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
 

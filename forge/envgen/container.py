@@ -1,5 +1,6 @@
 from __future__ import annotations
 import os
+import subprocess
 from pathlib import Path
 import docker
 import docker.errors
@@ -29,12 +30,18 @@ class ContainerRuntime:
         dockerfile = app_dir / "Dockerfile"
         if not dockerfile.exists():
             dockerfile.write_text(_DOCKERFILE)
-        image, _ = self._docker.images.build(
-            path=str(app_dir),
-            tag=f"forge-env:{env_name}:latest",
-            rm=True,
+        safe_name = env_name.replace("_", "-").lower()
+        tag = f"forge-env-{safe_name}:latest"
+        # Use CLI directly — the Python SDK credential-helper resolution fails
+        # when optional helpers (e.g. docker-credential-gcloud) are configured
+        # but not authenticated, even for Docker Hub images.
+        subprocess.run(
+            ["docker", "build", "-t", tag, "--rm", str(app_dir)],
+            check=True,
+            capture_output=True,
+            text=True,
         )
-        return image.tags[0]
+        return tag
 
     def run(self, env_name: str, image_tag: str) -> tuple[str, int]:
         container = self._docker.containers.run(

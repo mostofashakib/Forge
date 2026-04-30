@@ -13,3 +13,12 @@ class GeneratedApp(BaseModel):
 
 class GeneratedFile(BaseModel):
     content: str
+
+
+class FilePlan(BaseModel):
+    path: str
+    description: str
+
+
+class AppPlan(BaseModel):
+    files: list[FilePlan]

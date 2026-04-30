@@ -118,6 +118,18 @@ def get_sandbox(env_name: str, db: Session = Depends(get_db)):
     sandbox = db.get(SandboxEnvironment, env_name)
     if not sandbox:
         raise HTTPException(status_code=404, detail="Sandbox not found")
+    if sandbox.status == "running" and sandbox.container_id:
+        try:
+            import docker, docker.errors
+            client = docker.from_env()
+            container = client.containers.get(sandbox.container_id)
+            container.reload()
+            if container.status != "running":
+                sandbox.status = "stopped"
+                db.commit()
+        except Exception:
+            sandbox.status = "stopped"
+            db.commit()
     return sandbox
 
 
@@ -126,6 +138,12 @@ def stop_sandbox(env_name: str, db: Session = Depends(get_db)):
     sandbox = db.get(SandboxEnvironment, env_name)
     if not sandbox:
         raise HTTPException(status_code=404, detail="Sandbox not found")
+    if sandbox.container_id:
+        try:
+            from forge.envgen.container import ContainerRuntime
+            ContainerRuntime().stop(sandbox.container_id)
+        except Exception:
+            pass
     sandbox.status = "stopped"
     db.commit()
 
@@ -180,7 +198,10 @@ async def sandbox_progress(websocket: WebSocket, env_name: str):
     finally:
         await pubsub.unsubscribe(channel)
         await r.aclose()
-        await websocket.close()
+        try:
+            await websocket.close()
+        except RuntimeError:
+            pass  # client already closed the connection
         logger.info("[ws:progress] connection closed — env_name=%s", env_name)
 
 
