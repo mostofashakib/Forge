@@ -101,7 +101,7 @@ export default function RolloutLauncher() {
               id="agent-id"
               value={agentId}
               onChange={(e) => setAgentId(e.target.value)}
-              className="flex h-9 w-full rounded-md border border-input bg-input px-3 py-1 text-sm text-foreground shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              className="h-9 w-full rounded-md border border-input bg-card px-3 py-2 text-sm text-foreground shadow-sm transition-colors outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/25"
             >
               <option value="random">Random</option>
               <option value="anthropic:claude-sonnet-4-6">Anthropic — claude-sonnet-4-6</option>
