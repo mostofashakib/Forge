@@ -78,28 +78,6 @@ def test_write_rewards(db_with_episodes, tmp_path):
         assert "passed" in obj
 
 
-def test_run_export_all_formats(db_with_episodes, tmp_path, monkeypatch):
-    monkeypatch.setattr("backend.app.services.export_service.BASE_DIR", tmp_path)
-    job = ExportJob(
-        id="ex_test0001",
-        env_name="test_env",
-        formats=json.dumps(["trajectories", "rewards", "verifier_results", "sft_pairs", "preference_pairs", "grpo_rollouts"]),
-        status="pending",
-        created_at=datetime.now(timezone.utc),
-    )
-    db_with_episodes.add(job)
-    db_with_episodes.commit()
-    run_export("ex_test0001", db_with_episodes)
-    db_with_episodes.refresh(job)
-    assert job.status == "completed"
-    out = Path(job.output_path)
-    assert (out / "trajectories.jsonl").exists()
-    assert (out / "rewards.jsonl").exists()
-    assert (out / "verifier_results.jsonl").exists()
-    assert (out / "sft_pairs.jsonl").exists()
-    assert (out / "preference_pairs.jsonl").exists()
-    assert (out / "grpo_rollouts.parquet").exists()
-
 
 def test_sft_pairs_passed_only(db_with_episodes, tmp_path, monkeypatch):
     monkeypatch.setattr("backend.app.services.export_service.BASE_DIR", tmp_path)

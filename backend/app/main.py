@@ -1,10 +1,19 @@
 from __future__ import annotations
+import logging
 import os
 from pathlib import Path
 from dotenv import load_dotenv
 from fastapi import FastAPI
 
 load_dotenv(Path(__file__).parent.parent / ".env")
+
+logging.basicConfig(
+    level=logging.DEBUG if os.environ.get("FORGE_DEBUG") else logging.INFO,
+    format="%(asctime)s %(levelname)-8s %(name)s — %(message)s",
+    datefmt="%H:%M:%S",
+)
+logger = logging.getLogger(__name__)
+
 from fastapi.middleware.cors import CORSMiddleware
 from backend.app.api.compile import router as compile_router
 from backend.app.api.envs import router as envs_router
@@ -39,8 +48,11 @@ app.include_router(sandbox_router)
 
 @app.on_event("startup")
 def startup():
+    logger.info("[startup] initialising database…")
     init_db()
+    logger.info("[startup] database ready")
     _reattach_containers()
+    logger.info("[startup] Forge API ready — CORS origins: %s", _cors_origins)
 
 
 def _reattach_containers() -> None:
@@ -51,6 +63,7 @@ def _reattach_containers() -> None:
         runtime = ContainerRuntime()
         managed = runtime.reattach_all()
         if not managed:
+            logger.info("[startup] no running containers to reattach")
             return
         SessionLocal = get_session_factory()
         with SessionLocal() as db:
@@ -60,6 +73,7 @@ def _reattach_containers() -> None:
                     sandbox.container_id = container_id
                     sandbox.container_port = port
                     sandbox.status = "running"
+                    logger.info("[startup] reattached container for %s → port %s", env_name, port)
             db.commit()
-    except Exception:
-        pass  # Docker not available in test/CI environments
+    except Exception as exc:
+        logger.warning("[startup] container reattach skipped — %s: %s", type(exc).__name__, exc)

@@ -22,6 +22,8 @@ err()  { echo -e "${RED}  ✗${RESET} $*"; }
 # ── Prefixed log streams ──────────────────────────────────────────────────────
 backend_log()  { while IFS= read -r line; do echo -e "${CYAN}[backend] ${RESET}$line"; done; }
 frontend_log() { while IFS= read -r line; do echo -e "${GREEN}[frontend]${RESET} $line"; done; }
+celery_log()   { while IFS= read -r line; do echo -e "${YELLOW}[celery]  ${RESET}$line"; done; }
+redis_log()    { while IFS= read -r line; do echo -e "${RED}[redis]   ${RESET}$line"; done; }
 
 # ── Kill a port (TERM then SIGKILL) ──────────────────────────────────────────
 kill_port() {
@@ -41,14 +43,24 @@ kill_port() {
 # ── Cleanup on Ctrl+C / TERM ─────────────────────────────────────────────────
 BACKEND_PID=""
 FRONTEND_PID=""
+CELERY_PID=""
+REDIS_PID=""
+REDIS_MANAGED=false   # true only if we started Redis ourselves
 
 cleanup() {
   echo ""
   log "Shutting down..."
   [[ -n "$BACKEND_PID" ]]  && kill "$BACKEND_PID"  2>/dev/null && ok "Backend stopped"
   [[ -n "$FRONTEND_PID" ]] && kill "$FRONTEND_PID" 2>/dev/null && ok "Frontend stopped"
+  [[ -n "$CELERY_PID" ]]   && kill "$CELERY_PID"   2>/dev/null && ok "Celery worker stopped"
+  [[ "$REDIS_MANAGED" == "true" ]] && [[ -n "$REDIS_PID" ]] && kill "$REDIS_PID" 2>/dev/null && ok "Redis stopped"
   kill_port 8000 "backend"
   kill_port 3000 "frontend"
+  if command -v docker &>/dev/null 2>&1; then
+    container_ids=$(docker ps -q --filter "label=forge.managed=true" 2>/dev/null || true)
+    [[ -n "$container_ids" ]] && echo "$container_ids" | xargs docker stop 2>/dev/null || true
+    ok "Sandbox containers stopped"
+  fi
   exit 0
 }
 trap cleanup INT TERM
@@ -57,9 +69,14 @@ trap cleanup INT TERM
 log "Clearing any running processes..."
 kill_port 8000 "backend"
 kill_port 3000 "frontend"
-pgrep -f "uvicorn main:app" 2>/dev/null | xargs kill -9 2>/dev/null || true
-pgrep -f "next-server"      2>/dev/null | xargs kill -9 2>/dev/null || true
-pgrep -f "next dev"         2>/dev/null | xargs kill -9 2>/dev/null || true
+pgrep -f "uvicorn main:app"                2>/dev/null | xargs kill -9 2>/dev/null || true
+pgrep -f "next-server"                     2>/dev/null | xargs kill -9 2>/dev/null || true
+pgrep -f "next dev"                        2>/dev/null | xargs kill -9 2>/dev/null || true
+pgrep -f "celery.*worker.*celery_app"      2>/dev/null | xargs kill -9 2>/dev/null || true
+if command -v docker &>/dev/null 2>&1; then
+  container_ids=$(docker ps -q --filter "label=forge.managed=true" 2>/dev/null || true)
+  [[ -n "$container_ids" ]] && echo "$container_ids" | xargs docker stop 2>/dev/null || true
+fi
 
 # ── Virtual environment ───────────────────────────────────────────────────────
 if [[ ! -f "$VENV_DIR/bin/uvicorn" ]]; then
@@ -81,6 +98,28 @@ if [[ ! -d "$FRONTEND_DIR/node_modules" ]]; then
   npm --prefix "$FRONTEND_DIR" install --silent
 fi
 
+# ── Redis ─────────────────────────────────────────────────────────────────────
+if lsof -ti:6379 &>/dev/null; then
+  ok "Redis already running on port 6379"
+else
+  if ! command -v redis-server &>/dev/null; then
+    err "redis-server not found. Install it: brew install redis"
+    exit 1
+  fi
+  log "Starting Redis on port 6379"
+  # Use process substitution so $! is redis-server's PID, not the pipe subshell
+  redis-server --daemonize no --loglevel warning > >(redis_log) 2>&1 &
+  REDIS_PID=$!
+  REDIS_MANAGED=true
+  # Wait until Redis accepts connections (max 5s)
+  for i in $(seq 1 10); do
+    if redis-cli ping &>/dev/null; then break; fi
+    sleep 0.5
+  done
+  if ! redis-cli ping &>/dev/null; then err "Redis failed to start"; exit 1; fi
+  ok "Redis ready (pid $REDIS_PID)"
+fi
+
 # ── Start backend ─────────────────────────────────────────────────────────────
 log "Starting backend on ${CYAN}http://localhost:8000${RESET}"
 (
@@ -99,6 +138,20 @@ BACKEND_PID=$!
 
 sleep 2
 
+# ── Start Celery worker ───────────────────────────────────────────────────────
+log "Starting Celery worker"
+(
+  cd "$ROOT"
+  if [[ -f "backend/.env" ]]; then
+    set -a
+    # shellcheck source=/dev/null
+    source backend/.env
+    set +a
+  fi
+  "$VENV_DIR/bin/celery" -A backend.app.worker.celery_app worker --loglevel=info --concurrency=2 2>&1
+) | celery_log &
+CELERY_PID=$!
+
 # ── Start frontend ────────────────────────────────────────────────────────────
 log "Starting frontend on ${GREEN}http://localhost:3000${RESET}"
 (
@@ -113,8 +166,12 @@ echo -e "  ${BOLD}Forge is running${RESET}"
 echo -e "  ${CYAN}Backend${RESET}  → http://localhost:8000"
 echo -e "  ${CYAN}API Docs${RESET} → http://localhost:8000/docs"
 echo -e "  ${GREEN}Frontend${RESET} → http://localhost:3000"
-echo -e "  Press ${BOLD}Ctrl+C${RESET} to stop both"
+echo -e "  ${YELLOW}Celery${RESET}   → worker (concurrency=2)"
+echo -e "  ${RED}Redis${RESET}    → localhost:6379"
+echo -e "  Press ${BOLD}Ctrl+C${RESET} to stop all"
 echo ""
 
 # ── Wait ─────────────────────────────────────────────────────────────────────
-wait $BACKEND_PID $FRONTEND_PID
+WAIT_PIDS=($BACKEND_PID $FRONTEND_PID $CELERY_PID)
+[[ "$REDIS_MANAGED" == "true" ]] && WAIT_PIDS+=($REDIS_PID)
+wait "${WAIT_PIDS[@]}"

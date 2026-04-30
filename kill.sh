@@ -41,6 +41,19 @@ kill_port() {
 
 kill_port 8000 "Backend (uvicorn)"
 kill_port 3000 "Frontend (Next.js)"
+kill_port 6379 "Redis"
+
+# ── Stop forge-managed sandbox containers ─────────────────────────────────────
+if command -v docker &>/dev/null 2>&1; then
+  container_ids=$(docker ps -q --filter "label=forge.managed=true" 2>/dev/null || true)
+  if [[ -n "$container_ids" ]]; then
+    echo "$container_ids" | xargs docker stop 2>/dev/null || true
+    ok "Sandbox containers stopped"
+    killed_any=true
+  else
+    info "No sandbox containers running"
+  fi
+fi
 
 # ── Kill by process name (belt-and-suspenders) ────────────────────────────────
 kill_pattern() {

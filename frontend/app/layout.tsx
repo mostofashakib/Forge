@@ -85,7 +85,7 @@ const JSON_LD = {
 };
 
 const NAV = [
-  { label: "Environments", href: "/environments/new" },
+  { label: "Environments", href: "/environments" },
   { label: "Dashboard", href: "/dashboard" },
   { label: "Rollouts", href: "/rollouts" },
   { label: "Violations", href: "/violations" },
