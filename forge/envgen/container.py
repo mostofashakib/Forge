@@ -1,5 +1,6 @@
 from __future__ import annotations
 import os
+import re
 import subprocess
 from pathlib import Path
 import docker
@@ -19,6 +20,12 @@ class ContainerRuntime:
     def __init__(self) -> None:
         self._docker_client: docker.DockerClient | None = None
         self._redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+
+    @staticmethod
+    def _container_name(env_name: str) -> str:
+        """Return a Docker-safe container name for an environment."""
+        safe = re.sub(r"[^a-zA-Z0-9_.-]", "-", env_name)
+        return f"forge-{safe}"
 
     @property
     def _docker(self) -> docker.DockerClient:
@@ -46,17 +53,24 @@ class ContainerRuntime:
     def _remove_existing(self, env_name: str) -> None:
         """Remove an existing container with the forge-<env_name> name if present."""
         try:
-            old = self._docker.containers.get(f"forge-{env_name}")
+            old = self._docker.containers.get(self._container_name(env_name))
             old.remove(force=True)
         except docker.errors.NotFound:
             pass
 
     def run_cli(self, env_name: str) -> tuple[str, int]:
         """Spin up an Ubuntu 22.04 shell container (no HTTP port)."""
+        # Pull via CLI to avoid credential-helper hangs (same reason as build())
+        subprocess.run(
+            ["docker", "pull", "ubuntu:22.04"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
         self._remove_existing(env_name)
         container = self._docker.containers.run(
             image="ubuntu:22.04",
-            name=f"forge-{env_name}",
+            name=self._container_name(env_name),
             command=["tail", "-f", "/dev/null"],
             detach=True,
             labels={"forge.env": env_name, "forge.managed": "true", "forge.type": "cli"},
@@ -66,10 +80,17 @@ class ContainerRuntime:
 
     def run_browser(self, env_name: str) -> tuple[str, int]:
         """Spin up a Chromium+KasmVNC container, exposing the web UI on a random port."""
+        # Pull via CLI to avoid credential-helper hangs (same reason as build())
+        subprocess.run(
+            ["docker", "pull", "lscr.io/linuxserver/chromium:latest"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
         self._remove_existing(env_name)
         container = self._docker.containers.run(
             image="lscr.io/linuxserver/chromium:latest",
-            name=f"forge-{env_name}",
+            name=self._container_name(env_name),
             detach=True,
             ports={"3001/tcp": None},
             environment={
@@ -90,7 +111,7 @@ class ContainerRuntime:
     def run(self, env_name: str, image_tag: str) -> tuple[str, int]:
         container = self._docker.containers.run(
             image=image_tag,
-            name=f"forge-{env_name}",
+            name=self._container_name(env_name),
             detach=True,
             ports={"8000/tcp": None},
             environment={"REDIS_URL": self._redis_url, "FORGE_ENV_NAME": env_name},

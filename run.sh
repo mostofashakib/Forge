@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
 # Forge — Local Development Runner
-# Clears any existing processes on :8000/:3000, then starts backend + frontend.
-# Ctrl+C gracefully stops both.
+# Kills any existing processes on :8000/:3000/:6379, then starts all services.
+# Ctrl+C gracefully stops everything.
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -25,17 +25,17 @@ frontend_log() { while IFS= read -r line; do echo -e "${GREEN}[frontend]${RESET}
 celery_log()   { while IFS= read -r line; do echo -e "${YELLOW}[celery]  ${RESET}$line"; done; }
 redis_log()    { while IFS= read -r line; do echo -e "${RED}[redis]   ${RESET}$line"; done; }
 
-# ── Kill a port (TERM then SIGKILL) ──────────────────────────────────────────
+# ── Kill a port — uses nc for a fast check, lsof only to get the PIDs ────────
 kill_port() {
   local port="$1" label="$2"
+  if ! nc -z 127.0.0.1 "$port" 2>/dev/null; then return; fi
   local pids
   pids=$(lsof -ti:"$port" 2>/dev/null || true)
   if [[ -n "$pids" ]]; then
     echo "$pids" | xargs kill -TERM 2>/dev/null || true
     sleep 0.4
-    local remaining
-    remaining=$(lsof -ti:"$port" 2>/dev/null || true)
-    [[ -n "$remaining" ]] && echo "$remaining" | xargs kill -9 2>/dev/null || true
+    pids=$(lsof -ti:"$port" 2>/dev/null || true)
+    [[ -n "$pids" ]] && echo "$pids" | xargs kill -9 2>/dev/null || true
     ok "Cleared $label (port $port)"
   fi
 }
@@ -45,34 +45,33 @@ BACKEND_PID=""
 FRONTEND_PID=""
 CELERY_PID=""
 REDIS_PID=""
-REDIS_MANAGED=false   # true only if we started Redis ourselves
+REDIS_TAIL_PID=""
 
 cleanup() {
   echo ""
   log "Shutting down..."
-  [[ -n "$BACKEND_PID" ]]  && kill "$BACKEND_PID"  2>/dev/null && ok "Backend stopped"
-  [[ -n "$FRONTEND_PID" ]] && kill "$FRONTEND_PID" 2>/dev/null && ok "Frontend stopped"
-  [[ -n "$CELERY_PID" ]]   && kill "$CELERY_PID"   2>/dev/null && ok "Celery worker stopped"
-  [[ "$REDIS_MANAGED" == "true" ]] && [[ -n "$REDIS_PID" ]] && kill "$REDIS_PID" 2>/dev/null && ok "Redis stopped"
-  kill_port 8000 "backend"
-  kill_port 3000 "frontend"
+  [[ -n "$BACKEND_PID" ]]    && kill "$BACKEND_PID"    2>/dev/null || true
+  [[ -n "$FRONTEND_PID" ]]   && kill "$FRONTEND_PID"   2>/dev/null || true
+  [[ -n "$CELERY_PID" ]]     && kill "$CELERY_PID"     2>/dev/null || true
+  [[ -n "$REDIS_PID" ]]      && kill "$REDIS_PID"      2>/dev/null || true
+  [[ -n "$REDIS_TAIL_PID" ]] && kill "$REDIS_TAIL_PID" 2>/dev/null || true
   if command -v docker &>/dev/null 2>&1; then
     container_ids=$(docker ps -q --filter "label=forge.managed=true" 2>/dev/null || true)
     [[ -n "$container_ids" ]] && echo "$container_ids" | xargs docker stop 2>/dev/null || true
-    ok "Sandbox containers stopped"
   fi
   exit 0
 }
 trap cleanup INT TERM
 
-# ── Clear any already-running instances ──────────────────────────────────────
+# ── Kill any already-running instances ───────────────────────────────────────
 log "Clearing any running processes..."
 kill_port 8000 "backend"
 kill_port 3000 "frontend"
-pgrep -f "uvicorn main:app"                2>/dev/null | xargs kill -9 2>/dev/null || true
-pgrep -f "next-server"                     2>/dev/null | xargs kill -9 2>/dev/null || true
-pgrep -f "next dev"                        2>/dev/null | xargs kill -9 2>/dev/null || true
-pgrep -f "celery.*worker.*celery_app"      2>/dev/null | xargs kill -9 2>/dev/null || true
+kill_port 6379 "redis"
+pgrep -f "uvicorn.*backend"           2>/dev/null | xargs kill -9 2>/dev/null || true
+pgrep -f "next-server"                2>/dev/null | xargs kill -9 2>/dev/null || true
+pgrep -f "next dev"                   2>/dev/null | xargs kill -9 2>/dev/null || true
+pgrep -f "celery.*worker.*celery_app" 2>/dev/null | xargs kill -9 2>/dev/null || true
 if command -v docker &>/dev/null 2>&1; then
   container_ids=$(docker ps -q --filter "label=forge.managed=true" 2>/dev/null || true)
   [[ -n "$container_ids" ]] && echo "$container_ids" | xargs docker stop 2>/dev/null || true
@@ -104,32 +103,27 @@ if ! command -v redis-server &>/dev/null; then
   exit 1
 fi
 
-# Check if an existing Redis on :6379 is actually healthy (port open ≠ responsive)
-_redis_healthy() { redis-cli -e ping &>/dev/null; }
+REDIS_LOG="/tmp/forge-redis.log"
+log "Starting Redis on port 6379"
+redis-server --bind 127.0.0.1 --save "" --appendonly no \
+  --daemonize no --loglevel notice \
+  >"$REDIS_LOG" 2>&1 &
+REDIS_PID=$!
 
-if lsof -ti:6379 &>/dev/null; then
-  if _redis_healthy; then
-    ok "Redis already running and healthy on port 6379"
-  else
-    warn "Redis port 6379 is in use but not responding (suspended?) — force-restarting"
-    lsof -ti:6379 | xargs kill -9 2>/dev/null || true
-    sleep 0.5
-    redis-server --daemonize no --loglevel warning > >(redis_log) 2>&1 &
-    REDIS_PID=$!
-    REDIS_MANAGED=true
-    for i in $(seq 1 10); do _redis_healthy && break; sleep 0.5; done
-    if ! _redis_healthy; then err "Redis failed to start after restart"; exit 1; fi
-    ok "Redis restarted and ready (pid $REDIS_PID)"
-  fi
-else
-  log "Starting Redis on port 6379"
-  redis-server --daemonize no --loglevel warning > >(redis_log) 2>&1 &
-  REDIS_PID=$!
-  REDIS_MANAGED=true
-  for i in $(seq 1 10); do _redis_healthy && break; sleep 0.5; done
-  if ! _redis_healthy; then err "Redis failed to start"; exit 1; fi
-  ok "Redis ready (pid $REDIS_PID)"
+# Tail the log file for colored output in the terminal
+tail -f "$REDIS_LOG" 2>/dev/null | redis_log &
+REDIS_TAIL_PID=$!
+
+# Wait for Redis to report ready — grep on the log is reliable; redis-cli ping is not
+for i in $(seq 1 30); do
+  if grep -q "Ready to accept connections" "$REDIS_LOG" 2>/dev/null; then break; fi
+  sleep 0.2
+done
+if ! grep -q "Ready to accept connections" "$REDIS_LOG" 2>/dev/null; then
+  err "Redis failed to start — check $REDIS_LOG"
+  exit 1
 fi
+ok "Redis ready (pid $REDIS_PID)"
 
 # ── Start backend ─────────────────────────────────────────────────────────────
 log "Starting backend on ${CYAN}http://localhost:8000${RESET}"
@@ -183,6 +177,4 @@ echo -e "  Press ${BOLD}Ctrl+C${RESET} to stop all"
 echo ""
 
 # ── Wait ─────────────────────────────────────────────────────────────────────
-WAIT_PIDS=($BACKEND_PID $FRONTEND_PID $CELERY_PID)
-[[ "$REDIS_MANAGED" == "true" ]] && WAIT_PIDS+=($REDIS_PID)
-wait "${WAIT_PIDS[@]}"
+wait "$BACKEND_PID" "$FRONTEND_PID" "$CELERY_PID" "$REDIS_PID"
