@@ -151,6 +151,9 @@ def build_sandbox_task(
             publish({"log": f"[agent] {label} — done ✓"})
             publish({"artifact": artifact_name, "status": "done"})
 
+        async def on_agent_log(message: str) -> None:
+            publish({"log": message})
+
         logger.info("[task:build_sandbox] starting extraction (LLM pass 1) for %s", env_name)
         publish({"log": "[forge] running extraction (LLM pass 1)…"})
         loop = asyncio.get_running_loop()
@@ -163,10 +166,10 @@ def build_sandbox_task(
             ),
         )
         logger.info("[task:build_sandbox] extraction complete for %s", env_name)
-        publish({"log": "[forge] extraction complete — starting 5 parallel agents…"})
+        publish({"log": "[forge] extraction complete — starting agents…"})
 
-        logger.info("[task:build_sandbox] starting 5 parallel agents for %s", env_name)
-        orchestrator = EnvironmentOrchestrator(on_progress=on_progress)
+        logger.info("[task:build_sandbox] starting agents for %s", env_name)
+        orchestrator = EnvironmentOrchestrator(on_progress=on_progress, on_log=on_agent_log)
         await orchestrator.run(
             env_name=env_name,
             description=description,

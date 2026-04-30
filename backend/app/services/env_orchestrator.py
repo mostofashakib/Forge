@@ -19,9 +19,11 @@ class EnvironmentOrchestrator:
         self,
         agents: list[EnvGenAgent] | None = None,
         on_progress: Callable[[str, Any], Awaitable[None]] | None = None,
+        on_log: Callable[[str], Awaitable[None]] | None = None,
     ) -> None:
         self._agents = agents
         self._on_progress = on_progress
+        self._on_log = on_log
 
     async def run(
         self,
@@ -41,6 +43,8 @@ class EnvironmentOrchestrator:
         bus = ArtifactBus()
         if self._on_progress:
             bus.on_publish(self._on_progress)
+        if self._on_log:
+            bus.on_log(self._on_log)
 
         agents = self._agents or [
             AppGeneratorAgent(),
@@ -63,7 +67,9 @@ class EnvironmentOrchestrator:
 
         instrumented: dict[str, str] = bus.get("instrumented_code") or {}
         for path, content in instrumented.items():
-            (app_dir / path).write_text(content)
+            dest = app_dir / path
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(content)
 
         state_bridge: str = bus.get("state_bridge_code") or ""
         if state_bridge:

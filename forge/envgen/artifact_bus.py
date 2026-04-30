@@ -9,9 +9,17 @@ class ArtifactBus:
         self._values: dict[str, Any] = {}
         self._lock = asyncio.Lock()
         self._callbacks: list[Callable[[str, Any], Awaitable[None]]] = []
+        self._log_callbacks: list[Callable[[str], Awaitable[None]]] = []
 
     def on_publish(self, callback: Callable[[str, Any], Awaitable[None]]) -> None:
         self._callbacks.append(callback)
+
+    def on_log(self, callback: Callable[[str], Awaitable[None]]) -> None:
+        self._log_callbacks.append(callback)
+
+    async def log(self, message: str) -> None:
+        for cb in self._log_callbacks:
+            await cb(message)
 
     async def publish(self, name: str, value: Any) -> None:
         async with self._lock:
