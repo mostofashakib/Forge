@@ -1,16 +1,7 @@
 from __future__ import annotations
-from pydantic import BaseModel
 from forge.extraction.llm_client import LLMClient
+from forge.extraction.prompts import ENTITY_PROMPT
 from forge.extraction.schemas import EntityDef
-
-_SYSTEM = """Extract all data entities from the description.
-For each entity provide: name (singular snake_case), primary_key (usually "id"),
-and fields with types (string, integer, boolean, enum, list).
-For enum fields include all possible values."""
-
-
-class _EntityExtractionResult(BaseModel):
-    entities: list[EntityDef]
 
 
 class EntityExtractor:
@@ -19,8 +10,8 @@ class EntityExtractor:
 
     def extract(self, prompt: str) -> list[EntityDef]:
         result = self._client.extract(
-            system=_SYSTEM,
-            user=f"Extract entities from:\n\n{prompt}",
-            schema=_EntityExtractionResult,
+            system=ENTITY_PROMPT.system,
+            user=ENTITY_PROMPT.user_template.format(prompt=prompt),
+            schema=ENTITY_PROMPT.output_type,
         )
         return result.entities

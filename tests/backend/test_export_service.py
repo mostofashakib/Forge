@@ -6,7 +6,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 from backend.app.database import Base
 from backend.app.models import Episode, EpisodeStep, ExportJob
-from backend.app.services.export_service import run_export, _write_trajectories, _write_rewards
+from backend.app.services.export_service import run_export
+from backend.app.services.export_writers.trajectories import write as _write_trajectories
+from backend.app.services.export_writers.rewards import write as _write_rewards
 
 
 @pytest.fixture

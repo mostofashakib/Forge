@@ -1,10 +1,11 @@
-from forge.extraction.policy_parser import PolicyParser, _PolicyExtractionResult
+from forge.extraction.policy_parser import PolicyParser
+from forge.extraction.prompts import PolicyExtractionResult
 from forge.extraction.llm_client import MockLLMClient
 from forge.extraction.schemas import PolicyRule
 
 
-def _mock_policies() -> _PolicyExtractionResult:
-    return _PolicyExtractionResult(policies=[
+def _mock_policies() -> PolicyExtractionResult:
+    return PolicyExtractionResult(policies=[
         PolicyRule(
             id="no_close_without_reply",
             condition="ticket.status == 'open'",
@@ -14,7 +15,7 @@ def _mock_policies() -> _PolicyExtractionResult:
 
 
 def test_policy_parser_returns_policy_list():
-    client = MockLLMClient({"_PolicyExtractionResult": _mock_policies()})
+    client = MockLLMClient({"PolicyExtractionResult": _mock_policies()})
     parser = PolicyParser(client)
     policies = parser.extract("Agents must reply before closing", entities=[], actions=[])
     assert len(policies) == 1

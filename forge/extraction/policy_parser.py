@@ -1,15 +1,7 @@
 from __future__ import annotations
-from pydantic import BaseModel
 from forge.extraction.llm_client import LLMClient
+from forge.extraction.prompts import POLICY_PROMPT
 from forge.extraction.schemas import ActionDef, EntityDef, PolicyRule
-
-_SYSTEM = """Extract workflow policies and constraints.
-For each policy provide: id (snake_case), condition (Python expression),
-and forbidden_actions (list of action names that violate the policy)."""
-
-
-class _PolicyExtractionResult(BaseModel):
-    policies: list[PolicyRule]
 
 
 class PolicyParser:
@@ -19,10 +11,12 @@ class PolicyParser:
     def extract(
         self, prompt: str, entities: list[EntityDef], actions: list[ActionDef]
     ) -> list[PolicyRule]:
-        action_names = [a.name for a in actions]
         result = self._client.extract(
-            system=_SYSTEM,
-            user=f"Actions: {action_names}\n\nDescription:\n{prompt}",
-            schema=_PolicyExtractionResult,
+            system=POLICY_PROMPT.system,
+            user=POLICY_PROMPT.user_template.format(
+                action_names=[a.name for a in actions],
+                prompt=prompt,
+            ),
+            schema=POLICY_PROMPT.output_type,
         )
         return result.policies

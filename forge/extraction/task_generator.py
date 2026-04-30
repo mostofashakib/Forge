@@ -1,16 +1,7 @@
 from __future__ import annotations
-from pydantic import BaseModel
 from forge.extraction.llm_client import LLMClient
+from forge.extraction.prompts import TASK_PROMPT
 from forge.extraction.schemas import ActionDef, EntityDef, PolicyRule, TaskTemplate
-
-_SYSTEM = """Generate RL task templates for this environment.
-Each task has: name (snake_case), description, and success_conditions.
-Each success condition has type (state_check, event_check, temporal_check, negative_check)
-and expression (Python-like condition string)."""
-
-
-class _TaskExtractionResult(BaseModel):
-    tasks: list[TaskTemplate]
 
 
 class TaskGenerator:
@@ -24,10 +15,12 @@ class TaskGenerator:
         actions: list[ActionDef],
         policies: list[PolicyRule],
     ) -> list[TaskTemplate]:
-        action_names = [a.name for a in actions]
         result = self._client.extract(
-            system=_SYSTEM,
-            user=f"Actions: {action_names}\n\nDescription:\n{prompt}",
-            schema=_TaskExtractionResult,
+            system=TASK_PROMPT.system,
+            user=TASK_PROMPT.user_template.format(
+                action_names=[a.name for a in actions],
+                prompt=prompt,
+            ),
+            schema=TASK_PROMPT.output_type,
         )
         return result.tasks
