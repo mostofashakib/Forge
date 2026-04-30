@@ -1,5 +1,8 @@
 "use client";
 import { useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -13,6 +16,13 @@ interface RolloutJob {
   status: string;
 }
 
+const STATUS_STYLES: Record<string, string> = {
+  completed: "text-emerald-400",
+  failed: "text-destructive",
+  running: "text-primary",
+  pending: "text-muted-foreground",
+};
+
 export default function RolloutLauncher() {
   const [envName, setEnvName] = useState("");
   const [taskName, setTaskName] = useState("");
@@ -23,7 +33,7 @@ export default function RolloutLauncher() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.SyntheticEvent) => {
     e.preventDefault();
     setLoading(true);
     setError(null);
@@ -63,117 +73,112 @@ export default function RolloutLauncher() {
 
   return (
     <div className="space-y-6">
-      <form onSubmit={handleSubmit} className="bg-white rounded-lg shadow p-6 space-y-4">
-        <h2 className="text-lg font-semibold">Launch Rollout</h2>
-        {error && <p className="text-red-600 text-sm">{error}</p>}
+      <form onSubmit={handleSubmit} className="space-y-5">
         <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700">Environment</label>
-            <input
-              className="mt-1 block w-full border border-gray-300 rounded px-3 py-2 text-sm"
+          <div className="space-y-1.5">
+            <Label htmlFor="env-name">Environment</Label>
+            <Input
+              id="env-name"
+              placeholder="my_env"
               value={envName}
               onChange={(e) => setEnvName(e.target.value)}
-              placeholder="my_env"
               required
             />
           </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700">Task</label>
-            <input
-              className="mt-1 block w-full border border-gray-300 rounded px-3 py-2 text-sm"
+          <div className="space-y-1.5">
+            <Label htmlFor="task-name">Task</Label>
+            <Input
+              id="task-name"
+              placeholder="task_name"
               value={taskName}
               onChange={(e) => setTaskName(e.target.value)}
-              placeholder="task_name"
               required
             />
           </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700">Agent</label>
+          <div className="space-y-1.5">
+            <Label htmlFor="agent-id">Agent</Label>
             <select
-              className="mt-1 block w-full border border-gray-300 rounded px-3 py-2 text-sm"
+              id="agent-id"
               value={agentId}
               onChange={(e) => setAgentId(e.target.value)}
+              className="flex h-9 w-full rounded-md border border-input bg-input px-3 py-1 text-sm text-foreground shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             >
               <option value="random">Random</option>
-              <option value="anthropic:claude-sonnet-4-6">Anthropic claude-sonnet-4-6</option>
-              <option value="openai:gpt-4o">OpenAI gpt-4o</option>
-              <option value="vllm:meta-llama/Llama-3-8b">vLLM meta-llama/Llama-3-8b</option>
+              <option value="anthropic:claude-sonnet-4-6">Anthropic — claude-sonnet-4-6</option>
+              <option value="openai:gpt-4o">OpenAI — gpt-4o</option>
+              <option value="vllm:meta-llama/Llama-3-8b">vLLM — meta-llama/Llama-3-8b</option>
             </select>
           </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700">Episodes</label>
-            <input
+          <div className="space-y-1.5">
+            <Label htmlFor="num-episodes">Episodes</Label>
+            <Input
+              id="num-episodes"
               type="number"
               min={1}
               max={1000}
-              className="mt-1 block w-full border border-gray-300 rounded px-3 py-2 text-sm"
               value={numEpisodes}
               onChange={(e) => setNumEpisodes(Number(e.target.value))}
             />
           </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700">Seed Start</label>
-            <input
+          <div className="space-y-1.5">
+            <Label htmlFor="seed-start">Seed Start</Label>
+            <Input
+              id="seed-start"
               type="number"
               min={0}
-              className="mt-1 block w-full border border-gray-300 rounded px-3 py-2 text-sm"
               value={seedStart}
               onChange={(e) => setSeedStart(Number(e.target.value))}
             />
           </div>
         </div>
-        <button
-          type="submit"
-          disabled={loading}
-          className="bg-blue-600 text-white px-4 py-2 rounded text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
-        >
-          {loading ? "Launching..." : "Launch Rollout"}
-        </button>
+
+        {error && (
+          <p className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded px-3 py-2">
+            {error}
+          </p>
+        )}
+
+        <Button type="submit" disabled={loading}>
+          {loading ? "Launching…" : "Launch Rollout →"}
+        </Button>
       </form>
 
       {jobs.length > 0 && (
-        <div className="bg-white rounded-lg shadow overflow-hidden">
-          <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50">
-              <tr>
+        <div className="rounded-lg border border-border overflow-hidden">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-border bg-muted/30">
                 {["Job ID", "Env", "Task", "Agent", "Progress", "Status", ""].map((h) => (
-                  <th key={h} className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                  <th key={h} className="px-4 py-2.5 text-left text-xs font-medium text-muted-foreground">
                     {h}
                   </th>
                 ))}
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-200">
-              {jobs.map((job) => (
-                <tr key={job.id}>
-                  <td className="px-4 py-3 text-xs font-mono text-gray-600">{job.id}</td>
-                  <td className="px-4 py-3 text-sm">{job.env_name}</td>
-                  <td className="px-4 py-3 text-sm">{job.task_name}</td>
-                  <td className="px-4 py-3 text-sm">{job.agent_id}</td>
-                  <td className="px-4 py-3 text-sm">
+            <tbody>
+              {jobs.map((job, i) => (
+                <tr
+                  key={job.id}
+                  className={`hover:bg-muted/20 transition-colors ${i < jobs.length - 1 ? "border-b border-border/50" : ""}`}
+                >
+                  <td className="px-4 py-2.5 font-mono text-xs text-muted-foreground">{job.id.slice(0, 8)}</td>
+                  <td className="px-4 py-2.5 text-xs">{job.env_name}</td>
+                  <td className="px-4 py-2.5 text-xs">{job.task_name}</td>
+                  <td className="px-4 py-2.5 text-xs font-mono">{job.agent_id}</td>
+                  <td className="px-4 py-2.5 text-xs tabular-nums text-muted-foreground">
                     {job.episodes_completed}/{job.num_episodes}
                   </td>
-                  <td className="px-4 py-3">
-                    <span
-                      className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
-                        job.status === "completed"
-                          ? "bg-green-100 text-green-800"
-                          : job.status === "failed"
-                          ? "bg-red-100 text-red-800"
-                          : job.status === "running"
-                          ? "bg-blue-100 text-blue-800"
-                          : "bg-gray-100 text-gray-800"
-                      }`}
-                    >
+                  <td className="px-4 py-2.5">
+                    <span className={`text-xs font-medium ${STATUS_STYLES[job.status] ?? "text-muted-foreground"}`}>
                       {job.status}
                     </span>
                   </td>
-                  <td className="px-4 py-3">
+                  <td className="px-4 py-2.5">
                     <button
                       onClick={() => refreshJob(job.id)}
-                      className="text-xs text-blue-600 hover:underline"
+                      className="text-xs text-muted-foreground hover:text-foreground transition-colors"
                     >
-                      Refresh
+                      ↻ Refresh
                     </button>
                   </td>
                 </tr>
