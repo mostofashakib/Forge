@@ -9,11 +9,12 @@ class LLMClient(Protocol):
 
 
 class AnthropicClient:
-    def __init__(self, model: str = "claude-sonnet-4-6", max_retries: int = 3) -> None:
+    def __init__(self, model: str = "claude-sonnet-4-6", max_retries: int = 3, max_tokens: int = 8192) -> None:
         import anthropic
         self._client = anthropic.Anthropic()
         self._model = model
         self._max_retries = max_retries
+        self._max_tokens = max_tokens
 
     def extract(self, system: str, user: str, schema: type[BaseModel]) -> BaseModel:
         import anthropic
@@ -23,7 +24,7 @@ class AnthropicClient:
                 extra = f"\n\nPrevious attempt failed: {last_error}" if last_error else ""
                 response = self._client.messages.create(
                     model=self._model,
-                    max_tokens=4096,
+                    max_tokens=self._max_tokens,
                     system=system + extra,
                     messages=[{"role": "user", "content": user}],
                     tools=[{
