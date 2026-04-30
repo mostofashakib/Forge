@@ -1,0 +1,43 @@
+# Forge
+
+Forge converts enterprise workflow specifications into Gymnasium-compatible reinforcement learning environments.
+
+## What It Does
+
+Given a natural-language description of a business workflow (e.g. a customer support process, a ticketing system, an email pipeline), Forge:
+
+1. Runs a multi-step LLM extraction pipeline to identify entities, actions, tasks, and policies
+2. Compiles the extracted structure into a runnable Python environment using Jinja2 templates
+3. Wraps the environment in a Gymnasium-compatible interface with full `reset()` / `step()` semantics
+4. Provides tooling to run parallel rollouts, verify outcomes, compute rewards, and export training data
+
+## Key Capabilities
+
+- **LLM Extraction**: entity extractor → action inferencer → task generator → policy parser → `CompilerInput`
+- **Compiler**: Jinja2-based generator producing Gymnasium-compatible Python environments
+- **Verifiers**: ExactState, Event, Temporal, Negative, Policy, Semantic (LLM-judged with embedding cache)
+- **Reward Engine**: decomposed per-component scoring, configurable weights
+- **Parallel Rollouts**: Celery workers, five agent adapters (Random, Scripted, Anthropic, OpenAI, vLLM)
+- **Training Export**: trajectories.jsonl, rewards.jsonl, sft_pairs.jsonl, preference_pairs.jsonl, grpo_rollouts.parquet
+- **PolicyEngine**: Python DSL evaluated in a sandboxed context against state snapshots
+- **RBAC**: ObservationFilter strips disallowed state fields per role
+- **Network Isolation**: AST-based static scanner blocks network imports in generated environments
+- **PII Redaction**: regex-based redaction of email, phone, SSN before code generation
+- **Audit Log**: every policy violation persisted with episode ID, step index, rule ID, severity
+
+## Pages
+
+- `/environments/new` — Create an RL environment from a workflow description
+- `/dashboard` — Episode metrics: pass rate, average reward, average steps, policy violations, failure clusters
+- `/rollouts` — Launch parallel episode rollouts with configurable agent and episode count
+- `/violations` — Filterable audit log of policy rule violations by environment, episode, and severity
+
+## API
+
+REST API at `http://localhost:8000/api/` — Swagger docs at `/docs`.
+
+Endpoints: `POST /api/compile/extract`, `GET /api/envs/`, `GET /api/episodes/`, `POST /api/rollouts/`, `POST /api/exports/`, `GET /api/audit/`
+
+## Tech Stack
+
+Python 3.11, FastAPI, SQLAlchemy, Celery, Gymnasium, Pydantic v2, Next.js 16, Tailwind CSS v4, ShadCN UI
