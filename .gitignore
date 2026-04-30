@@ -41,6 +41,7 @@ docs/
 # python
 __pycache__/
 *.py[cod]
+.venv/
 
 # git worktrees
 .worktrees/
