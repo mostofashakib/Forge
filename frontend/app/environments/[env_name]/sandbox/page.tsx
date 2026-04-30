@@ -17,10 +17,19 @@ interface Props {
   params: Promise<{ env_name: string }>;
 }
 
+type Tab = "app" | "terminal" | "observability";
+
+const TABS: { id: Tab; label: string }[] = [
+  { id: "app",          label: "App" },
+  { id: "terminal",     label: "Terminal" },
+  { id: "observability", label: "Observability" },
+];
+
 export default function SandboxPage({ params }: Props) {
   const { env_name } = use(params);
   const [info, setInfo] = useState<SandboxInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<Tab>("app");
 
   useEffect(() => {
     fetch(`${API_BASE}/api/sandbox/${env_name}`)
@@ -57,6 +66,18 @@ export default function SandboxPage({ params }: Props) {
     : null;
 
   const envType = info?.env_type ?? "general";
+
+  // For CLI and browser, hide tabs that don't apply
+  const visibleTabs = envType === "cli"
+    ? TABS.filter((t) => t.id === "terminal")
+    : envType === "browser"
+    ? TABS.filter((t) => t.id === "app")
+    : TABS;
+
+  // Ensure activeTab is valid for current env type
+  const effectiveTab = visibleTabs.find((t) => t.id === activeTab)
+    ? activeTab
+    : visibleTabs[0]?.id ?? "app";
 
   return (
     <div className="h-screen flex flex-col">
@@ -101,69 +122,74 @@ export default function SandboxPage({ params }: Props) {
         {error && <span className="text-red-500 text-sm">{error}</span>}
       </header>
 
-      {/* CLI: full-screen terminal */}
-      {envType === "cli" && (
-        <div className="flex-1 min-h-0">
-          <SandboxTerminal envName={env_name} />
+      {/* Tab bar — only render for general (multi-panel) envs */}
+      {envType === "general" && (
+        <div className="border-b bg-white flex shrink-0">
+          {visibleTabs.map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`px-5 py-2 text-sm font-medium border-b-2 transition-colors ${
+                effectiveTab === tab.id
+                  ? "border-blue-600 text-blue-600"
+                  : "border-transparent text-gray-500 hover:text-gray-700"
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
         </div>
       )}
 
-      {/* Browser: full-screen VNC iframe */}
-      {envType === "browser" && (
-        <div className="flex-1 min-h-0">
-          {info?.status === "running" && info.container_port ? (
+      {/* Content area */}
+      <div className="flex-1 min-h-0">
+        {/* CLI: always show terminal full-screen */}
+        {envType === "cli" && (
+          <SandboxTerminal envName={env_name} />
+        )}
+
+        {/* Browser: full-screen VNC iframe */}
+        {envType === "browser" && (
+          info?.status === "running" && info.container_port ? (
             <iframe
               src={`http://localhost:${info.container_port}/`}
               className="w-full h-full border-0"
               title={`${env_name} browser`}
             />
           ) : (
-            <div className="flex-1 h-full flex items-center justify-center text-gray-400 text-sm">
+            <div className="h-full flex items-center justify-center text-gray-400 text-sm">
               {info?.status === "building" ? "Container starting…" : "Container not running — use Start to launch"}
             </div>
-          )}
-        </div>
-      )}
+          )
+        )}
 
-      {/* General: 3-panel layout */}
-      {envType === "general" && (
-        <div className="flex-1 grid grid-cols-3 divide-x min-h-0">
-          <div className="flex flex-col min-h-0">
-            <div className="text-xs text-gray-400 px-2 py-1 border-b bg-gray-50 shrink-0">
-              Live App
-            </div>
-            {info?.container_port ? (
-              <iframe
-                src={`/api/proxy/${env_name}/ui`}
-                className="flex-1 w-full border-0"
-                title={`${env_name} live UI`}
-              />
-            ) : (
-              <div className="flex-1 flex items-center justify-center text-gray-400 text-sm">
-                {info?.status === "building" ? "Container starting…" : "Container not running"}
-              </div>
+        {/* General: tabbed full-screen panels */}
+        {envType === "general" && (
+          <>
+            {effectiveTab === "app" && (
+              info?.container_port ? (
+                <iframe
+                  src={`/api/proxy/${env_name}/ui`}
+                  className="w-full h-full border-0"
+                  title={`${env_name} live UI`}
+                />
+              ) : (
+                <div className="h-full flex items-center justify-center text-gray-400 text-sm">
+                  {info?.status === "building" ? "Container starting…" : "Container not running"}
+                </div>
+              )
             )}
-          </div>
 
-          <div className="flex flex-col min-h-0">
-            <div className="text-xs text-gray-400 px-2 py-1 border-b bg-gray-50 shrink-0">
-              Terminal
-            </div>
-            <div className="flex-1 min-h-0">
+            {effectiveTab === "terminal" && (
               <SandboxTerminal envName={env_name} />
-            </div>
-          </div>
+            )}
 
-          <div className="flex flex-col min-h-0">
-            <div className="text-xs text-gray-400 px-2 py-1 border-b bg-gray-50 shrink-0">
-              Observability Feed
-            </div>
-            <div className="flex-1 min-h-0">
+            {effectiveTab === "observability" && (
               <SandboxEventFeed envName={env_name} />
-            </div>
-          </div>
-        </div>
-      )}
+            )}
+          </>
+        )}
+      </div>
     </div>
   );
 }
