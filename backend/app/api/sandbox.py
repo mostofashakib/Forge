@@ -116,6 +116,63 @@ async def sandbox_progress(websocket: WebSocket, job_id: str):
         await websocket.close()
 
 
+@router.websocket("/ws/feed/{env_name}")
+async def sandbox_event_feed(websocket: WebSocket, env_name: str, db: Session = Depends(get_db)):
+    """Tail forge:events:<env_name> Redis Stream and push to frontend."""
+    await websocket.accept()
+    redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+    from forge.envgen.telemetry.stream import StreamConsumer
+    consumer = StreamConsumer(redis_url=redis_url, env_name=env_name)
+    try:
+        async for event in consumer.tail(last_id="$"):
+            await websocket.send_json(event)
+    except WebSocketDisconnect:
+        pass
+    finally:
+        await consumer.close()
+        await websocket.close()
+
+
+@router.websocket("/ws/exec/{env_name}")
+async def sandbox_exec(websocket: WebSocket, env_name: str, db: Session = Depends(get_db)):
+    """Bridge WebSocket to docker exec shell for the sandbox container."""
+    await websocket.accept()
+    sandbox = db.get(SandboxEnvironment, env_name)
+    if not sandbox or not sandbox.container_id:
+        await websocket.send_text("Container not running\r\n")
+        await websocket.close()
+        return
+    container_name = f"forge-{env_name}"
+    proc = await asyncio.create_subprocess_exec(
+        "docker", "exec", "-i", container_name, "/bin/sh",
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+
+    async def read_output():
+        while True:
+            chunk = await proc.stdout.read(1024)
+            if not chunk:
+                break
+            await websocket.send_text(chunk.decode(errors="replace"))
+
+    async def write_input():
+        try:
+            while True:
+                data = await websocket.receive_text()
+                proc.stdin.write(data.encode())
+                await proc.stdin.drain()
+        except WebSocketDisconnect:
+            pass
+
+    try:
+        await asyncio.gather(read_output(), write_input())
+    finally:
+        proc.kill()
+        await websocket.close()
+
+
 async def _run_orchestration(job_id: str, request: CreateSandboxRequest) -> None:
     queue = _progress_queues.get(job_id)
 
