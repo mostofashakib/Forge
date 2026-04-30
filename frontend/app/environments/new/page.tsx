@@ -81,7 +81,12 @@ export default function NewEnvironmentPage() {
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        setSubmitError(err.detail ?? `Request failed (${res.status})`);
+        const detail = err.detail;
+        // Pydantic validation errors return detail as an array of {msg, loc, ...}
+        const msg = Array.isArray(detail)
+          ? detail.map((e: { msg?: string }) => e.msg ?? String(e)).join("; ")
+          : (detail ?? `Request failed (${res.status})`);
+        setSubmitError(msg);
         return;
       }
       const data = await res.json();
@@ -159,7 +164,7 @@ export default function NewEnvironmentPage() {
             className="w-full border rounded px-3 py-2 text-sm disabled:opacity-50"
             placeholder="e.g. my_env"
             value={form.env_name}
-            onChange={(e) => update("env_name", e.target.value)}
+            onChange={(e) => update("env_name", e.target.value.replace(/\s+/g, "_"))}
             disabled={atLimit}
             required
           />
