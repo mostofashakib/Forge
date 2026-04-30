@@ -2,7 +2,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { API_BASE } from "@/lib/api";
-import { AgentProgressChecklist } from "@/components/AgentProgressChecklist";
+import { Toast } from "@/components/Toast";
 
 interface FormState {
   env_name: string;
@@ -15,9 +15,8 @@ interface FormState {
 
 export default function NewEnvironmentPage() {
   const router = useRouter();
-  const [step, setStep] = useState<"form" | "building" | "done" | "error">("form");
-  const [jobId, setJobId] = useState("");
-  const [envName, setEnvName] = useState("");
+  const [showToast, setShowToast] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>({
     env_name: "",
@@ -32,9 +31,10 @@ export default function NewEnvironmentPage() {
     setForm((prev) => ({ ...prev, [field]: value }));
   }
 
-  async function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: { preventDefault(): void }) {
     e.preventDefault();
     setSubmitError(null);
+    setSubmitting(true);
     try {
       const res = await fetch(`${API_BASE}/api/sandbox/`, {
         method: "POST",
@@ -42,62 +42,25 @@ export default function NewEnvironmentPage() {
         body: JSON.stringify(form),
       });
       if (!res.ok) {
-        const err = await res.json();
-        setSubmitError(err.detail ?? "Failed to create sandbox");
+        const err = await res.json().catch(() => ({}));
+        setSubmitError(err.detail ?? `Request failed (${res.status})`);
         return;
       }
       const data = await res.json();
-      setJobId(data.job_id);
-      setEnvName(data.env_name);
-      setStep("building");
-    } catch {
-      setSubmitError("Network error — is the backend running?");
+      setShowToast(true);
+      setTimeout(() => router.push(`/environments/${data.env_name}/progress`), 1500);
+    } catch (err) {
+      setSubmitError(err instanceof Error ? err.message : "Network error — is the backend running?");
+    } finally {
+      setSubmitting(false);
     }
   }
 
-  if (step === "building") {
-    return (
-      <div className="max-w-lg mx-auto p-8">
-        <h1 className="text-xl font-bold mb-2">Building your environment</h1>
-        <p className="text-gray-500 text-sm mb-6">
-          Five agents are running in parallel. This takes 30–90 seconds.
-        </p>
-        <AgentProgressChecklist
-          jobId={jobId}
-          onDone={() => setStep("done")}
-          onError={() => setStep("error")}
-        />
-      </div>
-    );
-  }
-
-  if (step === "done") {
-    return (
-      <div className="max-w-lg mx-auto p-8 text-center space-y-4">
-        <h1 className="text-2xl font-bold text-green-600">Environment ready</h1>
-        <p className="text-gray-600">{envName} has been generated and is ready to launch.</p>
-        <button
-          onClick={() => router.push(`/environments/${envName}/sandbox`)}
-          className="px-6 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
-        >
-          Open Sandbox →
-        </button>
-      </div>
-    );
-  }
-
-  if (step === "error") {
-    return (
-      <div className="max-w-lg mx-auto p-8 text-center space-y-4">
-        <h1 className="text-xl font-bold text-red-600">Generation failed</h1>
-        <button onClick={() => setStep("form")} className="px-4 py-2 border rounded">
-          Try again
-        </button>
-      </div>
-    );
-  }
-
   return (
+    <>
+    {showToast && (
+      <Toast message="Environment added to queue" onDismiss={() => setShowToast(false)} />
+    )}
     <form onSubmit={handleSubmit} className="max-w-lg mx-auto p-8 space-y-5">
       <h1 className="text-2xl font-bold">New Sandbox Environment</h1>
 
@@ -124,13 +87,14 @@ export default function NewEnvironmentPage() {
       </div>
 
       <div>
-        <label className="block text-sm font-medium mb-1">Domain</label>
+        <label className="block text-sm font-medium mb-1">
+          Domain <span className="font-normal text-gray-400">(optional)</span>
+        </label>
         <input
           className="w-full border rounded px-3 py-2 text-sm"
-          placeholder="e.g. support, email, crm"
+          placeholder="e.g. support, email, crm — defaults to localhost"
           value={form.domain}
           onChange={(e) => update("domain", e.target.value)}
-          required
         />
       </div>
 
@@ -176,10 +140,12 @@ export default function NewEnvironmentPage() {
 
       <button
         type="submit"
-        className="w-full py-2 bg-blue-600 text-white rounded hover:bg-blue-700 font-medium"
+        disabled={submitting}
+        className="w-full py-2 bg-blue-600 text-white rounded hover:bg-blue-700 font-medium disabled:opacity-60 disabled:cursor-not-allowed"
       >
-        Generate Environment
+        {submitting ? "Submitting…" : "Generate Environment"}
       </button>
     </form>
+    </>
   );
 }

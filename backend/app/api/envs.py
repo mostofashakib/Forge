@@ -1,6 +1,7 @@
 # backend/app/api/envs.py
 from __future__ import annotations
 import os
+import shutil
 from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -58,6 +59,15 @@ def update_config(env_name: str, payload: ConfigPayload) -> ConfigPayload:
 def get_env_stats(env_name: str, db: Session = Depends(get_db)):
     _validate_env_name(env_name)
     return episode_service.get_stats(env_name, db)
+
+
+@router.delete("/{env_name}", status_code=204)
+def delete_env(env_name: str) -> None:
+    _validate_env_name(env_name)
+    env_dir = _envs_root() / env_name
+    if not env_dir.exists():
+        raise HTTPException(status_code=404, detail=f"Environment '{env_name}' not found")
+    shutil.rmtree(env_dir)
 
 
 @router.get("/{env_name}/compiler-input")

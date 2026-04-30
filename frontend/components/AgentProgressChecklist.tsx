@@ -3,25 +3,25 @@ import { useEffect, useState } from "react";
 import { wsBase } from "@/lib/api";
 
 const AGENTS = [
-  { id: "app_code", label: "App Generator" },
+  { id: "app_code",        label: "App Generator" },
   { id: "instrumented_code", label: "Telemetry Instrumentation" },
   { id: "state_bridge_code", label: "State Bridge (ContainerForgeEnv)" },
-  { id: "policy_dsl", label: "Policy Rules" },
-  { id: "reward_fn_code", label: "Reward Function" },
+  { id: "policy_dsl",      label: "Policy Rules" },
+  { id: "reward_fn_code",  label: "Reward Function" },
 ];
 
 interface Props {
-  jobId: string;
+  envName: string;
   onDone: () => void;
   onError?: (msg: string) => void;
 }
 
-export function AgentProgressChecklist({ jobId, onDone, onError }: Props) {
+export function AgentProgressChecklist({ envName, onDone, onError }: Props) {
   const [done, setDone] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const ws = new WebSocket(`${wsBase()}/api/sandbox/ws/${jobId}`);
+    const ws = new WebSocket(`${wsBase()}/api/sandbox/ws/progress/${envName}`);
     ws.onmessage = (e) => {
       const msg = JSON.parse(e.data) as Record<string, string>;
       if (msg.error) {
@@ -43,7 +43,7 @@ export function AgentProgressChecklist({ jobId, onDone, onError }: Props) {
       onError?.("WebSocket connection failed");
     };
     return () => ws.close();
-  }, [jobId, onDone, onError]);
+  }, [envName, onDone, onError]);
 
   return (
     <div className="space-y-3">
