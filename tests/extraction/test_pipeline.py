@@ -1,9 +1,11 @@
 from forge.extraction.pipeline import ExtractionPipeline
 from forge.extraction.llm_client import MockLLMClient
-from forge.extraction.entity_extractor import _EntityExtractionResult
-from forge.extraction.action_inferencer import _ActionExtractionResult
-from forge.extraction.policy_parser import _PolicyExtractionResult
-from forge.extraction.task_generator import _TaskExtractionResult
+from forge.extraction.prompts import (
+    EntityExtractionResult,
+    ActionExtractionResult,
+    PolicyExtractionResult,
+    TaskExtractionResult,
+)
 from forge.extraction.schemas import (
     EntityDef, FieldDef, ActionDef, ActionParam,
     PolicyRule, TaskTemplate, SuccessCondition,
@@ -12,19 +14,19 @@ from forge.extraction.schemas import (
 
 def _make_mock_client() -> MockLLMClient:
     return MockLLMClient({
-        "_EntityExtractionResult": _EntityExtractionResult(entities=[
+        "EntityExtractionResult": EntityExtractionResult(entities=[
             EntityDef(name="counter", fields=[
                 FieldDef(name="id", type="string"),
                 FieldDef(name="value", type="integer", default=0),
             ])
         ]),
-        "_ActionExtractionResult": _ActionExtractionResult(actions=[
+        "ActionExtractionResult": ActionExtractionResult(actions=[
             ActionDef(name="increment", params=[
                 ActionParam(name="counter_id", type="string")
             ], mutates=["counter.value"])
         ]),
-        "_PolicyExtractionResult": _PolicyExtractionResult(policies=[]),
-        "_TaskExtractionResult": _TaskExtractionResult(tasks=[
+        "PolicyExtractionResult": PolicyExtractionResult(policies=[]),
+        "TaskExtractionResult": TaskExtractionResult(tasks=[
             TaskTemplate(
                 name="reach_target",
                 description="Reach target value",
@@ -60,5 +62,5 @@ def test_pipeline_passes_entities_to_action_inferencer():
             return _make_mock_client().extract(system, user, schema)
 
     ExtractionPipeline(CapturingClient()).run("desc", "proj", "dom")
-    assert "_ActionExtractionResult" in captured
-    assert "counter" in captured["_ActionExtractionResult"]
+    assert "ActionExtractionResult" in captured
+    assert "counter" in captured["ActionExtractionResult"]

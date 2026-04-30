@@ -1,5 +1,7 @@
 from __future__ import annotations
 import json
+from forge.runtime.agents.prompts import FORGE_AGENT_PROMPT
+
 try:
     import anthropic
 except ImportError:
@@ -20,7 +22,7 @@ class AnthropicAgent:
         tools = [
             {
                 "name": at,
-                "description": f"Perform action: {at}",
+                "description": FORGE_AGENT_PROMPT.action_description_template.format(action=at),
                 "input_schema": {"type": "object", "properties": {}, "additionalProperties": True},
             }
             for at in sorted(action_types)
@@ -28,8 +30,14 @@ class AnthropicAgent:
         response = self._client.messages.create(
             model=self._model,
             max_tokens=1024,
+            system=FORGE_AGENT_PROMPT.system,
             tools=tools,
-            messages=[{"role": "user", "content": json.dumps(obs)}],
+            messages=[{
+                "role": "user",
+                "content": FORGE_AGENT_PROMPT.observation_template.format(
+                    observation=json.dumps(obs)
+                ),
+            }],
         )
         for block in response.content:
             if block.type == "tool_use":

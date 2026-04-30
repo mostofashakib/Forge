@@ -1,10 +1,11 @@
-from forge.extraction.entity_extractor import EntityExtractor, _EntityExtractionResult
+from forge.extraction.entity_extractor import EntityExtractor
+from forge.extraction.prompts import EntityExtractionResult
 from forge.extraction.llm_client import MockLLMClient
 from forge.extraction.schemas import EntityDef, FieldDef
 
 
-def _mock_entities() -> _EntityExtractionResult:
-    return _EntityExtractionResult(entities=[
+def _mock_entities() -> EntityExtractionResult:
+    return EntityExtractionResult(entities=[
         EntityDef(name="ticket", fields=[
             FieldDef(name="id", type="string"),
             FieldDef(name="status", type="enum", values=["open", "closed"]),
@@ -13,7 +14,7 @@ def _mock_entities() -> _EntityExtractionResult:
 
 
 def test_extractor_returns_entity_list():
-    client = MockLLMClient({"_EntityExtractionResult": _mock_entities()})
+    client = MockLLMClient({"EntityExtractionResult": _mock_entities()})
     extractor = EntityExtractor(client)
     entities = extractor.extract("A ticketing system")
     assert len(entities) == 1

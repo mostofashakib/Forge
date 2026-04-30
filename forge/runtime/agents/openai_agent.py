@@ -1,5 +1,7 @@
 from __future__ import annotations
 import json
+from forge.runtime.agents.prompts import FORGE_AGENT_PROMPT
+
 try:
     import openai
 except ImportError:
@@ -25,7 +27,7 @@ class OpenAIAgent:
                 "type": "function",
                 "function": {
                     "name": at,
-                    "description": f"Perform action: {at}",
+                    "description": FORGE_AGENT_PROMPT.action_description_template.format(action=at),
                     "parameters": {"type": "object", "properties": {}, "additionalProperties": True},
                 },
             }
@@ -34,7 +36,15 @@ class OpenAIAgent:
         response = self._client.chat.completions.create(
             model=self._model,
             tools=tools,
-            messages=[{"role": "user", "content": json.dumps(obs)}],
+            messages=[
+                {"role": "system", "content": FORGE_AGENT_PROMPT.system},
+                {
+                    "role": "user",
+                    "content": FORGE_AGENT_PROMPT.observation_template.format(
+                        observation=json.dumps(obs)
+                    ),
+                },
+            ],
         )
         choice = response.choices[0]
         if choice.message.tool_calls:

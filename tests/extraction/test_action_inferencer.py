@@ -1,10 +1,11 @@
-from forge.extraction.action_inferencer import ActionInferencer, _ActionExtractionResult
+from forge.extraction.action_inferencer import ActionInferencer
+from forge.extraction.prompts import ActionExtractionResult
 from forge.extraction.llm_client import MockLLMClient
 from forge.extraction.schemas import ActionDef, ActionParam, EntityDef
 
 
-def _mock_actions() -> _ActionExtractionResult:
-    return _ActionExtractionResult(actions=[
+def _mock_actions() -> ActionExtractionResult:
+    return ActionExtractionResult(actions=[
         ActionDef(name="close_ticket", params=[
             ActionParam(name="ticket_id", type="string")
         ], mutates=["ticket.status"])
@@ -12,7 +13,7 @@ def _mock_actions() -> _ActionExtractionResult:
 
 
 def test_action_inferencer_returns_action_list():
-    client = MockLLMClient({"_ActionExtractionResult": _mock_actions()})
+    client = MockLLMClient({"ActionExtractionResult": _mock_actions()})
     inferencer = ActionInferencer(client)
     actions = inferencer.extract("A ticketing system", entities=[])
     assert len(actions) == 1
