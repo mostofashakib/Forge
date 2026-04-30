@@ -28,7 +28,10 @@ class AnthropicClient:
                     messages=[{"role": "user", "content": user}],
                     tools=[{
                         "name": "extract",
-                        "description": f"Extract {schema.__name__}",
+                        "description": (
+                            f"Return your {schema.__name__} extraction results. "
+                            "Populate ALL required fields based on the description."
+                        ),
                         "input_schema": schema.model_json_schema(),
                     }],
                     tool_choice={"type": "tool", "name": "extract"},
