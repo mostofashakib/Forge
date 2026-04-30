@@ -2,7 +2,6 @@
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { API_BASE } from "@/lib/api";
-import { DeleteEnvironmentButton } from "@/components/DeleteEnvironmentButton";
 
 interface SandboxInfo {
   id: string;
@@ -24,6 +23,7 @@ export default function EnvironmentsPage() {
   const [allNames, setAllNames] = useState<string[]>([]);
   const [sandboxMap, setSandboxMap] = useState<Map<string, SandboxInfo>>(new Map());
   const [loading, setLoading] = useState(true);
+  const [deleting, setDeleting] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
     try {
@@ -48,6 +48,20 @@ export default function EnvironmentsPage() {
   }, []);
 
   useEffect(() => { fetchData(); }, [fetchData]);
+
+  async function handleDelete(name: string, hasSandbox: boolean, e: React.MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!confirm(`Delete environment "${name}"? This cannot be undone.`)) return;
+    setDeleting(name);
+    const url = hasSandbox
+      ? `${API_BASE}/api/sandbox/${name}`
+      : `${API_BASE}/api/envs/${name}`;
+    await fetch(url, { method: "DELETE" }).catch(() => {});
+    setAllNames((prev) => prev.filter((n) => n !== name));
+    setSandboxMap((prev) => { const next = new Map(prev); next.delete(name); return next; });
+    setDeleting(null);
+  }
 
   // Poll every 3 s while any env is still building/queued
   useEffect(() => {
@@ -132,12 +146,21 @@ export default function EnvironmentsPage() {
                 </Link>
 
                 <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <DeleteEnvironmentButton
-                    envName={name}
-                    hasSandbox={!!sandbox}
-                    className="p-1 text-muted-foreground hover:text-red-600 hover:bg-red-50 rounded transition-colors"
-                    icon
-                  />
+                  <button
+                    onClick={(e) => handleDelete(name, !!sandbox, e)}
+                    disabled={deleting === name}
+                    title={`Delete ${name}`}
+                    className="p-1 text-muted-foreground hover:text-red-600 hover:bg-red-50 rounded transition-colors disabled:opacity-50"
+                  >
+                    {deleting === name ? (
+                      <span className="text-xs">…</span>
+                    ) : (
+                      <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M2 3.5h10M5 3.5V2.5a.5.5 0 0 1 .5-.5h3a.5.5 0 0 1 .5.5v1M11.5 3.5l-.7 8a1 1 0 0 1-1 .9H4.2a1 1 0 0 1-1-.9l-.7-8" />
+                        <path d="M5.5 6.5v3M8.5 6.5v3" />
+                      </svg>
+                    )}
+                  </button>
                 </div>
               </div>
             );

@@ -99,24 +99,35 @@ if [[ ! -d "$FRONTEND_DIR/node_modules" ]]; then
 fi
 
 # ── Redis ─────────────────────────────────────────────────────────────────────
+if ! command -v redis-server &>/dev/null; then
+  err "redis-server not found. Install it: brew install redis"
+  exit 1
+fi
+
+# Check if an existing Redis on :6379 is actually healthy (port open ≠ responsive)
+_redis_healthy() { redis-cli -e ping &>/dev/null; }
+
 if lsof -ti:6379 &>/dev/null; then
-  ok "Redis already running on port 6379"
-else
-  if ! command -v redis-server &>/dev/null; then
-    err "redis-server not found. Install it: brew install redis"
-    exit 1
+  if _redis_healthy; then
+    ok "Redis already running and healthy on port 6379"
+  else
+    warn "Redis port 6379 is in use but not responding (suspended?) — force-restarting"
+    lsof -ti:6379 | xargs kill -9 2>/dev/null || true
+    sleep 0.5
+    redis-server --daemonize no --loglevel warning > >(redis_log) 2>&1 &
+    REDIS_PID=$!
+    REDIS_MANAGED=true
+    for i in $(seq 1 10); do _redis_healthy && break; sleep 0.5; done
+    if ! _redis_healthy; then err "Redis failed to start after restart"; exit 1; fi
+    ok "Redis restarted and ready (pid $REDIS_PID)"
   fi
+else
   log "Starting Redis on port 6379"
-  # Use process substitution so $! is redis-server's PID, not the pipe subshell
   redis-server --daemonize no --loglevel warning > >(redis_log) 2>&1 &
   REDIS_PID=$!
   REDIS_MANAGED=true
-  # Wait until Redis accepts connections (max 5s)
-  for i in $(seq 1 10); do
-    if redis-cli ping &>/dev/null; then break; fi
-    sleep 0.5
-  done
-  if ! redis-cli ping &>/dev/null; then err "Redis failed to start"; exit 1; fi
+  for i in $(seq 1 10); do _redis_healthy && break; sleep 0.5; done
+  if ! _redis_healthy; then err "Redis failed to start"; exit 1; fi
   ok "Redis ready (pid $REDIS_PID)"
 fi
 

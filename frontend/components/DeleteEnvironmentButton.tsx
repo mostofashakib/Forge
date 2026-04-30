@@ -25,7 +25,6 @@ export function DeleteEnvironmentButton({ envName, hasSandbox, className, icon }
         : `${API_BASE}/api/envs/${envName}`;
       await fetch(url, { method: "DELETE" });
       router.push("/environments");
-      router.refresh();
     } finally {
       setDeleting(false);
     }

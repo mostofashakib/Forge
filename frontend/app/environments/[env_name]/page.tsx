@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { API_BASE } from "@/lib/api";
-import { DeleteEnvironmentButton } from "@/components/DeleteEnvironmentButton";
+import { SandboxControls } from "@/components/SandboxControls";
 
 interface SandboxInfo {
   id: string;
@@ -116,7 +116,11 @@ export default async function EnvironmentHubPage({
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <DeleteEnvironmentButton envName={env_name} hasSandbox={hasSandbox} />
+          <SandboxControls
+            envName={env_name}
+            status={sandbox?.status ?? ""}
+            hasSandbox={hasSandbox}
+          />
           <Link
             href="/environments"
             className="text-sm text-muted-foreground hover:text-foreground transition-colors"
@@ -126,11 +130,29 @@ export default async function EnvironmentHubPage({
         </div>
       </div>
 
+      {/* Ready banner */}
+      {isLive && (
+        <div className="border border-green-200 bg-green-50 rounded-lg p-5 flex items-center justify-between">
+          <div>
+            <p className="text-sm font-semibold text-green-800">Environment is ready</p>
+            <p className="text-xs text-green-700 mt-0.5">
+              Your app is running on port {sandbox!.container_port} and available via the Sandbox below.
+            </p>
+          </div>
+          <Link
+            href={`/environments/${env_name}/sandbox`}
+            className="shrink-0 ml-4 px-4 py-2 bg-green-700 text-white text-sm font-medium rounded-lg hover:bg-green-800 transition-colors"
+          >
+            Open Sandbox →
+          </Link>
+        </div>
+      )}
+
       {/* Build progress */}
       {inProgress && (
         <div className="border rounded-lg p-5 flex items-center justify-between">
           <p className="text-sm font-medium">
-            {sandbox!.status === "queued" ? "Waiting for worker…" : "Generating environment — five agents running in parallel"}
+            {sandbox!.status === "queued" ? "Waiting for worker…" : "Generating environment — agents running in parallel"}
           </p>
           <Link
             href={`/environments/${env_name}/progress`}

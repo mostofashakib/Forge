@@ -19,7 +19,8 @@ router = APIRouter(prefix="/api/sandbox")
 
 class CreateSandboxRequest(BaseModel):
     env_name: str
-    description: str
+    env_type: str = "general"   # "general" | "cli" | "browser"
+    description: str = ""
     domain: str = "localhost"
     policy_requirements: str = ""
     reward_requirements: str = ""
@@ -29,6 +30,7 @@ class CreateSandboxRequest(BaseModel):
 class SandboxResponse(BaseModel):
     id: str
     status: str
+    env_type: str = "general"
     container_id: str | None = None
     container_port: int | None = None
     ttl_days: int
@@ -44,6 +46,17 @@ class SandboxResponse(BaseModel):
 async def create_sandbox(request: CreateSandboxRequest, db: Session = Depends(get_db)):
     logger.info("[sandbox] POST /api/sandbox/ — env_name=%s", request.env_name)
 
+    active_count = (
+        db.query(SandboxEnvironment)
+        .filter(SandboxEnvironment.status.notin_(["deleted", "expired"]))
+        .count()
+    )
+    if active_count >= 10:
+        raise HTTPException(
+            status_code=429,
+            detail="Environment limit reached (10 max). Delete an existing environment to create a new one.",
+        )
+
     existing = db.get(SandboxEnvironment, request.env_name)
     if existing:
         if existing.status in ("deleted", "expired"):
@@ -58,6 +71,7 @@ async def create_sandbox(request: CreateSandboxRequest, db: Session = Depends(ge
     sandbox = SandboxEnvironment(
         id=request.env_name,
         status="queued",
+        env_type=request.env_type,
         ttl_days=request.ttl_days,
         expires_at=datetime.now(timezone.utc) + timedelta(days=request.ttl_days),
         policy_requirements=request.policy_requirements or None,
@@ -68,34 +82,52 @@ async def create_sandbox(request: CreateSandboxRequest, db: Session = Depends(ge
     logger.info("[sandbox] DB row created for %s (job_id=%s)", request.env_name, job_id)
 
     import asyncio
-    from urllib.parse import urlparse
     redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
-    _parsed = urlparse(redis_url)
-    _host, _port = _parsed.hostname or "localhost", _parsed.port or 6379
-    logger.info("[sandbox] checking Redis reachability at %s:%s…", _host, _port)
+    logger.info("[sandbox] checking Redis at %s…", redis_url)
     try:
-        _reader, _writer = await asyncio.wait_for(
-            asyncio.open_connection(_host, _port), timeout=3
+        loop = asyncio.get_running_loop()
+        pong = await asyncio.wait_for(
+            loop.run_in_executor(
+                None,
+                lambda: redis.from_url(
+                    redis_url, socket_connect_timeout=2, socket_timeout=2
+                ).ping(),
+            ),
+            timeout=4.0,
         )
-        _writer.close()
-        await _writer.wait_closed()
-        logger.info("[sandbox] Redis reachable")
+        if not pong:
+            raise RuntimeError("PING returned false")
+        logger.info("[sandbox] Redis healthy")
     except Exception as exc:
-        logger.error("[sandbox] Redis not reachable at %s:%s — %s: %s", _host, _port, type(exc).__name__, exc)
-        raise HTTPException(status_code=503, detail="Worker unavailable — Redis is not reachable. Start Redis and try again.")
+        logger.error("[sandbox] Redis health check failed — %s: %s", type(exc).__name__, exc)
+        raise HTTPException(
+            status_code=503,
+            detail="Worker unavailable — Redis is not responding. Run: redis-server --daemonize yes",
+        )
 
     logger.info("[sandbox] dispatching build_sandbox_task to Celery for %s…", request.env_name)
     try:
         from backend.app.worker.tasks import build_sandbox_task
-        result = build_sandbox_task.delay(
-            job_id=job_id,
-            env_name=request.env_name,
-            description=request.description,
-            domain=request.domain,
-            policy_requirements=request.policy_requirements,
-            reward_requirements=request.reward_requirements,
+        loop = asyncio.get_running_loop()
+        result = await asyncio.wait_for(
+            loop.run_in_executor(
+                None,
+                lambda: build_sandbox_task.delay(
+                    job_id=job_id,
+                    env_name=request.env_name,
+                    env_type=request.env_type,
+                    description=request.description,
+                    domain=request.domain,
+                    policy_requirements=request.policy_requirements,
+                    reward_requirements=request.reward_requirements,
+                ),
+            ),
+            timeout=15.0,
         )
         logger.info("[sandbox] task queued — celery task_id=%s env_name=%s", result.id, request.env_name)
+    except asyncio.TimeoutError:
+        logger.error("[sandbox] Celery dispatch timed out for %s", request.env_name)
+        raise HTTPException(status_code=503, detail="Worker unavailable — Celery did not accept the task within 15 s. Check Redis and the Celery worker.")
     except Exception:
         logger.exception("[sandbox] FAILED to dispatch task for %s", request.env_name)
         raise HTTPException(status_code=503, detail="Worker unavailable — could not queue build task")
@@ -127,10 +159,38 @@ def get_sandbox(env_name: str, db: Session = Depends(get_db)):
             if container.status != "running":
                 sandbox.status = "stopped"
                 db.commit()
-        except Exception:
+        except docker.errors.NotFound:
             sandbox.status = "stopped"
             db.commit()
+        except Exception:
+            pass  # SDK/credential error — trust the DB status
     return sandbox
+
+
+@router.post("/{env_name}/start")
+def start_sandbox(env_name: str, db: Session = Depends(get_db)):
+    sandbox = db.get(SandboxEnvironment, env_name)
+    if not sandbox:
+        raise HTTPException(status_code=404, detail="Sandbox not found")
+    if sandbox.status == "running":
+        return {"status": "running", "container_port": sandbox.container_port}
+    if not sandbox.image_tag:
+        raise HTTPException(status_code=409, detail="No image available — environment must be rebuilt")
+    try:
+        from forge.envgen.container import ContainerRuntime
+        runtime = ContainerRuntime()
+        container_id, port = runtime.start(
+            env_name=env_name,
+            container_id=sandbox.container_id or "",
+            image_tag=sandbox.image_tag,
+        )
+        sandbox.container_id = container_id
+        sandbox.container_port = port
+        sandbox.status = "running"
+        db.commit()
+        return {"status": "running", "container_port": port}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to start container: {exc}") from exc
 
 
 @router.post("/{env_name}/stop", status_code=204)
