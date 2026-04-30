@@ -212,3 +212,84 @@ def test_forgeenv_telemetry_none_does_not_raise():
     env = build_env()  # no telemetry
     env.reset(seed=1)
     env.step({"type": "increment"})  # must not raise
+
+
+# --- M7: PolicyEngine + ObservationFilter integration ---
+from forge.runtime.policy_engine import PolicyEngine
+from forge.runtime.observation_filter import ObservationFilter, RBACConfig, RolePermissions
+from forge.extraction.schemas import PolicyRule
+
+
+def _build_env_m7(policy_engine=None, observation_filter=None, max_steps=10):
+    spec = EnvironmentSpec(name="test_env", domain="test", max_steps=max_steps)
+    te = TransitionEngine()
+    te.register("increment", increment_transition)
+    ve = VerifierEngine()
+    ve.register("check_counter", check_counter_verifier)
+    re = RewardEngine()
+    return ForgeEnv(
+        env_spec=spec,
+        initial_state_factory=FixedStateFactory(),
+        transition_engine=te,
+        verifier_engine=ve,
+        reward_engine=re,
+        policy_engine=policy_engine,
+        observation_filter=observation_filter,
+    )
+
+
+def test_policy_violation_returns_unchanged_state():
+    rule = PolicyRule(
+        id="no_increment",
+        condition="True",
+        forbidden_actions=["increment"],
+        description="high: always forbidden",
+    )
+    env = _build_env_m7(policy_engine=PolicyEngine([rule]))
+    obs, _ = env.reset(seed=42)
+    state_before = dict(obs)
+    obs2, reward, terminated, truncated, info = env.step({"type": "increment"})
+    assert obs2 == state_before
+    assert reward == 0.0
+    assert terminated is False
+    assert "policy_violations" in info
+    assert len(info["policy_violations"]) == 1
+    assert info["policy_violations"][0]["rule_id"] == "no_increment"
+
+
+def test_no_policy_engine_behaves_normally():
+    env = _build_env_m7()  # no policy_engine
+    env.reset(seed=42)
+    obs2, reward, terminated, truncated, info = env.step({"type": "increment"})
+    assert "policy_violations" not in info
+
+
+def test_observation_filter_applied_to_reset():
+    config = RBACConfig(roles={"agent": RolePermissions(cannot_see=["counter"])})
+    obs_filter = ObservationFilter(rbac_config=config, role="agent")
+    env = _build_env_m7(observation_filter=obs_filter)
+    obs, _ = env.reset(seed=42)
+    assert "counter" not in obs
+
+
+def test_observation_filter_applied_to_step():
+    config = RBACConfig(roles={"agent": RolePermissions(cannot_see=["counter"])})
+    obs_filter = ObservationFilter(rbac_config=config, role="agent")
+    env = _build_env_m7(observation_filter=obs_filter)
+    env.reset(seed=42)
+    obs2, _, _, _, _ = env.step({"type": "increment"})
+    assert "counter" not in obs2
+
+
+def test_policy_violation_increments_step_count():
+    rule = PolicyRule(
+        id="no_increment",
+        condition="True",
+        forbidden_actions=["increment"],
+        description="high: forbidden",
+    )
+    env = _build_env_m7(policy_engine=PolicyEngine([rule]))
+    env.reset(seed=42)
+    assert env._step_count == 0
+    env.step({"type": "increment"})
+    assert env._step_count == 1
