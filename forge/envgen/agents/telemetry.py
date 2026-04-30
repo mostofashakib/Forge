@@ -32,7 +32,7 @@ class TelemetryAgent(EnvGenAgent):
     produces: str = "instrumented_code"
 
     def __init__(self, client: LLMClient | None = None) -> None:
-        self._client = client or AnthropicClient(max_tokens=8192)
+        self._client = client or AnthropicClient(max_tokens=32768)
 
     async def run(self, ctx: EnvGenContext, bus: ArtifactBus) -> None:
         app_code: dict[str, str] = await bus.wait_for("app_code")

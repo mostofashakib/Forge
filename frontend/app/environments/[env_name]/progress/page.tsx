@@ -5,11 +5,11 @@ import Link from "next/link";
 import { wsBase } from "@/lib/api";
 
 const AGENTS = [
-  { id: "app_code",          label: "App Generator" },
-  { id: "instrumented_code", label: "Telemetry Instrumentation" },
-  { id: "state_bridge_code", label: "State Bridge" },
-  { id: "policy_dsl",        label: "Policy Rules" },
-  { id: "reward_fn_code",    label: "Reward Function" },
+  { id: "app_code",          label: "App Generator",            logPrefix: "[app-gen]" },
+  { id: "instrumented_code", label: "Telemetry Instrumentation", logPrefix: null },
+  { id: "state_bridge_code", label: "State Bridge",              logPrefix: null },
+  { id: "policy_dsl",        label: "Policy Rules",              logPrefix: null },
+  { id: "reward_fn_code",    label: "Reward Function",           logPrefix: null },
 ];
 
 const STEP_PCT = Math.floor(100 / AGENTS.length);
@@ -23,6 +23,7 @@ export default function ProgressPage({
   const router = useRouter();
   const [done, setDone] = useState<Set<string>>(new Set());
   const [logs, setLogs] = useState<string[]>([]);
+  const [agentStep, setAgentStep] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const [finished, setFinished] = useState(false);
   const [connected, setConnected] = useState(false);
@@ -36,7 +37,6 @@ export default function ProgressPage({
     return () => clearInterval(id);
   }, [finished, startedAt]);
 
-  // Auto-scroll logs
   useEffect(() => {
     if (logRef.current) {
       logRef.current.scrollTop = logRef.current.scrollHeight;
@@ -54,10 +54,20 @@ export default function ProgressPage({
     ws.onmessage = (e) => {
       const msg = JSON.parse(e.data) as Record<string, unknown>;
       if (msg.log) {
-        setLogs((prev) => [...prev, msg.log as string]);
+        const line = msg.log as string;
+        setLogs((prev) => [...prev.slice(-998), line]);
+        // Update inline sub-step for the matching agent
+        for (const agent of AGENTS) {
+          if (agent.logPrefix && line.startsWith(agent.logPrefix)) {
+            setAgentStep((prev) => ({ ...prev, [agent.id]: line.replace(agent.logPrefix + " ", "") }));
+            break;
+          }
+        }
       }
       if (msg.artifact) {
-        setDone((prev) => new Set([...prev, msg.artifact as string]));
+        const id = msg.artifact as string;
+        setDone((prev) => new Set([...prev, id]));
+        setAgentStep((prev) => { const n = { ...prev }; delete n[id]; return n; });
       }
       if (msg.error) {
         setError(msg.error as string);
@@ -89,12 +99,8 @@ export default function ProgressPage({
 
   return (
     <div className="max-w-2xl mx-auto space-y-6 py-8">
-      {/* Header */}
       <div>
-        <Link
-          href="/environments"
-          className="text-sm text-muted-foreground hover:text-foreground transition-colors"
-        >
+        <Link href="/environments" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
           ← All environments
         </Link>
         <div className="flex items-center gap-3 mt-3">
@@ -109,11 +115,10 @@ export default function ProgressPage({
           </span>
         </div>
         <p className="text-sm text-muted-foreground mt-1">
-          Five agents running in parallel · {etaLabel} · {elapsed}s elapsed
+          Agents running in parallel · {etaLabel} · {elapsed}s elapsed
         </p>
       </div>
 
-      {/* Progress bar */}
       <div className="space-y-1.5">
         <div className="flex items-center justify-between text-xs text-muted-foreground">
           <span>{completedCount} / {AGENTS.length} agents done</span>
@@ -127,24 +132,27 @@ export default function ProgressPage({
         </div>
       </div>
 
-      {/* Two-column layout: checklist + logs */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         {/* Agent checklist */}
         <div className="border rounded-lg divide-y">
           {AGENTS.map((a) => {
             const isDone = done.has(a.id);
+            const step = agentStep[a.id];
             return (
-              <div key={a.id} className="flex items-center gap-3 px-4 py-3">
+              <div key={a.id} className="flex items-start gap-3 px-4 py-3">
                 {isDone ? (
-                  <span className="text-green-500 font-bold text-sm leading-none shrink-0">✓</span>
+                  <span className="text-green-500 font-bold text-sm leading-5 shrink-0">✓</span>
                 ) : (
-                  <span className="text-muted-foreground text-sm leading-none animate-spin inline-block shrink-0">
-                    ⟳
-                  </span>
+                  <span className="text-muted-foreground text-sm leading-5 animate-spin inline-block shrink-0">⟳</span>
                 )}
-                <span className={`text-sm ${isDone ? "font-medium" : "text-muted-foreground"}`}>
-                  {a.label}
-                </span>
+                <div className="min-w-0">
+                  <span className={`text-sm block ${isDone ? "font-medium" : "text-muted-foreground"}`}>
+                    {a.label}
+                  </span>
+                  {!isDone && step && (
+                    <span className="text-xs text-blue-600 truncate block mt-0.5">{step}</span>
+                  )}
+                </div>
               </div>
             );
           })}
