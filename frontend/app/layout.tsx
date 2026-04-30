@@ -1,9 +1,18 @@
 import type { Metadata } from "next";
-import { Outfit } from "next/font/google";
+import { IBM_Plex_Sans, IBM_Plex_Mono } from "next/font/google";
 import Link from "next/link";
 import "./globals.css";
 
-const outfit = Outfit({ subsets: ["latin"], weight: ["400", "500", "600", "700"] });
+const plexSans = IBM_Plex_Sans({
+  subsets: ["latin"],
+  weight: ["300", "400", "500", "600"],
+});
+
+const plexMono = IBM_Plex_Mono({
+  subsets: ["latin"],
+  weight: ["400", "500"],
+  variable: "--font-mono",
+});
 
 export const metadata: Metadata = {
   title: "Forge",
@@ -20,17 +29,17 @@ const NAV = [
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body className={outfit.className}>
+      <body className={`${plexSans.className} ${plexMono.variable}`}>
         <div className="min-h-screen bg-background">
           <header className="border-b border-border/60 px-6 h-14 flex items-center justify-between">
-            <Link href="/environments/new" className="flex items-center gap-2.5 group">
+            <Link href="/environments/new" className="flex items-center gap-2.5">
               <div className="w-6 h-6 rounded bg-primary flex items-center justify-center">
                 <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                  <path d="M7 1L13 4V10L7 13L1 10V4L7 1Z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" className="text-primary-foreground" />
-                  <path d="M7 5L9 6.5V9L7 10.5L5 9V6.5L7 5Z" fill="currentColor" className="text-primary-foreground" />
+                  <path d="M7 1L13 4V10L7 13L1 10V4L7 1Z" stroke="white" strokeWidth="1.5" strokeLinejoin="round" />
+                  <path d="M7 5L9 6.5V9L7 10.5L5 9V6.5L7 5Z" fill="white" />
                 </svg>
               </div>
-              <span className="font-semibold text-sm tracking-wide text-foreground">FORGE</span>
+              <span className="font-semibold text-sm tracking-widest text-foreground">FORGE</span>
             </Link>
 
             <nav className="flex items-center gap-1">
