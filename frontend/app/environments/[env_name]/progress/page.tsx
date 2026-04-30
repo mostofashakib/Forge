@@ -2,10 +2,12 @@
 import { use, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { wsBase } from "@/lib/api";
+import { API_BASE, wsBase } from "@/lib/api";
+
+type EnvType = "general" | "cli" | "browser";
 
 const AGENTS = [
-  { id: "app_code",          label: "App Generator",            logPrefix: "[app-gen]" },
+  { id: "app_code",          label: "App Generator",             logPrefix: "[app-gen]" },
   { id: "instrumented_code", label: "Telemetry Instrumentation", logPrefix: null },
   { id: "state_bridge_code", label: "State Bridge",              logPrefix: null },
   { id: "policy_dsl",        label: "Policy Rules",              logPrefix: null },
@@ -21,15 +23,27 @@ export default function ProgressPage({
 }) {
   const { env_name: envName } = use(params);
   const router = useRouter();
+  const [envType, setEnvType] = useState<EnvType>("general");
   const [done, setDone] = useState<Set<string>>(new Set());
+  const doneRef = useRef<Set<string>>(new Set());
   const [logs, setLogs] = useState<string[]>([]);
   const [agentStep, setAgentStep] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const [finished, setFinished] = useState(false);
-  const [connected, setConnected] = useState(false);
+  const finishedRef = useRef(false);
+  const [phase, setPhase] = useState<"connecting" | "building" | "docker" | "ready" | "error">("connecting");
   const [startedAt] = useState(() => Date.now());
   const [elapsed, setElapsed] = useState(0);
   const logRef = useRef<HTMLDivElement>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Fetch env_type so we can show the right progress UI
+  useEffect(() => {
+    fetch(`${API_BASE}/api/sandbox/${envName}`, { cache: "no-store" })
+      .then((r) => r.ok ? r.json() : null)
+      .then((d) => { if (d?.env_type) setEnvType(d.env_type as EnvType); })
+      .catch(() => {});
+  }, [envName]);
 
   useEffect(() => {
     if (finished) return;
@@ -43,20 +57,47 @@ export default function ProgressPage({
     }
   }, [logs]);
 
-  const onDone = useCallback(() => {
+  const markDone = useCallback(() => {
+    finishedRef.current = true;
     setFinished(true);
+    setPhase("ready");
+    if (pollRef.current) clearInterval(pollRef.current);
     setTimeout(() => router.push(`/environments/${envName}`), 2000);
   }, [envName, router]);
 
+  // Poll the REST API until status = running (fallback when WS drops during Docker build)
+  const startPolling = useCallback(() => {
+    if (pollRef.current) return;
+    setPhase("docker");
+    pollRef.current = setInterval(async () => {
+      if (finishedRef.current) { clearInterval(pollRef.current!); return; }
+      try {
+        const res = await fetch(`${API_BASE}/api/sandbox/${envName}`, { cache: "no-store" });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.status === "running") {
+          markDone();
+        } else if (data.status === "error") {
+          clearInterval(pollRef.current!);
+          setPhase("error");
+          setError("Build failed — check the worker logs for details.");
+        }
+      } catch { /* network blip, retry */ }
+    }, 5000);
+  }, [envName, markDone]);
+
   useEffect(() => {
     const ws = new WebSocket(`${wsBase()}/api/sandbox/ws/progress/${envName}`);
-    ws.onopen = () => setConnected(true);
+
+    ws.onopen = () => setPhase("building");
+
     ws.onmessage = (e) => {
       const msg = JSON.parse(e.data) as Record<string, unknown>;
+
       if (msg.log) {
         const line = msg.log as string;
         setLogs((prev) => [...prev.slice(-998), line]);
-        // Update inline sub-step for the matching agent
+        if (line.includes("building Docker image")) setPhase("docker");
         for (const agent of AGENTS) {
           if (agent.logPrefix && line.startsWith(agent.logPrefix)) {
             setAgentStep((prev) => ({ ...prev, [agent.id]: line.replace(agent.logPrefix + " ", "") }));
@@ -64,32 +105,66 @@ export default function ProgressPage({
           }
         }
       }
+
       if (msg.artifact) {
         const id = msg.artifact as string;
-        setDone((prev) => new Set([...prev, id]));
+        const next = new Set([...doneRef.current, id]);
+        doneRef.current = next;
+        setDone(new Set(next));
         setAgentStep((prev) => { const n = { ...prev }; delete n[id]; return n; });
       }
+
       if (msg.error) {
+        setPhase("error");
         setError(msg.error as string);
         ws.close();
       }
+
       if (msg.done && !msg.error) {
-        onDone();
+        markDone();
         ws.close();
       }
     };
+
     ws.onerror = () => {
-      setConnected(false);
-      setError("WebSocket connection failed — is the backend running?");
+      if (finishedRef.current) return;
+      // For general: poll only after all agents finished (WS drops during Docker build)
+      // For cli/browser: no agents, so always fall back to polling on WS error
+      const allAgentsDone = doneRef.current.size >= AGENTS.length;
+      if (allAgentsDone || envType !== "general") {
+        startPolling();
+      } else {
+        setPhase("error");
+        setError("WebSocket connection failed — is the backend running?");
+      }
     };
-    ws.onclose = () => setConnected(false);
-    return () => ws.close();
-  }, [envName, onDone]);
+
+    ws.onclose = () => {
+      if (finishedRef.current) return;
+      const allAgentsDone = doneRef.current.size >= AGENTS.length;
+      if (allAgentsDone || envType !== "general") {
+        startPolling();
+      }
+    };
+
+    return () => {
+      ws.close();
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, [envName, markDone, startPolling]);
 
   const completedCount = done.size;
-  const pct = finished ? 100 : Math.min(completedCount * STEP_PCT, 95);
+  const pct = finished ? 100 : phase === "docker" ? 97 : Math.min(completedCount * STEP_PCT, 95);
 
-  const estimatedTotal = 90;
+  const phaseLabel: Record<typeof phase, string> = {
+    connecting: "connecting…",
+    building:   "building",
+    docker:     "building Docker image…",
+    ready:      "ready",
+    error:      "error",
+  };
+
+  const estimatedTotal = envType === "general" ? 90 : envType === "browser" ? 180 : 30;
   const remaining = Math.max(0, estimatedTotal - elapsed);
   const etaLabel = finished
     ? "Done"
@@ -106,12 +181,13 @@ export default function ProgressPage({
         <div className="flex items-center gap-3 mt-3">
           <h1 className="text-2xl font-semibold tracking-tight">{envName}</h1>
           <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-            finished ? "bg-green-100 text-green-700" :
-            error    ? "bg-red-100 text-red-600" :
-            connected ? "bg-blue-100 text-blue-700" :
-                        "bg-yellow-100 text-yellow-700"
+            phase === "ready"   ? "bg-green-100 text-green-700" :
+            phase === "error"   ? "bg-red-100 text-red-600" :
+            phase === "docker"  ? "bg-purple-100 text-purple-700" :
+            phase === "building"? "bg-blue-100 text-blue-700" :
+                                  "bg-yellow-100 text-yellow-700"
           }`}>
-            {finished ? "ready" : error ? "error" : connected ? "building" : "connecting…"}
+            {phaseLabel[phase]}
           </span>
         </div>
         <p className="text-sm text-muted-foreground mt-1">
@@ -121,7 +197,10 @@ export default function ProgressPage({
 
       <div className="space-y-1.5">
         <div className="flex items-center justify-between text-xs text-muted-foreground">
-          <span>{completedCount} / {AGENTS.length} agents done</span>
+          {envType === "general"
+            ? <span>{completedCount} / {AGENTS.length} agents done</span>
+            : <span>{envType === "cli" ? "Starting CLI container" : "Starting Browser container"}</span>
+          }
           <span className="font-medium text-foreground">{pct}%</span>
         </div>
         <div className="h-2 w-full bg-muted rounded-full overflow-hidden">
@@ -133,36 +212,77 @@ export default function ProgressPage({
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        {/* Agent checklist */}
+        {/* Left panel: agent checklist (general) or simple step list (cli/browser) */}
         <div className="border rounded-lg divide-y">
-          {AGENTS.map((a) => {
-            const isDone = done.has(a.id);
-            const step = agentStep[a.id];
-            return (
-              <div key={a.id} className="flex items-start gap-3 px-4 py-3">
-                {isDone ? (
+          {envType === "general" ? (
+            <>
+              {AGENTS.map((a) => {
+                const isDone = done.has(a.id);
+                const step = agentStep[a.id];
+                return (
+                  <div key={a.id} className="flex items-start gap-3 px-4 py-3">
+                    {isDone ? (
+                      <span className="text-green-500 font-bold text-sm leading-5 shrink-0">✓</span>
+                    ) : (
+                      <span className="text-muted-foreground text-sm leading-5 animate-spin inline-block shrink-0">⟳</span>
+                    )}
+                    <div className="min-w-0">
+                      <span className={`text-sm block ${isDone ? "font-medium" : "text-muted-foreground"}`}>
+                        {a.label}
+                      </span>
+                      {!isDone && step && (
+                        <span className="text-xs text-blue-600 truncate block mt-0.5">{step}</span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+              <div className="flex items-start gap-3 px-4 py-3">
+                {finished ? (
                   <span className="text-green-500 font-bold text-sm leading-5 shrink-0">✓</span>
-                ) : (
+                ) : phase === "docker" ? (
                   <span className="text-muted-foreground text-sm leading-5 animate-spin inline-block shrink-0">⟳</span>
+                ) : (
+                  <span className="text-muted-foreground/40 text-sm leading-5 shrink-0">○</span>
                 )}
                 <div className="min-w-0">
-                  <span className={`text-sm block ${isDone ? "font-medium" : "text-muted-foreground"}`}>
-                    {a.label}
+                  <span className={`text-sm block ${finished ? "font-medium" : "text-muted-foreground"}`}>
+                    Docker Build &amp; Launch
                   </span>
-                  {!isDone && step && (
-                    <span className="text-xs text-blue-600 truncate block mt-0.5">{step}</span>
+                  {phase === "docker" && !finished && (
+                    <span className="text-xs text-purple-600 block mt-0.5">Building image and starting container…</span>
                   )}
                 </div>
               </div>
-            );
-          })}
+            </>
+          ) : (
+            <>
+              {[
+                { label: "Pull Docker image", done: phase !== "connecting" },
+                { label: "Start container", done: finished },
+              ].map((step) => (
+                <div key={step.label} className="flex items-start gap-3 px-4 py-3">
+                  {step.done ? (
+                    <span className="text-green-500 font-bold text-sm leading-5 shrink-0">✓</span>
+                  ) : phase === "building" || phase === "docker" ? (
+                    <span className="text-muted-foreground text-sm leading-5 animate-spin inline-block shrink-0">⟳</span>
+                  ) : (
+                    <span className="text-muted-foreground/40 text-sm leading-5 shrink-0">○</span>
+                  )}
+                  <span className={`text-sm ${step.done ? "font-medium" : "text-muted-foreground"}`}>
+                    {step.label}
+                  </span>
+                </div>
+              ))}
+            </>
+          )}
         </div>
 
-        {/* Live log stream */}
+        {/* Right panel: worker logs */}
         <div className="border rounded-lg overflow-hidden flex flex-col">
           <div className="px-3 py-2 border-b bg-muted/40 flex items-center justify-between">
             <span className="text-xs font-medium text-muted-foreground">Worker logs</span>
-            {connected && !finished && (
+            {(phase === "building" || phase === "docker") && (
               <span className="flex items-center gap-1 text-xs text-green-600">
                 <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
                 live
@@ -187,12 +307,21 @@ export default function ProgressPage({
       </div>
 
       {finished && (
-        <p className="text-center text-sm text-green-600 font-medium">
-          Environment ready — redirecting to hub…
-        </p>
+        <div className="border border-green-200 bg-green-50 rounded-lg p-4 flex items-center justify-between">
+          <div>
+            <p className="text-sm text-green-700 font-semibold">Environment ready!</p>
+            <p className="text-xs text-green-600 mt-0.5">Redirecting to your environment hub…</p>
+          </div>
+          <Link
+            href={`/environments/${envName}`}
+            className="text-sm font-medium text-green-700 hover:underline"
+          >
+            Open now →
+          </Link>
+        </div>
       )}
 
-      {error && (
+      {phase === "error" && error && (
         <div className="border border-red-200 bg-red-50 rounded-lg p-4 space-y-2">
           <p className="text-sm text-red-600 font-medium">Build failed</p>
           <p className="text-xs text-red-500">{error}</p>

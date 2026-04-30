@@ -74,9 +74,10 @@ kill_pattern() {
   fi
 }
 
-kill_pattern "uvicorn backend.app.main:app" "Stray uvicorn"
-kill_pattern "next-server"                  "Stray Next.js server"
-kill_pattern "next dev"                     "Stray next dev"
+kill_pattern "uvicorn backend.app.main:app"   "Stray uvicorn"
+kill_pattern "next-server"                    "Stray Next.js server"
+kill_pattern "next dev"                       "Stray next dev"
+kill_pattern "celery.*worker.*celery_app"     "Celery worker"
 
 # ── Done ─────────────────────────────────────────────────────────────────────
 echo ""

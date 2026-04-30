@@ -65,6 +65,15 @@ class EnvironmentOrchestrator:
         custom_dir = pkg_dir / "custom"
         custom_dir.mkdir(exist_ok=True)
 
+        # Write all original files first so nothing is lost if the telemetry
+        # agent only returns the files it touched.
+        app_code: dict[str, str] = bus.get("app_code") or {}
+        for path, content in app_code.items():
+            dest = app_dir / path
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(content)
+
+        # Overlay with instrumented versions (these take precedence).
         instrumented: dict[str, str] = bus.get("instrumented_code") or {}
         for path, content in instrumented.items():
             dest = app_dir / path
