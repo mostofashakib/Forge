@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { API_BASE } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -36,7 +37,7 @@ export default function CompilerReview({
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`http://localhost:8000/api/compile/generate/${jobId}`, {
+      const res = await fetch(`${API_BASE}/api/compile/generate/${jobId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(ci),

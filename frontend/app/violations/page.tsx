@@ -2,7 +2,7 @@ import ViolationTable from "@/components/ViolationTable";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+import { API_BASE as API } from "@/lib/api";
 
 interface SearchParams {
   env?: string;

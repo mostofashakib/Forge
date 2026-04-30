@@ -1,6 +1,6 @@
 import EnvironmentGraph from "@/components/EnvironmentGraph";
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+import { API_BASE as API } from "@/lib/api";
 
 async function getCompilerInput(envName: string) {
   try {

@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import EpisodeTimeline from "@/components/EpisodeTimeline";
 import RewardBreakdown from "@/components/RewardBreakdown";
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+import { API_BASE as API } from "@/lib/api";
 
 interface Step {
   step_index: number;

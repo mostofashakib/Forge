@@ -1,5 +1,6 @@
 "use client";
 import { useState } from "react";
+import { API_BASE } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
@@ -22,7 +23,7 @@ export default function ConfigEditor({
     setError(null);
     setSaved(false);
     try {
-      const res = await fetch(`http://localhost:8000/api/envs/${envName}/config`, {
+      const res = await fetch(`${API_BASE}/api/envs/${envName}/config`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ yaml }),
