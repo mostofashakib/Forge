@@ -164,7 +164,7 @@ export default function ProgressPage({
     error:      "error",
   };
 
-  const estimatedTotal = 1450;
+  const estimatedTotal = envType === "cli" || envType === "browser" ? 600 : 1450;
   const remaining = Math.max(0, estimatedTotal - elapsed);
   const etaLabel = finished
     ? "Done"

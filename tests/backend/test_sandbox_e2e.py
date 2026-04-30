@@ -281,3 +281,313 @@ def test_full_creation_to_deletion_flow(client, tmp_path):
     assert resp.status_code == 204
 
     assert client.get("/api/sandbox/lifecycle_env").status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# env_name validation
+# ---------------------------------------------------------------------------
+
+def test_create_sandbox_rejects_name_with_spaces(client):
+    """POST /api/sandbox/ returns 422 when env_name contains spaces."""
+    resp = client.post("/api/sandbox/", json={
+        "env_name": "cli example",
+        "env_type": "cli",
+        "ttl_days": 7,
+    })
+    assert resp.status_code == 422
+    body = resp.json()
+    assert any("env_name" in str(e.get("loc", "")) for e in body["detail"])
+
+
+def test_create_sandbox_rejects_name_starting_with_hyphen(client):
+    """env_name must start with a letter or digit."""
+    resp = client.post("/api/sandbox/", json={
+        "env_name": "-badname",
+        "ttl_days": 7,
+    })
+    assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# CLI environment
+# ---------------------------------------------------------------------------
+
+def test_create_cli_sandbox_queues_successfully(client):
+    """POST /api/sandbox/ with env_type=cli creates a DB row with status=queued."""
+    mocks = _mock_create_deps()
+    with mocks[0], mocks[1]:
+        resp = client.post("/api/sandbox/", json={
+            "env_name": "cli_env",
+            "env_type": "cli",
+            "ttl_days": 7,
+        })
+    assert resp.status_code == 202
+    body = resp.json()
+    assert body["env_name"] == "cli_env"
+
+    info = client.get("/api/sandbox/cli_env").json()
+    assert info["status"] == "queued"
+    assert info["env_type"] == "cli"
+
+
+def test_cli_sandbox_full_lifecycle(client):
+    """CLI sandbox: queued → running (builtin:cli) → stop → delete."""
+    # Create
+    mocks = _mock_create_deps()
+    with mocks[0], mocks[1]:
+        r = client.post("/api/sandbox/", json={
+            "env_name": "cli_lifecycle",
+            "env_type": "cli",
+            "ttl_days": 1,
+        })
+    assert r.status_code == 202
+
+    # Simulate worker completing (CLI has no port)
+    from backend.app import database
+    db: Session = database.get_session_factory()()
+    try:
+        sb = db.get(SandboxEnvironment, "cli_lifecycle")
+        sb.status = "running"
+        sb.container_id = "fake-cli-container-id"
+        sb.container_port = None
+        sb.image_tag = "builtin:cli"
+        db.commit()
+    finally:
+        db.close()
+
+    mock_container = MagicMock()
+    mock_container.status = "running"
+    mock_docker_client = MagicMock()
+    mock_docker_client.containers.get.return_value = mock_container
+    with patch("docker.from_env", return_value=mock_docker_client):
+        info = client.get("/api/sandbox/cli_lifecycle").json()
+    assert info["status"] == "running"
+    assert info["env_type"] == "cli"
+
+    # Stop
+    with patch("forge.envgen.container.ContainerRuntime") as mock_rt:
+        mock_rt.return_value.stop = MagicMock()
+        resp = client.post("/api/sandbox/cli_lifecycle/stop")
+    assert resp.status_code == 204
+
+    # Delete
+    with patch("forge.envgen.container.ContainerRuntime") as mock_rt:
+        mock_rt.return_value.remove = MagicMock()
+        resp = client.delete("/api/sandbox/cli_lifecycle")
+    assert resp.status_code == 204
+
+    assert client.get("/api/sandbox/cli_lifecycle").status_code == 404
+
+
+def test_cli_sandbox_start_restarts_container(client):
+    """POST /api/sandbox/{name}/start on a stopped CLI env calls ContainerRuntime.start()."""
+    _add_sandbox(client, "cli_stopped", status="stopped")
+
+    from backend.app import database
+    db: Session = database.get_session_factory()()
+    try:
+        sb = db.get(SandboxEnvironment, "cli_stopped")
+        sb.container_id = "fake-cli-id"
+        sb.image_tag = "builtin:cli"
+        db.commit()
+    finally:
+        db.close()
+
+    with patch("forge.envgen.container.ContainerRuntime") as mock_rt:
+        mock_rt.return_value.start.return_value = ("fake-cli-id", 0)
+        resp = client.post("/api/sandbox/cli_stopped/start")
+
+    assert resp.status_code == 200
+
+    # GET cross-checks Docker when status=running; mock so it doesn't reset status
+    mock_container = MagicMock()
+    mock_container.status = "running"
+    mock_docker_client = MagicMock()
+    mock_docker_client.containers.get.return_value = mock_container
+    with patch("docker.from_env", return_value=mock_docker_client):
+        info = client.get("/api/sandbox/cli_stopped").json()
+    assert info["status"] == "running"
+
+
+# ---------------------------------------------------------------------------
+# Browser environment
+# ---------------------------------------------------------------------------
+
+def test_create_browser_sandbox_queues_successfully(client):
+    """POST /api/sandbox/ with env_type=browser creates a DB row with status=queued."""
+    mocks = _mock_create_deps()
+    with mocks[0], mocks[1]:
+        resp = client.post("/api/sandbox/", json={
+            "env_name": "browser_env",
+            "env_type": "browser",
+            "ttl_days": 7,
+        })
+    assert resp.status_code == 202
+    body = resp.json()
+    assert body["env_name"] == "browser_env"
+
+    info = client.get("/api/sandbox/browser_env").json()
+    assert info["status"] == "queued"
+    assert info["env_type"] == "browser"
+
+
+def test_browser_sandbox_full_lifecycle(client):
+    """Browser sandbox: queued → running (builtin:browser, with port) → stop → delete."""
+    mocks = _mock_create_deps()
+    with mocks[0], mocks[1]:
+        r = client.post("/api/sandbox/", json={
+            "env_name": "browser_lifecycle",
+            "env_type": "browser",
+            "ttl_days": 1,
+        })
+    assert r.status_code == 202
+
+    # Simulate worker completing (browser has VNC port)
+    from backend.app import database
+    db: Session = database.get_session_factory()()
+    try:
+        sb = db.get(SandboxEnvironment, "browser_lifecycle")
+        sb.status = "running"
+        sb.container_id = "fake-browser-container-id"
+        sb.container_port = 33001
+        sb.image_tag = "builtin:browser"
+        db.commit()
+    finally:
+        db.close()
+
+    mock_container = MagicMock()
+    mock_container.status = "running"
+    mock_docker_client = MagicMock()
+    mock_docker_client.containers.get.return_value = mock_container
+    with patch("docker.from_env", return_value=mock_docker_client):
+        info = client.get("/api/sandbox/browser_lifecycle").json()
+    assert info["status"] == "running"
+    assert info["env_type"] == "browser"
+    assert info["container_port"] == 33001
+
+    # Stop
+    with patch("forge.envgen.container.ContainerRuntime") as mock_rt:
+        mock_rt.return_value.stop = MagicMock()
+        resp = client.post("/api/sandbox/browser_lifecycle/stop")
+    assert resp.status_code == 204
+
+    # Delete
+    with patch("forge.envgen.container.ContainerRuntime") as mock_rt:
+        mock_rt.return_value.remove = MagicMock()
+        resp = client.delete("/api/sandbox/browser_lifecycle")
+    assert resp.status_code == 204
+
+    assert client.get("/api/sandbox/browser_lifecycle").status_code == 404
+
+
+def test_browser_sandbox_start_restarts_container(client):
+    """POST /api/sandbox/{name}/start on a stopped browser env calls ContainerRuntime.start()."""
+    _add_sandbox(client, "browser_stopped", status="stopped")
+
+    from backend.app import database
+    db: Session = database.get_session_factory()()
+    try:
+        sb = db.get(SandboxEnvironment, "browser_stopped")
+        sb.container_id = "fake-browser-id"
+        sb.image_tag = "builtin:browser"
+        db.commit()
+    finally:
+        db.close()
+
+    with patch("forge.envgen.container.ContainerRuntime") as mock_rt:
+        mock_rt.return_value.start.return_value = ("fake-browser-id", 33001)
+        resp = client.post("/api/sandbox/browser_stopped/start")
+
+    assert resp.status_code == 200
+
+    # GET cross-checks Docker when status=running; mock so it doesn't reset status
+    mock_container = MagicMock()
+    mock_container.status = "running"
+    mock_docker_client = MagicMock()
+    mock_docker_client.containers.get.return_value = mock_container
+    with patch("docker.from_env", return_value=mock_docker_client):
+        info = client.get("/api/sandbox/browser_stopped").json()
+    assert info["status"] == "running"
+    assert info["container_port"] == 33001
+
+
+# ---------------------------------------------------------------------------
+# Celery task worker path — CLI
+# ---------------------------------------------------------------------------
+
+def test_build_cli_task_pulls_image_and_creates_container(client):
+    """
+    build_sandbox_task with env_type=cli:
+    - pulls ubuntu:22.04 via subprocess (not the SDK, which hangs on credential helpers)
+    - creates the container via Docker SDK
+    - publishes progress messages and a final done:true signal to Redis
+    - updates DB status to running with image_tag=builtin:cli
+    """
+    import json
+    import docker.errors
+
+    # Create the DB record (status=queued)
+    mocks = _mock_create_deps()
+    with mocks[0], mocks[1]:
+        r = client.post("/api/sandbox/", json={
+            "env_name": "cli_task_test",
+            "env_type": "cli",
+            "ttl_days": 1,
+        })
+    assert r.status_code == 202
+
+    # Capture Redis publish calls
+    published: list[dict] = []
+    mock_redis = MagicMock()
+    mock_redis.publish.side_effect = lambda _ch, data: published.append(json.loads(data))
+
+    # Mock Docker: _remove_existing raises NotFound, containers.run returns a container
+    mock_container = MagicMock()
+    mock_container.id = "fake-cli-abc123"
+    mock_docker_client = MagicMock()
+    mock_docker_client.containers.get.side_effect = docker.errors.NotFound("not found")
+    mock_docker_client.containers.run.return_value = mock_container
+
+    with patch("redis.from_url", return_value=mock_redis), \
+         patch("forge.envgen.container.subprocess.run") as mock_subproc, \
+         patch("forge.envgen.container.docker.from_env", return_value=mock_docker_client):
+
+        mock_subproc.return_value = MagicMock(returncode=0)
+
+        from backend.app.worker.tasks import build_sandbox_task
+        build_sandbox_task(
+            job_id="test-job-cli",
+            env_name="cli_task_test",
+            env_type="cli",
+        )
+
+    # subprocess called to pull ubuntu:22.04 (not the SDK)
+    mock_subproc.assert_called_once_with(
+        ["docker", "pull", "ubuntu:22.04"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    # Docker SDK used to run the container
+    mock_docker_client.containers.run.assert_called_once()
+    run_kwargs = mock_docker_client.containers.run.call_args.kwargs
+    assert run_kwargs["image"] == "ubuntu:22.04"
+    assert run_kwargs["detach"] is True
+    assert run_kwargs["command"] == ["tail", "-f", "/dev/null"]
+
+    # Progress messages published to Redis
+    log_texts = [m["log"] for m in published if "log" in m]
+    assert any("cli_task_test" in msg for msg in log_texts)
+    assert any("ready" in msg.lower() for msg in log_texts)
+    assert any(m.get("done") is True for m in published)
+
+    # DB updated to running with builtin:cli tag
+    mock_running = MagicMock()
+    mock_running.status = "running"
+    mock_docker_for_get = MagicMock()
+    mock_docker_for_get.containers.get.return_value = mock_running
+    with patch("docker.from_env", return_value=mock_docker_for_get):
+        info = client.get("/api/sandbox/cli_task_test").json()
+    assert info["status"] == "running"
+    assert info["env_type"] == "cli"

@@ -8,7 +8,8 @@ from pathlib import Path
 import uuid
 import redis
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
-from pydantic import BaseModel
+import re
+from pydantic import BaseModel, field_validator
 from sqlalchemy.orm import Session
 from backend.app.database import get_db
 from backend.app.models import SandboxEnvironment
@@ -25,6 +26,16 @@ class CreateSandboxRequest(BaseModel):
     policy_requirements: str = ""
     reward_requirements: str = ""
     ttl_days: int = 30
+
+    @field_validator("env_name")
+    @classmethod
+    def validate_env_name(cls, v: str) -> str:
+        if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_-]*", v):
+            raise ValueError(
+                "env_name must start with a letter or digit and contain only "
+                "letters, digits, underscores, and hyphens (no spaces)"
+            )
+        return v
 
 
 class SandboxResponse(BaseModel):
@@ -284,39 +295,86 @@ async def sandbox_event_feed(websocket: WebSocket, env_name: str, db: Session = 
 
 @router.websocket("/ws/exec/{env_name}")
 async def sandbox_exec(websocket: WebSocket, env_name: str, db: Session = Depends(get_db)):
-    """Bridge WebSocket to docker exec shell for the sandbox container."""
+    """Bridge WebSocket to docker exec shell via PTY for full interactive terminal support."""
     await websocket.accept()
     sandbox = db.get(SandboxEnvironment, env_name)
     if not sandbox or not sandbox.container_id:
         await websocket.send_text("Container not running\r\n")
         await websocket.close()
         return
+
     container_name = f"forge-{env_name}"
-    proc = await asyncio.create_subprocess_exec(
-        "docker", "exec", "-i", container_name, "/bin/sh",
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT,
+
+    import fcntl
+    import pty as _pty
+    import struct
+    import subprocess as _subprocess
+    import termios
+
+    master_fd, slave_fd = _pty.openpty()
+    # Default terminal size: 80 cols × 24 rows
+    fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+
+    proc = _subprocess.Popen(
+        ["docker", "exec", "-it", container_name, "/bin/bash"],
+        stdin=slave_fd,
+        stdout=slave_fd,
+        stderr=slave_fd,
+        close_fds=True,
     )
+    os.close(slave_fd)
 
-    async def read_output():
-        while True:
-            chunk = await proc.stdout.read(1024)
-            if not chunk:
-                break
-            await websocket.send_text(chunk.decode(errors="replace"))
+    loop = asyncio.get_running_loop()
+    closed = asyncio.Event()
 
-    async def write_input():
+    def _read_pty() -> None:
+        try:
+            data = os.read(master_fd, 4096)
+            loop.create_task(_forward(data))
+        except OSError:
+            closed.set()
+
+    async def _forward(data: bytes) -> None:
+        try:
+            await websocket.send_text(data.decode(errors="replace"))
+        except Exception:
+            closed.set()
+
+    loop.add_reader(master_fd, _read_pty)
+
+    async def _ws_reader() -> None:
         try:
             while True:
-                data = await websocket.receive_text()
-                proc.stdin.write(data.encode())
-                await proc.stdin.drain()
-        except WebSocketDisconnect:
+                text = await websocket.receive_text()
+                # Resize message: {"type":"resize","cols":N,"rows":N}
+                try:
+                    msg = json.loads(text)
+                    if msg.get("type") == "resize":
+                        cols, rows = int(msg["cols"]), int(msg["rows"])
+                        fcntl.ioctl(master_fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+                        continue
+                except (ValueError, KeyError, TypeError):
+                    pass
+                try:
+                    os.write(master_fd, text.encode())
+                except OSError:
+                    break
+        except (WebSocketDisconnect, Exception):
             pass
+        finally:
+            closed.set()
 
+    ws_task = asyncio.create_task(_ws_reader())
+    await closed.wait()
+    ws_task.cancel()
+
+    loop.remove_reader(master_fd)
     try:
-        await asyncio.gather(read_output(), write_input())
-    finally:
-        proc.kill()
+        os.close(master_fd)
+    except OSError:
+        pass
+    proc.terminate()
+    try:
         await websocket.close()
+    except RuntimeError:
+        pass
