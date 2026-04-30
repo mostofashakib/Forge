@@ -1,5 +1,6 @@
 import os
 from celery import Celery
+from celery.schedules import crontab
 
 celery = Celery(
     "forge",
@@ -14,3 +15,10 @@ celery.conf.update(
     timezone="UTC",
     enable_utc=True,
 )
+
+celery.conf.beat_schedule = {
+    "cleanup-expired-sandboxes-daily": {
+        "task": "backend.app.worker.tasks.cleanup_expired_sandboxes",
+        "schedule": crontab(hour=2, minute=0),
+    },
+}

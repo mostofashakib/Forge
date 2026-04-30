@@ -98,6 +98,33 @@ def run_episode_task(self, rollout_job_id: str, episode_index: int, seed: int) -
     return episode_id
 
 
+@celery.task
+def cleanup_expired_sandboxes() -> None:
+    from datetime import datetime, timezone
+    from backend.app.models import SandboxEnvironment
+    from forge.envgen.container import ContainerRuntime
+    from backend.app.database import get_session_factory
+
+    SessionLocal = get_session_factory()
+    with SessionLocal() as db:
+        expired = (
+            db.query(SandboxEnvironment)
+            .filter(
+                SandboxEnvironment.expires_at <= datetime.now(timezone.utc),
+                SandboxEnvironment.status.notin_(["expired", "deleted"]),
+            )
+            .all()
+        )
+        if not expired:
+            return
+        runtime = ContainerRuntime()
+        for sandbox in expired:
+            if sandbox.container_id:
+                runtime.remove(sandbox.container_id, sandbox.image_tag)
+            sandbox.status = "expired"
+        db.commit()
+
+
 @celery.task(bind=True)
 def run_rollout_task(self, rollout_job_id: str) -> None:
     """Dispatch all episode subtasks for a RolloutJob."""

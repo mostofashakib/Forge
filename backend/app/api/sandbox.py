@@ -1,6 +1,8 @@
 from __future__ import annotations
 import asyncio
+import os
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 import uuid
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
@@ -82,6 +84,14 @@ def delete_sandbox(env_name: str, db: Session = Depends(get_db)):
     sandbox = db.get(SandboxEnvironment, env_name)
     if not sandbox:
         raise HTTPException(status_code=404, detail="Sandbox not found")
+    if sandbox.container_id:
+        from forge.envgen.container import ContainerRuntime
+        runtime = ContainerRuntime()
+        runtime.remove(sandbox.container_id, sandbox.image_tag)
+    import shutil
+    env_dir = Path(os.environ.get("FORGE_GENERATED_ENVS_DIR", "generated_envs")) / env_name
+    if env_dir.exists():
+        shutil.rmtree(env_dir)
     sandbox.status = "deleted"
     db.commit()
 
@@ -133,10 +143,14 @@ async def _run_orchestration(job_id: str, request: CreateSandboxRequest) -> None
             policy_requirements=request.policy_requirements,
             reward_requirements=request.reward_requirements,
         )
-        sandbox = db.get(SandboxEnvironment, request.env_name)
-        if sandbox:
-            sandbox.status = "ready"
-            db.commit()
+
+        envs_root = Path(os.environ.get("FORGE_GENERATED_ENVS_DIR", "generated_envs"))
+        app_dir = envs_root / request.env_name / "app"
+        from forge.envgen.container import ContainerRuntime
+        runtime = ContainerRuntime()
+        await loop.run_in_executor(
+            None, lambda: _build_and_run(runtime, request.env_name, app_dir, db)
+        )
     except Exception:
         sandbox = db.get(SandboxEnvironment, request.env_name)
         if sandbox:
@@ -147,3 +161,15 @@ async def _run_orchestration(job_id: str, request: CreateSandboxRequest) -> None
         if queue:
             await queue.put({"done": True})
         _progress_queues.pop(job_id, None)
+
+
+def _build_and_run(runtime, env_name: str, app_dir: Path, db: Session) -> None:
+    image_tag = runtime.build(env_name, app_dir)
+    container_id, port = runtime.run(env_name, image_tag)
+    sandbox = db.get(SandboxEnvironment, env_name)
+    if sandbox:
+        sandbox.status = "running"
+        sandbox.container_id = container_id
+        sandbox.container_port = port
+        sandbox.image_tag = image_tag
+        db.commit()
