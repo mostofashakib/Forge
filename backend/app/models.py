@@ -106,3 +106,20 @@ class AuditLog(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc)
     )
+
+
+class SandboxEnvironment(Base):
+    __tablename__ = "sandbox_environments"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    status: Mapped[str] = mapped_column(String, default="building")
+    container_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    container_port: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    image_tag: Mapped[str | None] = mapped_column(String, nullable=True)
+    ttl_days: Mapped[int] = mapped_column(Integer, default=30)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc)
+    )
+    policy_requirements: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reward_requirements: Mapped[str | None] = mapped_column(Text, nullable=True)
