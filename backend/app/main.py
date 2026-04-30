@@ -1,4 +1,5 @@
 from __future__ import annotations
+import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from backend.app.api.compile import router as compile_router
@@ -11,9 +12,12 @@ from backend.app.database import init_db
 
 app = FastAPI(title="Forge API", version="0.3.0")
 
+_cors_raw = os.environ.get("CORS_ORIGINS", "http://localhost:3000")
+_cors_origins = [o.strip() for o in _cors_raw.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

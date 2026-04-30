@@ -85,6 +85,14 @@ fi
 log "Starting backend on ${CYAN}http://localhost:8000${RESET}"
 (
   cd "$ROOT"
+  if [[ -f "backend/.env" ]]; then
+    set -a
+    # shellcheck source=/dev/null
+    source backend/.env
+    set +a
+  else
+    warn "backend/.env not found — LLM calls will fail without API keys"
+  fi
   "$VENV_DIR/bin/uvicorn" backend.app.main:app --host 0.0.0.0 --port 8000 --reload 2>&1
 ) | backend_log &
 BACKEND_PID=$!
