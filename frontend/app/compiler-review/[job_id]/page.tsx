@@ -1,7 +1,8 @@
 import CompilerReview from "@/components/CompilerReview";
+import { API_BASE } from "@/lib/api";
 
 async function getJob(jobId: string) {
-  const res = await fetch(`http://localhost:8000/api/compile/${jobId}`, {
+  const res = await fetch(`${API_BASE}/api/compile/${jobId}`, {
     cache: "no-store",
   });
   if (!res.ok) return null;

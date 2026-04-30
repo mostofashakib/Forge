@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { wsBase } from "@/lib/api";
 import { ReactFlow, Background, Controls, useNodesState, useEdgesState } from "@xyflow/react";
 import type { Node, Edge } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
@@ -148,7 +149,7 @@ export default function EnvironmentGraph({
 
   useEffect(() => {
     if (!episodeId) return;
-    const ws = new WebSocket(`ws://localhost:8000/api/episodes/${episodeId}/stream`);
+    const ws = new WebSocket(`${wsBase()}/api/episodes/${episodeId}/stream`);
 
     ws.onmessage = (event) => {
       const data: StepEvent = JSON.parse(event.data as string);

@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import EpisodeReplayClient from "@/components/EpisodeReplayClient";
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+import { API_BASE as API } from "@/lib/api";
 
 interface Step {
   step_index: number;

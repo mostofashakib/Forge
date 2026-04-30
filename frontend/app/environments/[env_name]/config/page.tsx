@@ -1,8 +1,9 @@
 import ConfigEditor from "@/components/ConfigEditor";
+import { API_BASE } from "@/lib/api";
 
 async function getConfig(envName: string) {
   const res = await fetch(
-    `http://localhost:8000/api/envs/${envName}/config`,
+    `${API_BASE}/api/envs/${envName}/config`,
     { cache: "no-store" }
   );
   if (!res.ok) return null;
