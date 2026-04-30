@@ -62,17 +62,19 @@ pgrep -f "next-server"      2>/dev/null | xargs kill -9 2>/dev/null || true
 pgrep -f "next dev"         2>/dev/null | xargs kill -9 2>/dev/null || true
 
 # ── Virtual environment ───────────────────────────────────────────────────────
-if [[ ! -d "$VENV_DIR" ]]; then
-  warn "No .venv found — creating one now..."
-  python3 -m venv "$VENV_DIR"
+if [[ ! -f "$VENV_DIR/bin/uvicorn" ]]; then
+  if [[ ! -d "$VENV_DIR" ]]; then
+    warn "No .venv found — creating one now..."
+    python3 -m venv "$VENV_DIR"
+  else
+    warn ".venv exists but packages are missing — installing now..."
+  fi
   "$VENV_DIR/bin/pip" install -q --upgrade pip
   "$VENV_DIR/bin/pip" install -q -e "$ROOT[dev]"
   ok "Virtual environment ready"
 fi
 
-# shellcheck source=/dev/null
-source "$VENV_DIR/bin/activate"
-ok "Virtual environment activated ($(python --version))"
+ok "Virtual environment ready ($("$VENV_DIR/bin/python" --version))"
 
 if [[ ! -d "$FRONTEND_DIR/node_modules" ]]; then
   warn "node_modules missing — running npm install..."
@@ -83,7 +85,7 @@ fi
 log "Starting backend on ${CYAN}http://localhost:8000${RESET}"
 (
   cd "$ROOT"
-  uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --reload 2>&1
+  "$VENV_DIR/bin/uvicorn" backend.app.main:app --host 0.0.0.0 --port 8000 --reload 2>&1
 ) | backend_log &
 BACKEND_PID=$!
 
