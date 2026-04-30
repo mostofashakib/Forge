@@ -1,6 +1,6 @@
 import Link from "next/link";
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+import { API_BASE as API } from "@/lib/api";
 
 interface FailureCluster {
   check_name: string;
