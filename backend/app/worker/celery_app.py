@@ -16,14 +16,20 @@ celery.conf.update(
     timezone="UTC",
     enable_utc=True,
     # Fail fast on initial broker connection so HTTP callers get a quick 503.
-    # socket_connect_timeout covers the TCP handshake only; no socket_timeout so
-    # Celery's read loop isn't cut short during normal operation or slow startup.
     broker_connection_timeout=4,
     broker_connection_retry=True,
     broker_connection_max_retries=2,
     broker_transport_options={
         "socket_connect_timeout": 4,
     },
+    # Keep Redis backend connections alive to avoid "Connection lost" log spam
+    # during long-running tasks (build_sandbox_task can take several minutes).
+    result_backend_transport_options={
+        "socket_keepalive": True,
+        "retry_on_timeout": True,
+    },
+    redis_socket_keepalive=True,
+    redis_retry_on_timeout=True,
 )
 
 celery.conf.beat_schedule = {

@@ -43,6 +43,50 @@ class ContainerRuntime:
         )
         return tag
 
+    def _remove_existing(self, env_name: str) -> None:
+        """Remove an existing container with the forge-<env_name> name if present."""
+        try:
+            old = self._docker.containers.get(f"forge-{env_name}")
+            old.remove(force=True)
+        except docker.errors.NotFound:
+            pass
+
+    def run_cli(self, env_name: str) -> tuple[str, int]:
+        """Spin up an Ubuntu 22.04 shell container (no HTTP port)."""
+        self._remove_existing(env_name)
+        container = self._docker.containers.run(
+            image="ubuntu:22.04",
+            name=f"forge-{env_name}",
+            command=["tail", "-f", "/dev/null"],
+            detach=True,
+            labels={"forge.env": env_name, "forge.managed": "true", "forge.type": "cli"},
+            restart_policy={"Name": "unless-stopped"},
+        )
+        return container.id, 0
+
+    def run_browser(self, env_name: str) -> tuple[str, int]:
+        """Spin up a Chromium+KasmVNC container, exposing the web UI on a random port."""
+        self._remove_existing(env_name)
+        container = self._docker.containers.run(
+            image="lscr.io/linuxserver/chromium:latest",
+            name=f"forge-{env_name}",
+            detach=True,
+            ports={"3001/tcp": None},
+            environment={
+                "CUSTOM_USER": "forge",
+                "PASSWORD": "forge",
+                "PUID": "1000",
+                "PGID": "1000",
+                "TZ": "UTC",
+            },
+            shm_size="1g",
+            labels={"forge.env": env_name, "forge.managed": "true", "forge.type": "browser"},
+            restart_policy={"Name": "unless-stopped"},
+        )
+        container.reload()
+        port = int(container.ports["3001/tcp"][0]["HostPort"])
+        return container.id, port
+
     def run(self, env_name: str, image_tag: str) -> tuple[str, int]:
         container = self._docker.containers.run(
             image=image_tag,
@@ -51,6 +95,7 @@ class ContainerRuntime:
             ports={"8000/tcp": None},
             environment={"REDIS_URL": self._redis_url, "FORGE_ENV_NAME": env_name},
             labels={"forge.env": env_name, "forge.managed": "true"},
+            restart_policy={"Name": "unless-stopped"},
         )
         container.reload()
         port = int(container.ports["8000/tcp"][0]["HostPort"])
@@ -63,6 +108,28 @@ class ContainerRuntime:
         except docker.errors.NotFound:
             pass
 
+    def start(self, env_name: str, container_id: str, image_tag: str) -> tuple[str, int]:
+        """Restart a stopped container, or run a fresh one if it was removed."""
+        try:
+            container = self._docker.containers.get(container_id)
+            container.start()
+            container.reload()
+            if image_tag == "builtin:cli":
+                return container.id, 0
+            elif image_tag == "builtin:browser":
+                port = int(container.ports["3001/tcp"][0]["HostPort"])
+                return container.id, port
+            else:
+                port = int(container.ports["8000/tcp"][0]["HostPort"])
+                return container.id, port
+        except docker.errors.NotFound:
+            if image_tag == "builtin:cli":
+                return self.run_cli(env_name)
+            elif image_tag == "builtin:browser":
+                return self.run_browser(env_name)
+            else:
+                return self.run(env_name, image_tag)
+
     def remove(self, container_id: str, image_tag: str | None = None) -> None:
         self.stop(container_id)
         try:
@@ -70,7 +137,8 @@ class ContainerRuntime:
             container.remove()
         except docker.errors.NotFound:
             pass
-        if image_tag:
+        # Only remove custom-built images; never touch shared builtin images
+        if image_tag and not image_tag.startswith("builtin:"):
             try:
                 self._docker.images.remove(image_tag, force=True)
             except docker.errors.ImageNotFound:
