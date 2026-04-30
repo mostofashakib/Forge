@@ -1,9 +1,7 @@
 from __future__ import annotations
-import importlib
 import logging
 import os
 import secrets
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -12,21 +10,9 @@ from sqlalchemy import update
 
 from backend.app.worker.celery_app import celery
 from backend.app.models import RolloutJob, Episode
+from backend.app.utils.env_loader import load_forge_env
 
 logger = logging.getLogger(__name__)
-
-
-def _load_forge_env(env_name: str, telemetry):
-    """Load a generated ForgeEnv and inject telemetry."""
-    envs_root = Path(os.environ.get("FORGE_GENERATED_ENVS_DIR", "generated_envs"))
-    parent = str(envs_root.parent.resolve())
-    if parent not in sys.path:
-        sys.path.insert(0, parent)
-    module = importlib.import_module(f"generated_envs.{env_name}.gym_wrapper")
-    build_fn = getattr(module, f"build_{env_name}_env")
-    env = build_fn()
-    env._telemetry = telemetry
-    return env
 
 
 @celery.task(bind=True)
@@ -77,7 +63,7 @@ def run_episode_task(self, rollout_job_id: str, episode_index: int, seed: int) -
                 db_session=db_ep,
                 jsonl_path=jsonl_path,
             )
-            env = _load_forge_env(env_name, telemetry)
+            env = load_forge_env(env_name, telemetry)
             agent = make_agent(agent_id)
 
             obs, _ = env.reset(seed=seed)
