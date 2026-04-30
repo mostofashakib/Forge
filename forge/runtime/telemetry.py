@@ -50,3 +50,25 @@ class TelemetryClient:
         ep.total_steps = total_steps
         ep.completed_at = datetime.now(timezone.utc)
         self._db.commit()
+
+    def record_policy_violation(
+        self,
+        step_index: int,
+        action_type: str,
+        violations: list,
+    ) -> None:
+        from backend.app.models import AuditLog
+        from datetime import datetime, timezone
+        for v in violations:
+            log = AuditLog(
+                episode_id=self._episode_id,
+                step_index=step_index,
+                actor="agent",
+                action_type=action_type,
+                rule_id=v.rule_id,
+                violation=v.description,
+                severity=v.severity,
+                created_at=datetime.now(timezone.utc),
+            )
+            self._db.add(log)
+        self._db.commit()
