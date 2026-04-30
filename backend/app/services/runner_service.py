@@ -1,35 +1,20 @@
 # backend/app/services/runner_service.py
 from __future__ import annotations
 import asyncio
-import importlib
-import json
 import os
 import secrets
-import sys
 from pathlib import Path
 from forge.runtime.policy import RandomPolicy
 from forge.runtime.telemetry import TelemetryClient
 from backend.app.services import episode_service
 from backend.app.database import get_session_factory
+from backend.app.utils.env_loader import load_forge_env
 
 # episode_id → asyncio.Queue of step event dicts
 episode_queues: dict[str, asyncio.Queue] = {}
 
 # episode_id → asyncio.Task
 episode_tasks: dict[str, asyncio.Task] = {}
-
-
-def _load_env(env_name: str, telemetry: TelemetryClient):
-    """Dynamically import the generated gym_wrapper and build the ForgeEnv."""
-    envs_root = Path(os.environ.get("FORGE_GENERATED_ENVS_DIR", "generated_envs"))
-    parent = str(envs_root.parent.resolve())
-    if parent not in sys.path:
-        sys.path.insert(0, parent)
-    module = importlib.import_module(f"generated_envs.{env_name}.gym_wrapper")
-    build_fn = getattr(module, f"build_{env_name}_env")
-    env = build_fn()
-    env._telemetry = telemetry
-    return env
 
 
 async def start_episode(
@@ -88,7 +73,7 @@ async def _run_episode(
             db_session=db,
             jsonl_path=jsonl_path,
         )
-        env = _load_env(env_name, telemetry)
+        env = load_forge_env(env_name, telemetry)
         policy = RandomPolicy(env.action_types)
 
         obs, info = env.reset(seed=seed)
