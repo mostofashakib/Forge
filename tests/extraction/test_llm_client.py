@@ -33,3 +33,15 @@ def test_mock_retry_client_fails_then_succeeds():
     result = client.extract("s", "u", _SimpleSchema)
     assert result.value == "ok"
     assert client.call_count == 3
+
+
+def test_anthropic_client_default_max_tokens():
+    from forge.extraction.llm_client import AnthropicClient
+    client = AnthropicClient()
+    assert client._max_tokens == 8192
+
+
+def test_anthropic_client_custom_max_tokens():
+    from forge.extraction.llm_client import AnthropicClient
+    client = AnthropicClient(max_tokens=2048)
+    assert client._max_tokens == 2048
