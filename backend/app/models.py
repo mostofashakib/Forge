@@ -90,3 +90,19 @@ class ExportJob(Base):
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    episode_id: Mapped[str] = mapped_column(String, index=True)
+    step_index: Mapped[int] = mapped_column(Integer)
+    actor: Mapped[str] = mapped_column(String, default="agent")
+    action_type: Mapped[str] = mapped_column(String)
+    rule_id: Mapped[str] = mapped_column(String)
+    violation: Mapped[str] = mapped_column(Text)
+    severity: Mapped[str] = mapped_column(String)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc)
+    )
