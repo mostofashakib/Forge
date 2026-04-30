@@ -1,15 +1,7 @@
 from __future__ import annotations
-from pydantic import BaseModel
 from forge.extraction.llm_client import LLMClient
+from forge.extraction.prompts import ACTION_PROMPT
 from forge.extraction.schemas import ActionDef, EntityDef
-
-_SYSTEM = """Infer all actions an agent can perform in this system.
-For each action provide: name (snake_case verb_noun), params with types,
-and which entity fields it mutates (format: entity_name.field_name)."""
-
-
-class _ActionExtractionResult(BaseModel):
-    actions: list[ActionDef]
 
 
 class ActionInferencer:
@@ -21,8 +13,11 @@ class ActionInferencer:
             f"- {e.name}: {[f.name for f in e.fields]}" for e in entities
         )
         result = self._client.extract(
-            system=_SYSTEM,
-            user=f"Entities:\n{entity_summary}\n\nDescription:\n{prompt}",
-            schema=_ActionExtractionResult,
+            system=ACTION_PROMPT.system,
+            user=ACTION_PROMPT.user_template.format(
+                entity_summary=entity_summary,
+                prompt=prompt,
+            ),
+            schema=ACTION_PROMPT.output_type,
         )
         return result.actions
