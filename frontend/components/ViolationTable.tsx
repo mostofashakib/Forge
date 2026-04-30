@@ -19,7 +19,7 @@ interface ViolationTableProps {
 
 const SEVERITY_STYLES: Record<string, string> = {
   high: "bg-destructive/15 text-destructive border border-destructive/30",
-  medium: "bg-orange-500/15 text-orange-400 border border-orange-500/30",
+  medium: "bg-orange-500/10 text-orange-600 border border-orange-500/25",
   low: "bg-muted text-muted-foreground border border-border",
 };
 

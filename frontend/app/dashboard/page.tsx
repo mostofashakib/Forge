@@ -159,7 +159,7 @@ export default async function DashboardPage({
                     <td className="px-4 py-2.5">
                       <span
                         className={`inline-flex items-center gap-1 text-xs font-medium ${
-                          ep.passed ? "text-emerald-400" : "text-destructive"
+                          ep.passed ? "text-emerald-600" : "text-destructive"
                         }`}
                       >
                         {ep.passed ? "● pass" : "○ fail"}
@@ -197,7 +197,7 @@ function StatCard({
       <div
         className={`text-2xl font-semibold font-mono tabular-nums ${
           accent === "green"
-            ? "text-emerald-400"
+            ? "text-emerald-600"
             : accent === "red"
             ? "text-destructive"
             : "text-foreground"

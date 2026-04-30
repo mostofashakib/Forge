@@ -17,7 +17,7 @@ interface RolloutJob {
 }
 
 const STATUS_STYLES: Record<string, string> = {
-  completed: "text-emerald-400",
+  completed: "text-emerald-600",
   failed: "text-destructive",
   running: "text-primary",
   pending: "text-muted-foreground",
