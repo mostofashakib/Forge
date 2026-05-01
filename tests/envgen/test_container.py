@@ -117,7 +117,7 @@ def test_run_cli_container_uses_tail_command():
 def test_run_browser_pulls_image_via_subprocess():
     mock_container = MagicMock()
     mock_container.id = "browser-abc"
-    mock_container.ports = {"3001/tcp": [{"HostPort": "45678"}]}
+    mock_container.ports = {"3000/tcp": [{"HostPort": "45678"}]}
     mock_docker = MagicMock()
     mock_docker.containers.get.side_effect = docker.errors.NotFound("not found")
     mock_docker.containers.run.return_value = mock_container

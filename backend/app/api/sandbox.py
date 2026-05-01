@@ -297,6 +297,7 @@ async def sandbox_event_feed(websocket: WebSocket, env_name: str, db: Session = 
 async def sandbox_exec(websocket: WebSocket, env_name: str, db: Session = Depends(get_db)):
     """Bridge WebSocket to docker exec shell via PTY for full interactive terminal support."""
     await websocket.accept()
+    redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
     sandbox = db.get(SandboxEnvironment, env_name)
     if not sandbox or not sandbox.container_id:
         await websocket.send_text("Container not running\r\n")
@@ -327,6 +328,22 @@ async def sandbox_exec(websocket: WebSocket, env_name: str, db: Session = Depend
     loop = asyncio.get_running_loop()
     closed = asyncio.Event()
 
+    cmd_buf: list[str] = []
+
+    async def _publish_command(cmd: str) -> None:
+        if not cmd.strip():
+            return
+        try:
+            r_act = redis.asyncio.from_url(redis_url)
+            await r_act.xadd(
+                f"forge:activity:{env_name}",
+                {"ts": datetime.now(timezone.utc).isoformat(), "type": "command", "content": cmd.strip()},
+                maxlen=500,
+            )
+            await r_act.aclose()
+        except Exception:
+            pass
+
     def _read_pty() -> None:
         try:
             data = os.read(master_fd, 4096)
@@ -355,6 +372,18 @@ async def sandbox_exec(websocket: WebSocket, env_name: str, db: Session = Depend
                         continue
                 except (ValueError, KeyError, TypeError):
                     pass
+                # Buffer keystrokes for command observability
+                for ch in text:
+                    if ch in ('\r', '\n'):
+                        await _publish_command(''.join(cmd_buf))
+                        cmd_buf.clear()
+                    elif ch in ('\x7f', '\x08'):  # backspace
+                        if cmd_buf:
+                            cmd_buf.pop()
+                    elif ch == '\x03':  # Ctrl+C
+                        cmd_buf.clear()
+                    elif len(ch) == 1 and ord(ch) >= 32:
+                        cmd_buf.append(ch)
                 try:
                     os.write(master_fd, text.encode())
                 except OSError:
@@ -377,4 +406,91 @@ async def sandbox_exec(websocket: WebSocket, env_name: str, db: Session = Depend
     try:
         await websocket.close()
     except RuntimeError:
+        pass
+
+
+@router.websocket("/ws/activity/{env_name}")
+async def sandbox_activity(websocket: WebSocket, env_name: str, db: Session = Depends(get_db)):
+    """Stream container logs + CLI command events to the Observability panel."""
+    await websocket.accept()
+    sandbox = db.get(SandboxEnvironment, env_name)
+    redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+    closed = asyncio.Event()
+
+    async def _docker_logs() -> None:
+        if not sandbox or not sandbox.container_id:
+            return
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "docker", "logs", "--follow", "--timestamps", sandbox.container_id,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+            while not closed.is_set():
+                try:
+                    raw = await asyncio.wait_for(proc.stdout.readline(), timeout=0.5)
+                except asyncio.TimeoutError:
+                    continue
+                if not raw:
+                    break
+                line = raw.decode(errors="replace").rstrip()
+                # docker --timestamps format: "2024-01-15T10:30:45.123456789Z content"
+                ts, _, content = line.partition(" ")
+                if not content:
+                    content, ts = ts, ""
+                try:
+                    await websocket.send_json({"type": "log", "ts": ts[:19], "content": content})
+                except Exception:
+                    break
+        except Exception:
+            pass
+        finally:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+
+    async def _redis_events() -> None:
+        try:
+            r = redis.asyncio.from_url(redis_url)
+            last_id = "$"
+            while not closed.is_set():
+                results = await r.xread({f"forge:activity:{env_name}": last_id}, block=500, count=20)
+                for _, messages in (results or []):
+                    for msg_id, fields in messages:
+                        last_id = msg_id.decode() if isinstance(msg_id, bytes) else msg_id
+                        evt = {
+                            (k.decode() if isinstance(k, bytes) else k):
+                            (v.decode() if isinstance(v, bytes) else v)
+                            for k, v in fields.items()
+                        }
+                        if not closed.is_set():
+                            try:
+                                await websocket.send_json(evt)
+                            except Exception:
+                                closed.set()
+            await r.aclose()
+        except Exception:
+            pass
+
+    async def _ws_watcher() -> None:
+        try:
+            while True:
+                await websocket.receive_text()
+        except (WebSocketDisconnect, Exception):
+            closed.set()
+
+    tasks = [
+        asyncio.create_task(_docker_logs()),
+        asyncio.create_task(_redis_events()),
+        asyncio.create_task(_ws_watcher()),
+    ]
+    await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    closed.set()
+    for t in tasks:
+        t.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+    try:
+        await websocket.close()
+    except Exception:
         pass

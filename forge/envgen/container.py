@@ -92,10 +92,8 @@ class ContainerRuntime:
             image="lscr.io/linuxserver/chromium:latest",
             name=self._container_name(env_name),
             detach=True,
-            ports={"3001/tcp": None},
+            ports={"3000/tcp": None},
             environment={
-                "CUSTOM_USER": "forge",
-                "PASSWORD": "forge",
                 "PUID": "1000",
                 "PGID": "1000",
                 "TZ": "UTC",
@@ -105,7 +103,7 @@ class ContainerRuntime:
             restart_policy={"Name": "unless-stopped"},
         )
         container.reload()
-        port = int(container.ports["3001/tcp"][0]["HostPort"])
+        port = int(container.ports["3000/tcp"][0]["HostPort"])
         return container.id, port
 
     def run(self, env_name: str, image_tag: str) -> tuple[str, int]:
@@ -138,7 +136,7 @@ class ContainerRuntime:
             if image_tag == "builtin:cli":
                 return container.id, 0
             elif image_tag == "builtin:browser":
-                port = int(container.ports["3001/tcp"][0]["HostPort"])
+                port = int(container.ports["3000/tcp"][0]["HostPort"])
                 return container.id, port
             else:
                 port = int(container.ports["8000/tcp"][0]["HostPort"])

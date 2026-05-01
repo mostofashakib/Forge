@@ -1,6 +1,7 @@
 "use client";
 import { use, useEffect, useState } from "react";
 import { API_BASE } from "@/lib/api";
+import { ActivityLog } from "@/components/ActivityLog";
 import { SandboxEventFeed } from "@/components/SandboxEventFeed";
 import { SandboxTerminal } from "@/components/SandboxTerminal";
 
@@ -67,11 +68,11 @@ export default function SandboxPage({ params }: Props) {
 
   const envType = info?.env_type ?? "general";
 
-  // For CLI and browser, hide tabs that don't apply
+  // For CLI and browser, show relevant tabs including observability
   const visibleTabs = envType === "cli"
-    ? TABS.filter((t) => t.id === "terminal")
+    ? TABS.filter((t) => t.id === "terminal" || t.id === "observability")
     : envType === "browser"
-    ? TABS.filter((t) => t.id === "app")
+    ? TABS.filter((t) => t.id === "app" || t.id === "observability")
     : TABS;
 
   // Ensure activeTab is valid for current env type
@@ -122,8 +123,8 @@ export default function SandboxPage({ params }: Props) {
         {error && <span className="text-red-500 text-sm">{error}</span>}
       </header>
 
-      {/* Tab bar — only render for general (multi-panel) envs */}
-      {envType === "general" && (
+      {/* Tab bar — render whenever there are multiple tabs to show */}
+      {visibleTabs.length > 1 && (
         <div className="border-b bg-white flex shrink-0">
           {visibleTabs.map((tab) => (
             <button
@@ -143,13 +144,11 @@ export default function SandboxPage({ params }: Props) {
 
       {/* Content area */}
       <div className="flex-1 min-h-0">
-        {/* CLI: always show terminal full-screen */}
-        {envType === "cli" && (
+        {effectiveTab === "terminal" && (
           <SandboxTerminal envName={env_name} />
         )}
 
-        {/* Browser: full-screen VNC iframe */}
-        {envType === "browser" && (
+        {effectiveTab === "app" && envType === "browser" && (
           info?.status === "running" && info.container_port ? (
             <iframe
               src={`http://localhost:${info.container_port}/`}
@@ -163,31 +162,26 @@ export default function SandboxPage({ params }: Props) {
           )
         )}
 
-        {/* General: tabbed full-screen panels */}
-        {envType === "general" && (
-          <>
-            {effectiveTab === "app" && (
-              info?.container_port ? (
-                <iframe
-                  src={`/api/proxy/${env_name}/ui`}
-                  className="w-full h-full border-0"
-                  title={`${env_name} live UI`}
-                />
-              ) : (
-                <div className="h-full flex items-center justify-center text-gray-400 text-sm">
-                  {info?.status === "building" ? "Container starting…" : "Container not running"}
-                </div>
-              )
-            )}
+        {effectiveTab === "app" && envType === "general" && (
+          info?.container_port ? (
+            <iframe
+              src={`/api/proxy/${env_name}/ui`}
+              className="w-full h-full border-0"
+              title={`${env_name} live UI`}
+            />
+          ) : (
+            <div className="h-full flex items-center justify-center text-gray-400 text-sm">
+              {info?.status === "building" ? "Container starting…" : "Container not running"}
+            </div>
+          )
+        )}
 
-            {effectiveTab === "terminal" && (
-              <SandboxTerminal envName={env_name} />
-            )}
+        {effectiveTab === "observability" && envType === "general" && (
+          <SandboxEventFeed envName={env_name} />
+        )}
 
-            {effectiveTab === "observability" && (
-              <SandboxEventFeed envName={env_name} />
-            )}
-          </>
+        {effectiveTab === "observability" && envType !== "general" && (
+          <ActivityLog envName={env_name} />
         )}
       </div>
     </div>
