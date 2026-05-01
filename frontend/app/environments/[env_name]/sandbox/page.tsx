@@ -1,5 +1,5 @@
 "use client";
-import { use, useEffect, useState } from "react";
+import { use, useEffect, useRef, useState } from "react";
 import { API_BASE } from "@/lib/api";
 import { ActivityLog } from "@/components/ActivityLog";
 import { SandboxEventFeed } from "@/components/SandboxEventFeed";
@@ -21,16 +21,25 @@ interface Props {
 type Tab = "app" | "terminal" | "observability";
 
 const TABS: { id: Tab; label: string }[] = [
-  { id: "app",          label: "App" },
-  { id: "terminal",     label: "Terminal" },
+  { id: "app",           label: "App" },
+  { id: "terminal",      label: "Terminal" },
   { id: "observability", label: "Observability" },
 ];
 
 export default function SandboxPage({ params }: Props) {
   const { env_name } = use(params);
-  const [info, setInfo] = useState<SandboxInfo | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [info, setInfo]       = useState<SandboxInfo | null>(null);
+  const [error, setError]     = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<Tab>("app");
+
+  // Per-action loading flags
+  const [starting,  setStarting]  = useState(false);
+  const [stopping,  setStopping]  = useState(false);
+  const [deleting,  setDeleting]  = useState(false);
+  const [resetting, setResetting] = useState(false);
+
+  // Iframe ref for Reload control
+  const iframeRef = useRef<HTMLIFrameElement>(null);
 
   useEffect(() => {
     fetch(`${API_BASE}/api/sandbox/${env_name}`)
@@ -39,27 +48,82 @@ export default function SandboxPage({ params }: Props) {
       .catch(() => setError("Failed to load sandbox info"));
   }, [env_name]);
 
-  async function reset() {
-    await fetch(`/api/proxy/${env_name}/forge/reset`, { method: "POST" });
+  function showError(msg: string) {
+    setError(msg);
+    setTimeout(() => setError(null), 5000);
   }
 
   async function start() {
-    const res = await fetch(`${API_BASE}/api/sandbox/${env_name}/start`, { method: "POST" });
-    if (res.ok) {
+    setStarting(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/sandbox/${env_name}/start`, { method: "POST" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        showError(body.detail ?? "Failed to start container");
+        return;
+      }
       const data = await res.json();
       setInfo((prev) => prev ? { ...prev, status: "running", container_port: data.container_port } : prev);
+    } catch {
+      showError("Network error while starting container");
+    } finally {
+      setStarting(false);
     }
   }
 
   async function stop() {
-    await fetch(`${API_BASE}/api/sandbox/${env_name}/stop`, { method: "POST" });
-    setInfo((prev) => prev ? { ...prev, status: "stopped" } : prev);
+    setStopping(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/sandbox/${env_name}/stop`, { method: "POST" });
+      if (!res.ok) {
+        showError("Failed to stop container");
+        return;
+      }
+      setInfo((prev) => prev ? { ...prev, status: "stopped", container_port: null } : prev);
+    } catch {
+      showError("Network error while stopping container");
+    } finally {
+      setStopping(false);
+    }
   }
 
   async function deleteSandbox() {
     if (!confirm(`Delete environment "${env_name}"? This cannot be undone.`)) return;
-    await fetch(`${API_BASE}/api/sandbox/${env_name}`, { method: "DELETE" });
-    window.location.href = "/environments";
+    setDeleting(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/sandbox/${env_name}`, { method: "DELETE" });
+      if (!res.ok) {
+        showError("Failed to delete environment");
+        return;
+      }
+      window.location.href = "/environments";
+    } catch {
+      showError("Network error while deleting environment");
+      setDeleting(false);
+    }
+  }
+
+  async function reset() {
+    setResetting(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/proxy/${env_name}/forge/reset`, { method: "POST" });
+      if (!res.ok) showError("Reset failed");
+    } catch {
+      showError("Network error while resetting");
+    } finally {
+      setResetting(false);
+    }
+  }
+
+  function reloadIframe() {
+    if (iframeRef.current) {
+      // eslint-disable-next-line no-self-assign
+      iframeRef.current.src = iframeRef.current.src;
+    }
   }
 
   const daysLeft = info?.expires_at
@@ -67,15 +131,16 @@ export default function SandboxPage({ params }: Props) {
     : null;
 
   const envType = info?.env_type ?? "general";
+  const isRunning = info?.status === "running";
+  const canStart  = !isRunning && !starting && !stopping && !deleting
+    && info?.status !== "building" && info?.status !== "queued";
 
-  // For CLI and browser, show relevant tabs including observability
   const visibleTabs = envType === "cli"
     ? TABS.filter((t) => t.id === "terminal" || t.id === "observability")
     : envType === "browser"
     ? TABS.filter((t) => t.id === "app" || t.id === "observability")
     : TABS;
 
-  // Ensure activeTab is valid for current env type
   const effectiveTab = visibleTabs.find((t) => t.id === activeTab)
     ? activeTab
     : visibleTabs[0]?.id ?? "app";
@@ -84,46 +149,104 @@ export default function SandboxPage({ params }: Props) {
     <div className="h-screen flex flex-col">
       <header className="border-b px-4 py-2 flex items-center gap-3 shrink-0 bg-white">
         <h1 className="font-bold text-lg mr-2">{env_name}</h1>
+
+        {/* Status badge */}
         <span className={`text-xs px-2 py-0.5 rounded-full ${
-          info?.status === "running" ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"
+          isRunning             ? "bg-green-100 text-green-700"  :
+          info?.status === "building" || info?.status === "queued"
+                                ? "bg-yellow-100 text-yellow-700" :
+          info?.status === "error"    ? "bg-red-100 text-red-600"    :
+                                        "bg-gray-100 text-gray-500"
         }`}>
           {info?.status ?? "loading…"}
         </span>
+
+        {/* Env-type badge */}
         {envType !== "general" && (
           <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">
             {envType}
           </span>
         )}
+
         {daysLeft !== null && (
           <span className="text-xs text-gray-400 ml-1">expires in {daysLeft}d</span>
         )}
-        <div className="flex gap-2 ml-auto">
-          {info?.status === "running" && envType === "general" && (
-            <button onClick={reset} className="px-3 py-1 border rounded text-sm hover:bg-gray-50">
-              Reset
+
+        {/* Controls */}
+        <div className="flex gap-2 ml-auto items-center">
+
+          {/* General: Reset */}
+          {envType === "general" && isRunning && (
+            <button
+              onClick={reset}
+              disabled={resetting}
+              className="px-3 py-1 border rounded text-sm hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {resetting ? "Resetting…" : "Reset"}
             </button>
           )}
-          {info?.status !== "running" && (
-            <button onClick={start} className="px-3 py-1 border border-green-300 text-green-700 rounded text-sm hover:bg-green-50">
-              Start
+
+          {/* Browser: Reload iframe + Open in new tab */}
+          {envType === "browser" && isRunning && info?.container_port && (
+            <>
+              <button
+                onClick={reloadIframe}
+                className="px-3 py-1 border rounded text-sm hover:bg-gray-50"
+                title="Reload browser view"
+              >
+                Reload
+              </button>
+              <a
+                href={`http://localhost:${info.container_port}/`}
+                target="_blank"
+                rel="noreferrer"
+                className="px-3 py-1 border rounded text-sm hover:bg-gray-50"
+                title="Open in a new browser tab"
+              >
+                Open ↗
+              </a>
+            </>
+          )}
+
+          {/* Start */}
+          {canStart && (
+            <button
+              onClick={start}
+              disabled={starting}
+              className="px-3 py-1 border border-green-300 text-green-700 rounded text-sm hover:bg-green-50 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {starting ? "Starting…" : "Start"}
             </button>
           )}
-          {info?.status === "running" && (
-            <button onClick={stop} className="px-3 py-1 border rounded text-sm hover:bg-gray-50">
-              Stop
+
+          {/* Stop */}
+          {isRunning && (
+            <button
+              onClick={stop}
+              disabled={stopping}
+              className="px-3 py-1 border rounded text-sm hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {stopping ? "Stopping…" : "Stop"}
             </button>
           )}
+
+          {/* Delete */}
           <button
             onClick={deleteSandbox}
-            className="px-3 py-1 border border-red-300 text-red-600 rounded text-sm hover:bg-red-50"
+            disabled={deleting}
+            className="px-3 py-1 border border-red-300 text-red-600 rounded text-sm hover:bg-red-50 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            Delete
+            {deleting ? "Deleting…" : "Delete"}
           </button>
         </div>
-        {error && <span className="text-red-500 text-sm">{error}</span>}
+
+        {/* Error banner */}
+        {error && (
+          <span className="text-red-500 text-sm ml-2 shrink-0">{error}</span>
+        )}
       </header>
 
-      {/* Tab bar — render whenever there are multiple tabs to show */}
+      {/* Tab bar */}
       {visibleTabs.length > 1 && (
         <div className="border-b bg-white flex shrink-0">
           {visibleTabs.map((tab) => (
@@ -144,24 +267,31 @@ export default function SandboxPage({ params }: Props) {
 
       {/* Content area */}
       <div className="flex-1 min-h-0">
+
+        {/* Terminal (CLI + general) */}
         {effectiveTab === "terminal" && (
           <SandboxTerminal envName={env_name} />
         )}
 
+        {/* App tab — browser */}
         {effectiveTab === "app" && envType === "browser" && (
-          info?.status === "running" && info.container_port ? (
+          isRunning && info?.container_port ? (
             <iframe
+              ref={iframeRef}
               src={`http://localhost:${info.container_port}/`}
               className="w-full h-full border-0"
               title={`${env_name} browser`}
             />
           ) : (
             <div className="h-full flex items-center justify-center text-gray-400 text-sm">
-              {info?.status === "building" ? "Container starting…" : "Container not running — use Start to launch"}
+              {info?.status === "building" || info?.status === "queued"
+                ? "Container is starting up…"
+                : "Container not running — press Start to launch"}
             </div>
           )
         )}
 
+        {/* App tab — general */}
         {effectiveTab === "app" && envType === "general" && (
           info?.container_port ? (
             <iframe
@@ -171,15 +301,19 @@ export default function SandboxPage({ params }: Props) {
             />
           ) : (
             <div className="h-full flex items-center justify-center text-gray-400 text-sm">
-              {info?.status === "building" ? "Container starting…" : "Container not running"}
+              {info?.status === "building" || info?.status === "queued"
+                ? "Container is starting up…"
+                : "Container not running"}
             </div>
           )
         )}
 
+        {/* Observability — general uses rich event feed */}
         {effectiveTab === "observability" && envType === "general" && (
           <SandboxEventFeed envName={env_name} />
         )}
 
+        {/* Observability — CLI / browser use activity log */}
         {effectiveTab === "observability" && envType !== "general" && (
           <ActivityLog envName={env_name} />
         )}
