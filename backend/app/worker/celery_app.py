@@ -1,6 +1,12 @@
+import logging
 import os
+import threading
+
 from celery import Celery
 from celery.schedules import crontab
+from celery.signals import worker_ready
+
+log = logging.getLogger(__name__)
 
 celery = Celery(
     "forge",
@@ -38,3 +44,32 @@ celery.conf.beat_schedule = {
         "schedule": crontab(hour=2, minute=0),
     },
 }
+
+
+@worker_ready.connect
+def _prewarm_base_images_on_boot(**_kwargs) -> None:
+    """Pull Forge's standard base images once when the worker comes up.
+
+    Runs in a daemon thread so it doesn't block the worker from accepting
+    jobs. Subsequent build_sandbox_task invocations find the canonical
+    python base in the local cache, so Docker Hub is never on the hot
+    path of a user-triggered build — making the system immune to
+    transient Hub EOF outages.
+
+    Disabled when FORGE_DISABLE_PREWARM=1 (used in tests / local dev where
+    Docker isn't available).
+    """
+    if os.environ.get("FORGE_DISABLE_PREWARM") == "1":
+        log.info("[prewarm] disabled by FORGE_DISABLE_PREWARM=1")
+        return
+
+    def _run():
+        try:
+            from forge.envgen.container import prewarm_standard_base_images
+            log.info("[prewarm] starting base-image pre-warm")
+            results = prewarm_standard_base_images()
+            log.info("[prewarm] complete: %s", results)
+        except Exception as exc:  # noqa: BLE001 — never crash the worker on prewarm
+            log.warning("[prewarm] aborted: %s", exc)
+
+    threading.Thread(target=_run, name="forge-prewarm", daemon=True).start()

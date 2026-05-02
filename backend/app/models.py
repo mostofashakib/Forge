@@ -108,6 +108,46 @@ class AuditLog(Base):
     )
 
 
+class AgentRun(Base):
+    __tablename__ = "agent_runs"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    env_name: Mapped[str] = mapped_column(String, index=True)
+    agent_id: Mapped[str] = mapped_column(String)
+    objective: Mapped[str] = mapped_column(Text)
+    num_episodes: Mapped[int] = mapped_column(Integer)
+    max_steps: Mapped[int] = mapped_column(Integer, default=50)
+    divergence_threshold: Mapped[float] = mapped_column(Float, default=0.2)
+    consecutive_below_threshold: Mapped[int] = mapped_column(Integer, default=3)
+    dead_end_patience: Mapped[int] = mapped_column(Integer, default=5)
+    success_threshold: Mapped[float] = mapped_column(Float, default=0.9)
+    seed_start: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String, default="pending")
+    episodes_completed: Mapped[int] = mapped_column(Integer, default=0)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc)
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class AgentEpisode(Base):
+    __tablename__ = "agent_episodes"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    run_id: Mapped[str] = mapped_column(String, ForeignKey("agent_runs.id"), index=True)
+    episode_index: Mapped[int] = mapped_column(Integer)
+    seed: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String, default="running")
+    total_steps: Mapped[int] = mapped_column(Integer, default=0)
+    total_reward: Mapped[float] = mapped_column(Float, default=0.0)
+    final_objective_score: Mapped[float] = mapped_column(Float, default=0.0)
+    termination_reason: Mapped[str | None] = mapped_column(String, nullable=True)
+    jsonl_path: Mapped[str | None] = mapped_column(String, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 class SandboxEnvironment(Base):
     __tablename__ = "sandbox_environments"
 

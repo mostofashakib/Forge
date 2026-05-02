@@ -37,7 +37,13 @@ class AnthropicClient:
         self._max_retries = max_retries
         self._max_tokens = max_tokens
 
-    def extract(self, system: str, user: str, schema: type[BaseModel]) -> BaseModel:
+    def _stream_extract(
+        self,
+        system: str,
+        messages: list,
+        schema: type[BaseModel],
+    ) -> BaseModel:
+        """Shared extraction logic for both text-only and vision requests."""
         input_schema = _flat_schema(schema)
         last_error: Exception | None = None
         budget = self._max_tokens
@@ -51,13 +57,11 @@ class AnthropicClient:
             )
             try:
                 extra = f"\n\nPrevious attempt failed: {last_error}" if last_error else ""
-                # Always stream: the SDK requires it for requests that may exceed
-                # 10 minutes, and get_final_message() returns the same Message object.
                 with self._client.messages.stream(
                     model=self._model,
                     max_tokens=budget,
                     system=system + extra,
-                    messages=[{"role": "user", "content": user}],
+                    messages=messages,
                     tools=[{
                         "name": "extract",
                         "description": (
@@ -71,7 +75,6 @@ class AnthropicClient:
                 ) as stream:
                     response = stream.get_final_message()
 
-                # Response truncated — double the budget and retry without burning an attempt.
                 if response.stop_reason == "max_tokens":
                     if budget >= 128_000:
                         raise RuntimeError(
@@ -82,7 +85,7 @@ class AnthropicClient:
                     last_error = ValueError(
                         f"stop_reason=max_tokens; budget doubled to {budget}"
                     )
-                    continue  # retry without decrementing attempts_remaining
+                    continue
 
                 tool_block = next(b for b in response.content if b.type == "tool_use")
                 if not tool_block.input:
@@ -99,6 +102,38 @@ class AnthropicClient:
                         f"LLM extraction failed after {self._max_retries} attempts: {e}"
                     ) from e
         raise RuntimeError("unreachable")
+
+    def extract(self, system: str, user: str, schema: type[BaseModel]) -> BaseModel:
+        return self._stream_extract(
+            system=system,
+            messages=[{"role": "user", "content": user}],
+            schema=schema,
+        )
+
+    def extract_with_image(
+        self,
+        system: str,
+        user: str,
+        image_b64: str,
+        schema: type[BaseModel],
+        media_type: str = "image/png",
+    ) -> BaseModel:
+        """Like extract() but includes a base64-encoded image in the user message."""
+        messages = [{
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": media_type,
+                        "data": image_b64,
+                    },
+                },
+                {"type": "text", "text": user},
+            ],
+        }]
+        return self._stream_extract(system=system, messages=messages, schema=schema)
 
 
 class MockLLMClient:

@@ -137,7 +137,22 @@ log "Starting backend on ${CYAN}http://localhost:8000${RESET}"
   else
     warn "backend/.env not found — LLM calls will fail without API keys"
   fi
-  "$VENV_DIR/bin/uvicorn" backend.app.main:app --host 0.0.0.0 --port 8000 --reload 2>&1
+  # --reload watches CWD by default; restrict it to backend/forge source so
+  # that worker output (generated_envs/), git worktrees, build caches, and
+  # the frontend don't trigger a backend restart and tear down WebSockets
+  # mid-build.
+  "$VENV_DIR/bin/uvicorn" backend.app.main:app \
+    --host 0.0.0.0 --port 8000 --reload \
+    --reload-dir backend --reload-dir forge \
+    --reload-include "*.py" \
+    --reload-exclude "generated_envs/*" \
+    --reload-exclude ".worktrees/*" \
+    --reload-exclude "**/__pycache__/*" \
+    --reload-exclude ".pytest_cache/*" \
+    --reload-exclude ".ruff_cache/*" \
+    --reload-exclude ".mypy_cache/*" \
+    --reload-exclude "*.db" \
+    --reload-exclude "*.log" 2>&1
 ) | backend_log &
 BACKEND_PID=$!
 

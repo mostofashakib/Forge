@@ -167,9 +167,49 @@ def get_sandbox(env_name: str, db: Session = Depends(get_db)):
             client = docker.from_env()
             container = client.containers.get(sandbox.container_id)
             container.reload()
-            if container.status != "running":
+            state = container.attrs.get("State", {}) or {}
+            # A container that's been respawned by Docker's restart policy is
+            # crashing on boot (LLM-generated app likely has a bug). It looks
+            # "running" only momentarily between crashes — flag it as error
+            # so the UI stops claiming it's healthy.
+            restart_count = container.attrs.get("RestartCount", 0) or 0
+            if container.status == "restarting" or restart_count > 0:
+                sandbox.status = "error"
+                db.commit()
+            elif container.status != "running":
                 sandbox.status = "stopped"
                 db.commit()
+            else:
+                # Resync container_port from the live container — heals the
+                # DB-says-running-but-port-is-null state that can happen after
+                # a host reboot, a half-failed /start, or worker reattach.
+                # CLI envs intentionally have no HTTP port, so leave them alone.
+                if sandbox.image_tag != "builtin:cli":
+                    port_key = "3000/tcp" if sandbox.image_tag == "builtin:browser" else "8000/tcp"
+                    bindings = container.ports.get(port_key) or []
+                    live_port = 0
+                    if bindings and isinstance(bindings, list):
+                        host_port = bindings[0].get("HostPort") if isinstance(bindings[0], dict) else None
+                        try:
+                            live_port = int(host_port) if host_port else 0
+                        except (TypeError, ValueError):
+                            live_port = 0
+                    if live_port > 0:
+                        if sandbox.container_port != live_port:
+                            sandbox.container_port = live_port
+                            db.commit()
+                    elif not sandbox.container_port:
+                        # Container is up but the port mapping doesn't exist
+                        # (or didn't survive a daemon restart). Demote to
+                        # "stopped" so the UI shows a Start button — /start
+                        # will run a fresh container with a real port binding.
+                        logger.warning(
+                            "[sandbox:get] %s container running but no %s binding "
+                            "(container.ports=%s) — demoting to stopped so user can restart",
+                            env_name, port_key, container.ports,
+                        )
+                        sandbox.status = "stopped"
+                        db.commit()
         except docker.errors.NotFound:
             sandbox.status = "stopped"
             db.commit()
@@ -183,7 +223,14 @@ def start_sandbox(env_name: str, db: Session = Depends(get_db)):
     sandbox = db.get(SandboxEnvironment, env_name)
     if not sandbox:
         raise HTTPException(status_code=404, detail="Sandbox not found")
-    if sandbox.status == "running":
+    # Only short-circuit when the env is genuinely healthy: status=running AND
+    # we have a host port (or it's a CLI env which has none by design).
+    # Otherwise fall through to runtime.start(), which will refresh the
+    # container and resync the port. This is what fixes the
+    # "running but iframe says not running" state from the user's side —
+    # clicking Start now actually does something.
+    is_cli = sandbox.image_tag == "builtin:cli"
+    if sandbox.status == "running" and (is_cli or sandbox.container_port):
         return {"status": "running", "container_port": sandbox.container_port}
     if not sandbox.image_tag:
         raise HTTPException(status_code=409, detail="No image available — environment must be rebuilt")
@@ -200,8 +247,55 @@ def start_sandbox(env_name: str, db: Session = Depends(get_db)):
         sandbox.status = "running"
         db.commit()
         return {"status": "running", "container_port": port}
+    except RuntimeError as exc:
+        # Image-missing path from runtime.start — DB has stale image_tag from a
+        # previous build. Clear it so the next /start returns 409 cleanly and
+        # the UI prompts a rebuild.
+        logger.warning("[sandbox:start] %s — clearing stale image_tag (%s)", env_name, exc)
+        sandbox.image_tag = None
+        sandbox.container_id = None
+        sandbox.container_port = None
+        sandbox.status = "stopped"
+        db.commit()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:
+        logger.exception("[sandbox:start] failed for %s", env_name)
         raise HTTPException(status_code=500, detail=f"Failed to start container: {exc}") from exc
+
+
+@router.get("/{env_name}/logs")
+def get_sandbox_logs(env_name: str, tail: int = 200, db: Session = Depends(get_db)):
+    """Return the last `tail` lines of the container's combined stdout+stderr.
+
+    Crucial for debugging crash-loops where the container won't stay up — the
+    logs surface the actual error (ModuleNotFoundError, port-in-use, etc.)
+    that the LLM-generated app hit on boot.
+    """
+    sandbox = db.get(SandboxEnvironment, env_name)
+    if not sandbox:
+        raise HTTPException(status_code=404, detail="Sandbox not found")
+    if not sandbox.container_id:
+        return {"logs": "", "exit_code": None, "restart_count": 0}
+    try:
+        import docker, docker.errors
+        client = docker.from_env()
+        container = client.containers.get(sandbox.container_id)
+        container.reload()
+        raw = container.logs(tail=tail, stdout=True, stderr=True, timestamps=False)
+        text = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
+        state = container.attrs.get("State", {}) or {}
+        return {
+            "logs": text,
+            "status": container.status,
+            "exit_code": state.get("ExitCode"),
+            "restart_count": container.attrs.get("RestartCount", 0) or 0,
+            "error": state.get("Error") or None,
+        }
+    except docker.errors.NotFound:
+        raise HTTPException(status_code=410, detail="Container no longer exists — environment must be rebuilt") from None
+    except Exception as exc:
+        logger.exception("[sandbox:logs] failed for %s", env_name)
+        raise HTTPException(status_code=500, detail=f"Failed to read container logs: {exc}") from exc
 
 
 @router.post("/{env_name}/stop", status_code=204)
