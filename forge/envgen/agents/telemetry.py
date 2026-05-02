@@ -36,8 +36,10 @@ class TelemetryAgent(EnvGenAgent):
 
     async def run(self, ctx: EnvGenContext, bus: ArtifactBus) -> None:
         app_code: dict[str, str] = await bus.wait_for("app_code")
+        # Only Python files need instrumentation — skip ui.html, Dockerfile, requirements.txt
+        python_files = {k: v for k, v in app_code.items() if k.endswith(".py")}
         files_text = "\n\n".join(
-            f"=== {path} ===\n{content}" for path, content in app_code.items()
+            f"=== {path} ===\n{content}" for path, content in python_files.items()
         )
         user = (
             f"Redis stream key: forge:events:{ctx.env_name}\n"

@@ -86,9 +86,6 @@ const JSON_LD = {
 
 const NAV = [
   { label: "Environments", href: "/environments" },
-  { label: "Dashboard", href: "/dashboard" },
-  { label: "Rollouts", href: "/rollouts" },
-  { label: "Violations", href: "/violations" },
 ];
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

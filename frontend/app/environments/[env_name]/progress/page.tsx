@@ -24,6 +24,7 @@ export default function ProgressPage({
   const { env_name: envName } = use(params);
   const router = useRouter();
   const [envType, setEnvType] = useState<EnvType>("general");
+  const envTypeRef = useRef<EnvType>("general");
   const [done, setDone] = useState<Set<string>>(new Set());
   const doneRef = useRef<Set<string>>(new Set());
   const [logs, setLogs] = useState<string[]>([]);
@@ -37,11 +38,24 @@ export default function ProgressPage({
   const logRef = useRef<HTMLDivElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Fetch env_type so we can show the right progress UI
+  // Stable ref so the env-type effect can call startPolling without a circular dep
+  const startPollingRef = useRef<() => void>(() => {});
+
+  // Fetch env_type so we can show the right progress UI.
+  // For CLI/browser we also start polling immediately: builds can finish in seconds
+  // and the Redis pub/sub `done` message may be published before the WS subscribes.
   useEffect(() => {
     fetch(`${API_BASE}/api/sandbox/${envName}`, { cache: "no-store" })
       .then((r) => r.ok ? r.json() : null)
-      .then((d) => { if (d?.env_type) setEnvType(d.env_type as EnvType); })
+      .then((d) => {
+        if (!d?.env_type) return;
+        const t = d.env_type as EnvType;
+        envTypeRef.current = t;
+        setEnvType(t);
+        if (t !== "general" && !finishedRef.current) {
+          startPollingRef.current();
+        }
+      })
       .catch(() => {});
   }, [envName]);
 
@@ -86,6 +100,9 @@ export default function ProgressPage({
     }, 5000);
   }, [envName, markDone]);
 
+  // Keep startPollingRef current so the early envType effect can call it safely
+  useEffect(() => { startPollingRef.current = startPolling; }, [startPolling]);
+
   useEffect(() => {
     const ws = new WebSocket(`${wsBase()}/api/sandbox/ws/progress/${envName}`);
 
@@ -128,10 +145,9 @@ export default function ProgressPage({
 
     ws.onerror = () => {
       if (finishedRef.current) return;
-      // For general: poll only after all agents finished (WS drops during Docker build)
-      // For cli/browser: no agents, so always fall back to polling on WS error
+      // Use envTypeRef (not envType) to avoid stale closure
       const allAgentsDone = doneRef.current.size >= AGENTS.length;
-      if (allAgentsDone || envType !== "general") {
+      if (allAgentsDone || envTypeRef.current !== "general") {
         startPolling();
       } else {
         setPhase("error");
@@ -142,7 +158,7 @@ export default function ProgressPage({
     ws.onclose = () => {
       if (finishedRef.current) return;
       const allAgentsDone = doneRef.current.size >= AGENTS.length;
-      if (allAgentsDone || envType !== "general") {
+      if (allAgentsDone || envTypeRef.current !== "general") {
         startPolling();
       }
     };
@@ -164,13 +180,14 @@ export default function ProgressPage({
     error:      "error",
   };
 
-  const estimatedTotal = envType === "cli" || envType === "browser" ? 600 : 1450;
+  const estimatedTotal = envType === "cli" || envType === "browser" ? 600 : 2400;
   const remaining = Math.max(0, estimatedTotal - elapsed);
+  const fmtTime = (s: number) => s >= 60 ? `~${Math.ceil(s / 60)}m` : `~${s}s`;
   const etaLabel = finished
     ? "Done"
     : elapsed < 5
-    ? `~${estimatedTotal}s estimated`
-    : `~${remaining}s remaining`;
+    ? `${fmtTime(estimatedTotal)} estimated`
+    : `${fmtTime(remaining)} remaining`;
 
   return (
     <div className="max-w-2xl mx-auto space-y-6 py-8">

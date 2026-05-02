@@ -224,6 +224,329 @@ def test_start_sandbox_requires_existing_image(client):
     assert "image" in resp.json()["detail"].lower()
 
 
+def test_get_sandbox_resyncs_container_port_from_live_container(client):
+    """When DB says running but container_port is null/stale, GET must refresh
+    it from the live Docker container's port bindings — otherwise the proxy
+    iframe shows 'Container not running' even though everything is fine."""
+    _add_sandbox(client, "drifted_env", status="running")
+
+    from backend.app import database
+    db: Session = database.get_session_factory()()
+    try:
+        sb = db.get(SandboxEnvironment, "drifted_env")
+        sb.image_tag = "forge-env-drifted:latest"
+        sb.container_id = "live-container-id"
+        sb.container_port = None  # the drift we want to heal
+        db.commit()
+    finally:
+        db.close()
+
+    mock_container = MagicMock()
+    mock_container.status = "running"
+    mock_container.attrs = {"RestartCount": 0, "State": {"Status": "running"}}
+    mock_container.ports = {"8000/tcp": [{"HostPort": "32777"}]}
+    mock_docker_client = MagicMock()
+    mock_docker_client.containers.get.return_value = mock_container
+
+    with patch("docker.from_env", return_value=mock_docker_client):
+        info = client.get("/api/sandbox/drifted_env").json()
+
+    # GET healed the row from the live container's port bindings
+    assert info["status"] == "running"
+    assert info["container_port"] == 32777
+
+
+def test_get_sandbox_marks_crashing_container_as_error(client):
+    """A container with RestartCount>0 is in a crash loop — even if its current
+    state happens to be 'running', the UI must not pretend it's healthy."""
+    _add_sandbox(client, "crash_loop", status="running")
+
+    from backend.app import database
+    db: Session = database.get_session_factory()()
+    try:
+        sb = db.get(SandboxEnvironment, "crash_loop")
+        sb.image_tag = "forge-env-crash:latest"
+        sb.container_id = "crash-id"
+        sb.container_port = 32999
+        db.commit()
+    finally:
+        db.close()
+
+    mock_container = MagicMock()
+    mock_container.status = "running"  # caught in a brief running window
+    mock_container.attrs = {"RestartCount": 4, "State": {"Status": "running"}}
+    mock_container.ports = {"8000/tcp": [{"HostPort": "32999"}]}
+    mock_docker_client = MagicMock()
+    mock_docker_client.containers.get.return_value = mock_container
+
+    with patch("docker.from_env", return_value=mock_docker_client):
+        info = client.get("/api/sandbox/crash_loop").json()
+
+    assert info["status"] == "error"
+
+
+def test_get_sandbox_marks_restarting_container_as_error(client):
+    """If we catch the container in 'restarting' state explicitly, mark error."""
+    _add_sandbox(client, "restart_state", status="running")
+
+    from backend.app import database
+    db: Session = database.get_session_factory()()
+    try:
+        sb = db.get(SandboxEnvironment, "restart_state")
+        sb.image_tag = "forge-env-restart:latest"
+        sb.container_id = "restart-id"
+        db.commit()
+    finally:
+        db.close()
+
+    mock_container = MagicMock()
+    mock_container.status = "restarting"
+    mock_container.attrs = {"RestartCount": 1, "State": {"Status": "restarting"}}
+    mock_container.ports = {}
+    mock_docker_client = MagicMock()
+    mock_docker_client.containers.get.return_value = mock_container
+
+    with patch("docker.from_env", return_value=mock_docker_client):
+        info = client.get("/api/sandbox/restart_state").json()
+
+    assert info["status"] == "error"
+
+
+def test_logs_endpoint_returns_container_output(client):
+    """GET /api/sandbox/{env}/logs surfaces the crash output so users can
+    diagnose why their LLM-generated app is failing on boot."""
+    _add_sandbox(client, "logs_env", status="error")
+
+    from backend.app import database
+    db: Session = database.get_session_factory()()
+    try:
+        sb = db.get(SandboxEnvironment, "logs_env")
+        sb.container_id = "container-with-logs"
+        db.commit()
+    finally:
+        db.close()
+
+    mock_container = MagicMock()
+    mock_container.status = "exited"
+    mock_container.logs.return_value = b"ModuleNotFoundError: No module named 'fastapi'\n"
+    mock_container.attrs = {
+        "RestartCount": 3,
+        "State": {"Status": "exited", "ExitCode": 1, "Error": ""},
+    }
+    mock_docker_client = MagicMock()
+    mock_docker_client.containers.get.return_value = mock_container
+
+    with patch("docker.from_env", return_value=mock_docker_client):
+        body = client.get("/api/sandbox/logs_env/logs").json()
+
+    assert "ModuleNotFoundError" in body["logs"]
+    assert body["exit_code"] == 1
+    assert body["restart_count"] == 3
+    assert body["status"] == "exited"
+
+
+def test_logs_endpoint_returns_empty_when_no_container_yet(client):
+    """Pre-build envs (no container_id) return empty logs, not 500."""
+    _add_sandbox(client, "no_container", status="queued")
+    body = client.get("/api/sandbox/no_container/logs").json()
+    assert body == {"logs": "", "exit_code": None, "restart_count": 0}
+
+
+def test_logs_endpoint_returns_410_when_container_pruned(client):
+    """If the container_id is stale (Docker pruned), surface a clear 410."""
+    _add_sandbox(client, "pruned_env", status="running")
+
+    from backend.app import database
+    db: Session = database.get_session_factory()()
+    try:
+        sb = db.get(SandboxEnvironment, "pruned_env")
+        sb.container_id = "gone-id"
+        db.commit()
+    finally:
+        db.close()
+
+    import docker.errors
+    mock_docker_client = MagicMock()
+    mock_docker_client.containers.get.side_effect = docker.errors.NotFound("gone")
+
+    with patch("docker.from_env", return_value=mock_docker_client):
+        resp = client.get("/api/sandbox/pruned_env/logs")
+
+    assert resp.status_code == 410
+    assert "rebuilt" in resp.json()["detail"].lower()
+
+
+def test_get_sandbox_demotes_to_stopped_when_running_but_no_port_binding(client):
+    """Container is genuinely 'running' in Docker but has no 8000/tcp binding
+    (e.g. daemon failed to allocate, or a stale container from before our
+    binding fix). DB has container_port=None. Demote to 'stopped' so the
+    UI shows a Start button — clicking it will run a fresh container with
+    a real port binding."""
+    _add_sandbox(client, "no_binding", status="running")
+
+    from backend.app import database
+    db: Session = database.get_session_factory()()
+    try:
+        sb = db.get(SandboxEnvironment, "no_binding")
+        sb.image_tag = "forge-env-no-binding:latest"
+        sb.container_id = "container-without-port"
+        sb.container_port = None  # the broken-state we want to heal
+        db.commit()
+    finally:
+        db.close()
+
+    mock_container = MagicMock()
+    mock_container.status = "running"
+    mock_container.attrs = {"RestartCount": 0, "State": {"Status": "running"}}
+    mock_container.ports = {}  # no 8000/tcp binding at all
+    mock_docker_client = MagicMock()
+    mock_docker_client.containers.get.return_value = mock_container
+
+    with patch("docker.from_env", return_value=mock_docker_client):
+        info = client.get("/api/sandbox/no_binding").json()
+
+    # Demoted so the UI shows Start (not Stop)
+    assert info["status"] == "stopped"
+
+
+def test_start_sandbox_does_not_short_circuit_when_status_running_but_port_missing(client):
+    """If DB says running but container_port is None, /start must NOT return
+    early — it must actually run runtime.start() to fix the broken state."""
+    _add_sandbox(client, "stuck_running", status="running")
+
+    from backend.app import database
+    db: Session = database.get_session_factory()()
+    try:
+        sb = db.get(SandboxEnvironment, "stuck_running")
+        sb.image_tag = "forge-env-stuck:latest"
+        sb.container_id = "stuck-id"
+        sb.container_port = None  # broken state — no port
+        db.commit()
+    finally:
+        db.close()
+
+    with patch("forge.envgen.container.ContainerRuntime") as mock_rt:
+        mock_rt.return_value.start.return_value = ("fresh-id", 32555)
+        resp = client.post("/api/sandbox/stuck_running/start")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["container_port"] == 32555
+    mock_rt.return_value.start.assert_called_once()
+
+
+def test_start_sandbox_short_circuits_for_healthy_running_general_env(client):
+    """Healthy general env (running with valid port) should still short-circuit
+    — we don't want every /start hit to recreate a running container."""
+    _add_sandbox(client, "healthy", status="running")
+
+    from backend.app import database
+    db: Session = database.get_session_factory()()
+    try:
+        sb = db.get(SandboxEnvironment, "healthy")
+        sb.image_tag = "forge-env-healthy:latest"
+        sb.container_id = "healthy-id"
+        sb.container_port = 32100
+        db.commit()
+    finally:
+        db.close()
+
+    with patch("forge.envgen.container.ContainerRuntime") as mock_rt:
+        resp = client.post("/api/sandbox/healthy/start")
+
+    assert resp.status_code == 200
+    assert resp.json()["container_port"] == 32100
+    mock_rt.return_value.start.assert_not_called()
+
+
+def test_start_sandbox_short_circuits_for_healthy_running_cli_env(client):
+    """CLI envs intentionally have container_port=None — running CLI should
+    short-circuit even though port is null."""
+    _add_sandbox(client, "cli_healthy", status="running")
+
+    from backend.app import database
+    db: Session = database.get_session_factory()()
+    try:
+        sb = db.get(SandboxEnvironment, "cli_healthy")
+        sb.image_tag = "builtin:cli"
+        sb.container_id = "cli-id"
+        sb.container_port = None  # correct for CLI
+        db.commit()
+    finally:
+        db.close()
+
+    with patch("forge.envgen.container.ContainerRuntime") as mock_rt:
+        resp = client.post("/api/sandbox/cli_healthy/start")
+
+    assert resp.status_code == 200
+    mock_rt.return_value.start.assert_not_called()
+
+
+def test_get_sandbox_does_not_resync_port_for_cli_env(client):
+    """CLI envs intentionally have no HTTP port — GET must not try to read
+    8000/tcp on them, otherwise it'd silently overwrite anything the DB has."""
+    _add_sandbox(client, "cli_env", status="running")
+
+    from backend.app import database
+    db: Session = database.get_session_factory()()
+    try:
+        sb = db.get(SandboxEnvironment, "cli_env")
+        sb.image_tag = "builtin:cli"
+        sb.container_id = "cli-id"
+        sb.container_port = None  # CLI is correct as null
+        db.commit()
+    finally:
+        db.close()
+
+    mock_container = MagicMock()
+    mock_container.status = "running"
+    mock_container.ports = {}
+    mock_docker_client = MagicMock()
+    mock_docker_client.containers.get.return_value = mock_container
+
+    with patch("docker.from_env", return_value=mock_docker_client):
+        info = client.get("/api/sandbox/cli_env").json()
+
+    assert info["status"] == "running"
+    assert info["container_port"] is None
+
+
+def test_start_sandbox_clears_stale_state_when_image_is_gone(client):
+    """When runtime.start raises RuntimeError (image was pruned), the endpoint
+    must clear the stale image_tag/container_id and return 409 — otherwise
+    every subsequent /start hits the same dead image and returns 500."""
+    _add_sandbox(client, "stale_env", status="stopped")
+
+    from backend.app import database
+    db: Session = database.get_session_factory()()
+    try:
+        sb = db.get(SandboxEnvironment, "stale_env")
+        sb.image_tag = "forge-env-stale:latest"
+        sb.container_id = "old-container-id"
+        db.commit()
+    finally:
+        db.close()
+
+    with patch("forge.envgen.container.ContainerRuntime") as mock_rt:
+        mock_rt.return_value.start.side_effect = RuntimeError(
+            "Docker image 'forge-env-stale:latest' is not present locally — must be rebuilt."
+        )
+        resp = client.post("/api/sandbox/stale_env/start")
+
+    assert resp.status_code == 409
+    assert "rebuilt" in resp.json()["detail"].lower()
+
+    # State has been cleared so subsequent /start returns the natural 409
+    db = database.get_session_factory()()
+    try:
+        sb = db.get(SandboxEnvironment, "stale_env")
+        assert sb.image_tag is None
+        assert sb.container_id is None
+        assert sb.status == "stopped"
+    finally:
+        db.close()
+
+
 def test_full_creation_to_deletion_flow(client, tmp_path):
     """
     Simulates the complete lifecycle:
@@ -550,6 +873,7 @@ def test_build_cli_task_pulls_image_and_creates_container(client):
 
     with patch("redis.from_url", return_value=mock_redis), \
          patch("forge.envgen.container.subprocess.run") as mock_subproc, \
+         patch("forge.envgen.container._image_cached_locally", return_value=False), \
          patch("forge.envgen.container.docker.from_env", return_value=mock_docker_client):
 
         mock_subproc.return_value = MagicMock(returncode=0)
@@ -561,12 +885,13 @@ def test_build_cli_task_pulls_image_and_creates_container(client):
             env_type="cli",
         )
 
-    # subprocess called to pull ubuntu:22.04 (not the SDK)
+    # subprocess called to pull ubuntu:22.04 (not the SDK), with per-attempt timeout
     mock_subproc.assert_called_once_with(
         ["docker", "pull", "ubuntu:22.04"],
         check=True,
         capture_output=True,
         text=True,
+        timeout=120,
     )
 
     # Docker SDK used to run the container

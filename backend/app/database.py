@@ -26,21 +26,20 @@ def get_session_factory():
     return _SessionLocal
 
 
+def _try_alter(conn, sql: str) -> None:
+    try:
+        conn.execute(__import__("sqlalchemy").text(sql))
+        conn.commit()
+    except Exception:
+        pass  # column already exists — safe to ignore
+
+
 def init_db() -> None:
     from backend.app import models  # noqa: F401
     engine = get_engine()
     Base.metadata.create_all(bind=engine)
-    # Add env_type column to existing DBs that pre-date the column
     with engine.connect() as conn:
-        try:
-            conn.execute(
-                __import__("sqlalchemy").text(
-                    "ALTER TABLE sandbox_environments ADD COLUMN env_type TEXT DEFAULT 'general'"
-                )
-            )
-            conn.commit()
-        except Exception:
-            pass  # column already exists
+        _try_alter(conn, "ALTER TABLE sandbox_environments ADD COLUMN env_type TEXT DEFAULT 'general'")
 
 
 def get_db():
