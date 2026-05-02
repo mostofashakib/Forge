@@ -10,12 +10,6 @@ interface SandboxInfo {
   ttl_days: number;
 }
 
-interface EnvStats {
-  pass_rate: number;
-  avg_reward: number;
-  avg_steps: number;
-  policy_violation_count: number;
-}
 
 const STATUS_COLORS: Record<string, string> = {
   running:  "bg-green-100 text-green-700",
@@ -27,45 +21,24 @@ const STATUS_COLORS: Record<string, string> = {
 
 const ACTIONS = [
   {
-    id: "sandbox",
-    label: "Sandbox",
-    description: "Live app preview, interactive terminal, and observability feed",
-    href: (env: string) => `/environments/${env}/sandbox`,
+    id: "agent",
+    label: "Agent Runs",
+    description: "Run agents inside the sandbox, record trajectories, and collect data for policy training",
+    href: (env: string) => `/environments/${env}/agent`,
     requiresSandbox: true,
-  },
-  {
-    id: "config",
-    label: "Config",
-    description: "View and edit the environment configuration YAML",
-    href: (env: string) => `/environments/${env}/config`,
-    requiresSandbox: false,
-  },
-  {
-    id: "graph",
-    label: "Entity Graph",
-    description: "Visual graph of entities, actions, and state transitions",
-    href: (env: string) => `/environments/${env}/graph`,
-    requiresSandbox: false,
-  },
-  {
-    id: "rollouts",
-    label: "Rollouts",
-    description: "Launch parallel episode rollouts and track agent performance",
-    href: (_env: string) => `/rollouts`,
-    requiresSandbox: false,
   },
   {
     id: "violations",
     label: "Violations",
-    description: "Policy violation audit log and episode-level breakdowns",
-    href: (env: string) => `/violations?env=${encodeURIComponent(env)}`,
+    description: "Policy audit log — view rule violations and severity across all episodes",
+    href: (env: string) => `/environments/${env}/violations`,
     requiresSandbox: false,
   },
   {
     id: "dashboard",
     label: "Dashboard",
-    description: "Pass rates, reward curves, and failure cluster analysis",
-    href: (_env: string) => `/dashboard`,
+    description: "Aggregated metrics across all agent runs — pass rate, reward distribution, and step efficiency",
+    href: (env: string) => `/environments/${env}/dashboard`,
     requiresSandbox: false,
   },
 ];
@@ -77,14 +50,9 @@ export default async function EnvironmentHubPage({
 }) {
   const { env_name } = await params;
 
-  const [sandbox, stats] = await Promise.all([
-    fetch(`${API_BASE}/api/sandbox/${env_name}`, { cache: "no-store" })
-      .then((r) => (r.ok ? (r.json() as Promise<SandboxInfo>) : null))
-      .catch(() => null),
-    fetch(`${API_BASE}/api/envs/${env_name}/stats`, { cache: "no-store" })
-      .then((r) => (r.ok ? (r.json() as Promise<EnvStats>) : null))
-      .catch(() => null),
-  ]);
+  const sandbox = await fetch(`${API_BASE}/api/sandbox/${env_name}`, { cache: "no-store" })
+    .then((r) => (r.ok ? (r.json() as Promise<SandboxInfo>) : null))
+    .catch(() => null);
 
   const hasSandbox = sandbox !== null;
   const isLive = sandbox?.status === "running";
@@ -160,23 +128,6 @@ export default async function EnvironmentHubPage({
           >
             View progress →
           </Link>
-        </div>
-      )}
-
-      {/* Stats row */}
-      {stats && (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-          {[
-            { label: "Pass Rate", value: `${Math.round(stats.pass_rate * 100)}%` },
-            { label: "Avg Reward", value: stats.avg_reward.toFixed(2) },
-            { label: "Avg Steps", value: stats.avg_steps.toFixed(1) },
-            { label: "Violations", value: stats.policy_violation_count.toString() },
-          ].map(({ label, value }) => (
-            <div key={label} className="border rounded-lg p-4 text-center">
-              <div className="text-2xl font-semibold">{value}</div>
-              <div className="text-xs text-muted-foreground mt-1">{label}</div>
-            </div>
-          ))}
         </div>
       )}
 

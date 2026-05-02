@@ -231,7 +231,9 @@ def test_build_task_error_path_sets_status_error(client):
     mock_redis.publish.side_effect = lambda _ch, data: published.append(json.loads(data))
 
     with patch("redis.from_url", return_value=mock_redis), \
-         patch("forge.envgen.container.subprocess.run", side_effect=RuntimeError("docker pull failed")):
+         patch("forge.envgen.container.subprocess.run", side_effect=RuntimeError("docker pull failed")), \
+         patch("forge.envgen._image_pull_http.pull_via_http",
+               side_effect=RuntimeError("HTTPS also failed")):
         from backend.app.worker.tasks import build_sandbox_task
         build_sandbox_task(job_id="fail-job", env_name="fail_env", env_type="cli")
 

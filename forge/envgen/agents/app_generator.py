@@ -1,36 +1,224 @@
 from __future__ import annotations
 import asyncio
+import time
 from forge.envgen.agents.base import EnvGenAgent
 from forge.envgen.artifact_bus import ArtifactBus
 from forge.envgen.context import EnvGenContext
 from forge.envgen.schemas import AppPlan, GeneratedFile
 from forge.extraction.llm_client import AnthropicClient, LLMClient
 
+# ---------------------------------------------------------------------------
+# Plan prompt
+# ---------------------------------------------------------------------------
+
 _PLAN_SYSTEM = (
     "Plan the file structure for a complete, runnable FastAPI Python application.\n"
     "List only the files needed — no more. Each file has one focused responsibility.\n"
-    "Typical structure: main.py, models.py, database.py, requirements.txt, Dockerfile.\n"
-    "Add additional files only if the domain genuinely requires it.\n"
+    "Required files: main.py, ui.html, requirements.txt, Dockerfile.\n"
+    "  main.py          — FastAPI backend: SQLAlchemy models, API routes, Forge endpoints.\n"
+    "                     The /ui endpoint just serves ui.html via FileResponse.\n"
+    "  ui.html          — Standalone single-page frontend (HTML + CSS + JS). No Python here.\n"
+    "  requirements.txt — MUST include: fastapi, uvicorn[standard], sqlalchemy, redis,\n"
+    "                     httpx, python-multipart, pydantic. The Forge build pipeline\n"
+    "                     adds any of these that you forget, but listing them keeps\n"
+    "                     the file honest.\n"
+    "  Dockerfile       — Always FROM python:3.12-slim, EXPOSE 8000, CMD on port 8000.\n"
+    "Add models.py / database.py / etc. only if the domain genuinely requires it.\n"
     "Call the extract tool with the plan."
 )
 
-_IMPL_SYSTEM = (
-    "Generate the COMPLETE content for ONE file of a FastAPI Python application.\n"
-    "Write only the requested file. No other files.\n"
-    "Requirements:\n"
-    "  - SQLite persistence via SQLAlchemy (sync, file 'app.db'), models mirror the entity schema\n"
+# ---------------------------------------------------------------------------
+# Implementation prompts — one per concern
+# ---------------------------------------------------------------------------
+
+_BACKEND_SYSTEM = (
+    "Generate the COMPLETE content for ONE Python file of a FastAPI application.\n"
+    "Write ONLY Python — no HTML, CSS, or JavaScript.\n"
+    "\n"
+    "REQUIREMENTS:\n"
+    "  - SQLite persistence via SQLAlchemy (sync, file 'app.db'); models mirror the entity schema\n"
     "  - One POST endpoint per action (e.g. POST /close_ticket), JSON body matching action params\n"
-    "  - Minimal HTML UI at GET /ui — shows current state and a form per action\n"
-    "  - These Forge endpoints (in main.py):\n"
+    "  - Seed the database with realistic initial data on first startup\n"
+    "  - Required Forge endpoints:\n"
     "      GET  /forge/health         → {\"status\": \"ok\"}\n"
     "      GET  /forge/state          → full current state as JSON\n"
     "      POST /forge/reset          → drop all rows, re-seed initial state, return {\"ok\": true}\n"
     "      POST /forge/snapshot       → body {\"slot\": \"name\"}, save state, return {\"ok\": true}\n"
     "      POST /forge/restore/{slot} → restore saved state, return {\"ok\": true}\n"
-    "      POST /forge/restore-state  → body is full state JSON, write directly to SQLite, return {\"ok\": true}\n"
+    "      POST /forge/restore-state  → body is full state JSON, write to SQLite, return {\"ok\": true}\n"
+    "  - GET /ui → return FileResponse('ui.html', media_type='text/html')\n"
+    "  - Add CORS middleware (allow all origins) and mount StaticFiles if needed\n"
+    "  - Import FileResponse from fastapi.responses\n"
+    "  - PORT IS FIXED: if you include `if __name__ == \"__main__\": uvicorn.run(...)`,\n"
+    "    bind to host=\"0.0.0.0\" and port=8000. Forge always publishes 8000/tcp from\n"
+    "    the container; any other port leaves the iframe with no working route.\n"
+    "\n"
+    "No placeholders. No TODOs. Complete runnable Python only.\n"
+    "Call the extract tool with the result."
+)
+
+_HTML_CSS_SYSTEM = (
+    "Generate a COMPLETE HTML file for a production-quality single-page web application.\n"
+    "Output the FULL HTML document from <!DOCTYPE html> to </html>.\n"
+    "Include ALL CSS inline in a <style> block. Leave the <script> block at the bottom EMPTY\n"
+    "(write exactly: <script id=\"app-js\"></script>) — JavaScript is generated separately.\n"
+    "\n"
+    "DESIGN MANDATE — every rule is non-negotiable:\n"
+    "\n"
+    "1. AESTHETIC DIRECTION\n"
+    "   Commit to one bold visual direction that matches the domain:\n"
+    "     brutally minimal | maximalist | retro-futuristic | luxury/refined | editorial/magazine\n"
+    "     | brutalist/raw | art-deco/geometric | industrial/utilitarian | playful/toy-like\n"
+    "   The design must feel like the REAL application — not a generic dev tool.\n"
+    "   One look should tell a user exactly what the app does.\n"
+    "\n"
+    "2. TYPOGRAPHY\n"
+    "   Import exactly two Google Fonts via CDN link: one display/heading, one body.\n"
+    "   NEVER use Inter, Roboto, Arial, Helvetica, or system-ui — they produce generic AI slop.\n"
+    "   Example pairings: DM Serif Display + DM Mono | Playfair Display + Lato |\n"
+    "   Syne + IBM Plex Sans | Space Grotesk + Fira Code | Bebas Neue + Nunito.\n"
+    "\n"
+    "3. COLOR PALETTE\n"
+    "   Define all colors in :root as CSS custom properties:\n"
+    "     --bg, --surface, --surface-2, --border, --text, --text-muted,\n"
+    "     --accent, --accent-hover, --danger, --success, --warning\n"
+    "   Apply 60/30/10 rule: background 60 %, surface elements 30 %, accent 10 %.\n"
+    "   Use a dominant dark OR light base — vary the theme; never default to white.\n"
+    "   BANNED: purple gradients on white, default Bootstrap blue, flat grey on white.\n"
+    "\n"
+    "4. LAYOUT\n"
+    "   App shell: fixed left sidebar (nav) + top bar + main content area.\n"
+    "   Sidebar: app logo/name at top, nav items for each entity group, icons from Lucide CDN.\n"
+    "   Top bar: page title (breadcrumb), action buttons for the active view.\n"
+    "   Content: data table OR card grid (whichever fits the domain) with a toolbar.\n"
+    "   Do NOT render a flat list of HTML forms — group actions as buttons on rows/cards.\n"
+    "\n"
+    "5. ICONS\n"
+    "   Load Lucide via CDN: <script src=\"https://unpkg.com/lucide@latest\"></script>\n"
+    "   Use <i data-lucide=\"icon-name\" class=\"icon\"></i> everywhere meaningful.\n"
+    "   Call lucide.createIcons() in the empty script block via a DOMContentLoaded listener.\n"
+    "\n"
+    "6. MOTION\n"
+    "   CSS transitions on: row/card hover, button :active press, sidebar item hover.\n"
+    "   A @keyframes fade-slide-in for toast notifications.\n"
+    "   Smooth sidebar collapse (if applicable). Nothing jarring.\n"
+    "\n"
+    "7. MODALS\n"
+    "   One reusable modal overlay structure in the HTML (hidden by default).\n"
+    "   It must have: modal-title, modal-body (form fields go here), submit button, close button.\n"
+    "   Style it with a dark overlay backdrop and a well-padded surface panel.\n"
+    "\n"
+    "8. TOASTS\n"
+    "   A #toast-container fixed to the top-right. Individual toasts styled for\n"
+    "   success (var(--success)), error (var(--danger)), info (var(--accent)).\n"
+    "   They stack, animate in, and animate out.\n"
+    "\n"
+    "9. DATA CONTAINERS\n"
+    "   Provide empty but fully styled containers (table > thead/tbody or .card-grid div)\n"
+    "   for every entity. JavaScript will populate them. Include a loading skeleton or spinner\n"
+    "   inside each container that shows until data loads.\n"
+    "\n"
+    "No placeholder text. No lorem ipsum. Complete, immediately usable HTML+CSS.\n"
+    "Call the extract tool with the result."
+)
+
+_JS_SYSTEM = (
+    "Generate the COMPLETE JavaScript for a single-page web application.\n"
+    "Output ONLY the JavaScript — no HTML, no CSS, no <script> tags.\n"
+    "\n"
+    "The HTML structure and all CSS already exist. Your JS will be injected into\n"
+    "the empty <script id=\"app-js\"> block. You have access to the HTML structure\n"
+    "and app context provided below.\n"
+    "\n"
+    "REQUIREMENTS:\n"
+    "\n"
+    "1. INITIALISATION\n"
+    "   On DOMContentLoaded:\n"
+    "     - Call lucide.createIcons()\n"
+    "     - Load initial state: GET /forge/state\n"
+    "     - Render all entity lists/tables from the state\n"
+    "     - Wire up all navigation, modal, and form event listeners\n"
+    "\n"
+    "2. DATA RENDERING\n"
+    "   Write a renderXxx(data) function for EACH entity type.\n"
+    "   Clear and repopulate the relevant DOM container on every call.\n"
+    "   Show a row count / summary in the sidebar nav item badge.\n"
+    "   Handle empty arrays gracefully (show an 'empty state' message).\n"
+    "\n"
+    "3. ACTION HANDLERS\n"
+    "   For EACH action:\n"
+    "     - openModal(actionName, prefillData) — populate modal title + form inputs\n"
+    "     - submitAction(endpoint, payload) — POST with fetch(), disable submit during flight\n"
+    "     - On success: close modal, show success toast, refresh affected entity render\n"
+    "     - On error: show error toast with the server's detail message\n"
+    "\n"
+    "4. MODAL SYSTEM\n"
+    "   openModal(title, fields, onSubmit) — generic function:\n"
+    "     fields = [{name, label, type, placeholder, value}]\n"
+    "   Close on X click, backdrop click, or Escape key.\n"
+    "\n"
+    "5. TOAST SYSTEM\n"
+    "   showToast(message, type) — type is 'success' | 'error' | 'info'\n"
+    "   Auto-dismiss after 3 000 ms. Animate in and out.\n"
+    "\n"
+    "6. NAVIGATION\n"
+    "   Clicking a sidebar nav item shows/hides the relevant content section.\n"
+    "   Update the top-bar title and active nav state.\n"
+    "\n"
+    "7. LOADING STATES\n"
+    "   Show a spinner / skeleton in each container while data is loading.\n"
+    "   Disable action buttons while a fetch is in-flight.\n"
+    "\n"
+    "8. INLINE FORMATTING\n"
+    "   Format dates (ISO → locale string), booleans (badge), status fields (colour badge).\n"
+    "   Never render raw JSON objects or [object Object] in the UI.\n"
+    "\n"
+    "Write clean, modular vanilla JS. No jQuery. No frameworks. No import statements.\n"
+    "No placeholders. No TODOs. Complete and immediately runnable.\n"
+    "Call the extract tool with the result."
+)
+
+_GENERIC_SYSTEM = (
+    "Generate the COMPLETE content for ONE file of a FastAPI Python application.\n"
+    "Write only the requested file. No other files.\n"
     "No placeholders. No TODOs. Complete runnable content only.\n"
     "Call the extract tool with the result."
 )
+
+_DOCKERFILE_SYSTEM = (
+    "Generate a Dockerfile for a FastAPI Python application.\n"
+    "\n"
+    "MANDATORY structure — these are non-negotiable so the runtime can\n"
+    "publish port 8000 to the host correctly. The Forge build pipeline\n"
+    "rewrites the FROM line and any port directives anyway, but match this\n"
+    "exactly to keep behaviour predictable:\n"
+    "\n"
+    "  FROM python:3.12-slim\n"
+    "  WORKDIR /app\n"
+    "  COPY requirements.txt .\n"
+    "  RUN pip install --no-cache-dir -r requirements.txt\n"
+    "  COPY . .\n"
+    "  EXPOSE 8000\n"
+    "  CMD [\"uvicorn\", \"main:app\", \"--host\", \"0.0.0.0\", \"--port\", \"8000\"]\n"
+    "\n"
+    "Add `RUN apt-get install …` lines only if the app genuinely needs system\n"
+    "packages (e.g. libpq-dev for psycopg). Otherwise output exactly the seven\n"
+    "lines above. Never use a port other than 8000.\n"
+    "\n"
+    "Output ONLY the Dockerfile contents — no markdown fences, no commentary.\n"
+    "Call the extract tool with the result."
+)
+
+# Files simple enough for Haiku
+_FAST_FILES = {"requirements.txt", "dockerfile"}
+
+
+def _fmt(seconds: float) -> str:
+    """Format elapsed seconds as '4.2s' or '1m 23s'."""
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    m, s = divmod(int(seconds), 60)
+    return f"{m}m {s}s"
 
 
 class AppGeneratorAgent(EnvGenAgent):
@@ -38,9 +226,71 @@ class AppGeneratorAgent(EnvGenAgent):
     produces: str = "app_code"
 
     def __init__(self, client: LLMClient | None = None) -> None:
-        self._client = client or AnthropicClient(max_tokens=4096)
+        # Sonnet for complex files (main.py, ui.html)
+        self._client = client or AnthropicClient(max_tokens=8192)
+        # Haiku for simple template-like files (requirements.txt, Dockerfile, etc.)
+        self._fast_client = AnthropicClient(
+            model="claude-haiku-4-5-20251001", max_tokens=2048
+        )
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    async def _call(self, system: str, user: str, fast: bool = False) -> str:
+        client = self._fast_client if fast else self._client
+        loop = asyncio.get_event_loop()
+        result: GeneratedFile = await loop.run_in_executor(
+            None,
+            lambda: client.extract(system=system, user=user, schema=GeneratedFile),
+        )
+        return result.content
+
+    # ------------------------------------------------------------------
+    # Multi-pass generation for ui.html
+    # ------------------------------------------------------------------
+
+    async def _generate_ui(self, app_context: str, bus: ArtifactBus) -> str:
+        """Two focused passes: HTML+CSS structure, then JavaScript logic."""
+        t0 = time.monotonic()
+        await bus.log("[app-gen] ui.html — pass 1/2: HTML structure + CSS (sonnet)…")
+        html_css = await self._call(system=_HTML_CSS_SYSTEM, user=app_context)
+        await bus.log(
+            f"[app-gen] ui.html — pass 1/2 done ({_fmt(time.monotonic() - t0)}, "
+            f"{len(html_css):,} chars)"
+        )
+
+        t1 = time.monotonic()
+        await bus.log("[app-gen] ui.html — pass 2/2: JavaScript logic (sonnet)…")
+        js = await self._call(
+            system=_JS_SYSTEM,
+            user=(
+                f"{app_context}\n\n"
+                f"HTML structure (for DOM targeting):\n"
+                f"---\n{html_css}\n---"
+            ),
+        )
+        await bus.log(
+            f"[app-gen] ui.html — pass 2/2 done ({_fmt(time.monotonic() - t1)}, "
+            f"{len(js):,} chars)"
+        )
+
+        if '<script id="app-js"></script>' in html_css:
+            return html_css.replace(
+                '<script id="app-js"></script>',
+                f'<script id="app-js">\n{js}\n</script>',
+            )
+        if "</body>" in html_css:
+            return html_css.replace("</body>", f"<script>\n{js}\n</script>\n</body>")
+        return html_css + f"\n<script>\n{js}\n</script>"
+
+    # ------------------------------------------------------------------
+    # run — plan first, then generate all files in parallel
+    # ------------------------------------------------------------------
 
     async def run(self, ctx: EnvGenContext, bus: ArtifactBus) -> None:
+        run_start = time.monotonic()
+
         entity_summary = "\n".join(
             f"  - {e.name}: fields={[f.name for f in e.fields]}"
             for e in ctx.compiler_input.entities
@@ -56,10 +306,17 @@ class AppGeneratorAgent(EnvGenAgent):
             f"Actions:\n{action_summary}"
         )
 
+        await bus.log(
+            f"[app-gen] Starting — "
+            f"{len(ctx.compiler_input.entities)} entities, "
+            f"{len(ctx.compiler_input.actions)} actions"
+        )
+
         loop = asyncio.get_event_loop()
 
-        # Phase 1: plan the file structure
-        await bus.log("[app-gen] Planning file structure…")
+        # Phase 1: plan (sequential — everything depends on it)
+        t_plan = time.monotonic()
+        await bus.log("[app-gen] Phase 1/2: planning file structure (sonnet)…")
         plan: AppPlan = await loop.run_in_executor(
             None,
             lambda: self._client.extract(
@@ -69,32 +326,89 @@ class AppGeneratorAgent(EnvGenAgent):
             ),
         )
         file_list = ", ".join(f.path for f in plan.files)
-        await bus.log(f"[app-gen] Plan ready — {len(plan.files)} files: {file_list}")
+        await bus.log(
+            f"[app-gen] Plan done ({_fmt(time.monotonic() - t_plan)}) — "
+            f"{len(plan.files)} files: {file_list}"
+        )
 
         plan_summary = "\n".join(
             f"  - {f.path}: {f.description}" for f in plan.files
         )
-
-        # Phase 2: generate each file individually
-        files: dict[str, str] = {}
         total = len(plan.files)
-        for i, file_plan in enumerate(plan.files, 1):
-            await bus.log(f"[app-gen] Writing {file_plan.path} ({i}/{total})…")
-            user = (
-                f"{app_context}\n\n"
-                f"Application file plan:\n{plan_summary}\n\n"
-                f"Generate file: {file_plan.path}\n"
-                f"Responsibility: {file_plan.description}"
+
+        # Phase 2: generate all files in parallel
+        # ui.html is internally sequential (HTML/CSS → JS) but runs concurrently
+        # with main.py and all other files.
+        await bus.log(
+            f"[app-gen] Phase 2/2: generating {total} files in parallel…"
+        )
+        t_gen = time.monotonic()
+
+        async def _gen_one(i: int, file_plan) -> tuple[str, str]:
+            is_simple = file_plan.path.lower() in _FAST_FILES
+            model_label = "haiku" if is_simple else "sonnet"
+            t_file = time.monotonic()
+            await bus.log(
+                f"[app-gen] [{i}/{total}] {file_plan.path} — starting ({model_label})…"
             )
-            result: GeneratedFile = await loop.run_in_executor(
-                None,
-                lambda fp=file_plan, u=user: self._client.extract(
-                    system=_IMPL_SYSTEM,
-                    user=u,
-                    schema=GeneratedFile,
-                ),
+
+            if file_plan.path == "ui.html":
+                content = await self._generate_ui(app_context, bus)
+
+            elif file_plan.path == "main.py":
+                user = (
+                    f"{app_context}\n\n"
+                    f"Application file plan:\n{plan_summary}\n\n"
+                    f"Generate file: main.py\n"
+                    f"Responsibility: {file_plan.description}"
+                )
+                content = await self._call(system=_BACKEND_SYSTEM, user=user)
+
+            elif file_plan.path.lower() == "dockerfile":
+                # Dockerfile uses a dedicated prompt that pins port 8000;
+                # post-build normalisation (`_normalise_dockerfile_port`)
+                # acts as a hard guardrail in case the LLM still drifts.
+                user = (
+                    f"{app_context}\n\n"
+                    f"Application file plan:\n{plan_summary}\n\n"
+                    f"Generate file: Dockerfile\n"
+                    f"Responsibility: {file_plan.description}"
+                )
+                content = await self._call(
+                    system=_DOCKERFILE_SYSTEM, user=user, fast=True
+                )
+
+            else:
+                user = (
+                    f"{app_context}\n\n"
+                    f"Application file plan:\n{plan_summary}\n\n"
+                    f"Generate file: {file_plan.path}\n"
+                    f"Responsibility: {file_plan.description}"
+                )
+                content = await self._call(
+                    system=_GENERIC_SYSTEM, user=user, fast=is_simple
+                )
+
+            elapsed = _fmt(time.monotonic() - t_file)
+            await bus.log(
+                f"[app-gen] [{i}/{total}] {file_plan.path} ✓  "
+                f"({elapsed}, {len(content):,} chars)"
             )
-            files[file_plan.path] = result.content
-            await bus.log(f"[app-gen] {file_plan.path} ✓")
+            return file_plan.path, content
+
+        results = await asyncio.gather(
+            *[_gen_one(i, fp) for i, fp in enumerate(plan.files, 1)]
+        )
+
+        files = dict(results)
+        total_chars = sum(len(v) for v in files.values())
+        await bus.log(
+            f"[app-gen] All files done — "
+            f"parallel wall time {_fmt(time.monotonic() - t_gen)}, "
+            f"total {total_chars:,} chars across {len(files)} files"
+        )
+        await bus.log(
+            f"[app-gen] Total agent time: {_fmt(time.monotonic() - run_start)}"
+        )
 
         await bus.publish("app_code", files)

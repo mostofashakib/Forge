@@ -7,9 +7,10 @@ from pathlib import Path
 
 from celery import group
 from sqlalchemy import update
+from sqlalchemy.orm import Session
 
 from backend.app.worker.celery_app import celery
-from backend.app.models import RolloutJob, Episode
+from backend.app.models import RolloutJob, Episode, AgentRun, AgentEpisode
 from backend.app.utils.env_loader import load_forge_env
 
 logger = logging.getLogger(__name__)
@@ -234,7 +235,17 @@ def build_sandbox_task(
     except Exception as exc:
         logger.exception("[task:build_sandbox] FAILED — env_name=%s error=%s", env_name, exc)
         publish({"log": f"[forge] ERROR: {exc}"})
-        _set_status("error")
+        # Clear container/image references too — otherwise a leftover tag from
+        # a previous successful build stays in the DB, and /start would later
+        # try to spin up a container against an image that may no longer exist.
+        with SessionLocal() as db:
+            sb = db.get(SandboxEnvironment, env_name)
+            if sb:
+                sb.status = "error"
+                sb.image_tag = None
+                sb.container_id = None
+                sb.container_port = None
+                db.commit()
         publish({"done": True, "error": f"Build failed: {exc}"})
     finally:
         r.close()
@@ -265,6 +276,196 @@ def cleanup_expired_sandboxes() -> None:
                 runtime.remove(sandbox.container_id, sandbox.image_tag)
             sandbox.status = "expired"
         db.commit()
+
+
+@celery.task(bind=True)
+def run_container_episode_task(self, run_id: str, episode_index: int, seed: int) -> str:
+    """Run a single agent episode against a containerized environment.
+
+    Routes to the appropriate runner based on env_type:
+      "general" → ContainerEpisodeRunner (HTTP FastAPI)
+      "cli"     → CliEpisodeRunner (docker exec shell)
+      "browser" → BrowserEpisodeRunner (Playwright CDP)
+    """
+    from backend.app.database import get_session_factory
+    from backend.app.models import SandboxEnvironment
+
+    SessionLocal = get_session_factory()
+    episode_id = f"cep_{seed:08x}_{secrets.token_hex(4)}"
+
+    with SessionLocal() as db:
+        run = db.get(AgentRun, run_id)
+        if run is None:
+            logger.error("[container-ep] AgentRun %s not found", run_id)
+            return episode_id
+        env_name = run.env_name
+        sb = db.get(SandboxEnvironment, env_name)
+        if sb is None or sb.container_id is None:
+            logger.error("[container-ep] sandbox %s has no running container", env_name)
+            return episode_id
+        env_type = sb.env_type
+        container_id = sb.container_id
+        container_port = sb.container_port
+        agent_id = run.agent_id
+        objective = run.objective
+        max_steps = run.max_steps
+        divergence_threshold = run.divergence_threshold
+        consecutive_below_threshold = run.consecutive_below_threshold
+        dead_end_patience = run.dead_end_patience
+        success_threshold = run.success_threshold
+
+    envs_root = Path(os.environ.get("FORGE_GENERATED_ENVS_DIR", "generated_envs"))
+    jsonl_dir = envs_root / env_name / "agent_episodes"
+    jsonl_dir.mkdir(parents=True, exist_ok=True)
+    jsonl_path = jsonl_dir / f"{episode_id}.jsonl"
+
+    with SessionLocal() as db:
+        db.add(AgentEpisode(
+            id=episode_id,
+            run_id=run_id,
+            episode_index=episode_index,
+            seed=seed,
+            status="running",
+            started_at=datetime.now(timezone.utc),
+            jsonl_path=str(jsonl_path),
+        ))
+        db.commit()
+
+    try:
+        if env_type == "cli":
+            from forge.envgen.cli_runner import CliEpisodeRunner, CliEpisodeConfig
+            from forge.envgen.agents.cli_agent import make_cli_agent
+            cfg = CliEpisodeConfig(
+                container_id=container_id,
+                objective=objective,
+                max_steps=max_steps,
+                divergence_threshold=divergence_threshold,
+                consecutive_below_threshold=consecutive_below_threshold,
+                dead_end_patience=dead_end_patience,
+                success_threshold=success_threshold,
+            )
+            agent = make_cli_agent(agent_id, seed=seed)
+            result = CliEpisodeRunner(cfg).run_episode(
+                agent, episode_id=episode_id, jsonl_path=jsonl_path
+            )
+
+        elif env_type == "browser":
+            import docker as _docker
+            dc = _docker.from_env()
+            c = dc.containers.get(container_id)
+            c.reload()
+            cdp_mapping = c.ports.get("9222/tcp")
+            if not cdp_mapping:
+                raise RuntimeError(
+                    "CDP port 9222 is not mapped on the browser container. "
+                    "Recreate the environment to pick up the new CDP configuration."
+                )
+            cdp_port = int(cdp_mapping[0]["HostPort"])
+            from forge.envgen.browser_runner import BrowserEpisodeRunner, BrowserEpisodeConfig
+            from forge.envgen.agents.browser_agent import make_browser_agent
+            cfg = BrowserEpisodeConfig(
+                cdp_url=f"http://localhost:{cdp_port}",
+                objective=objective,
+                max_steps=max_steps,
+                divergence_threshold=divergence_threshold,
+                consecutive_below_threshold=consecutive_below_threshold,
+                dead_end_patience=dead_end_patience,
+                success_threshold=success_threshold,
+            )
+            agent = make_browser_agent(agent_id, seed=seed)
+            result = BrowserEpisodeRunner(cfg).run_episode(
+                agent, episode_id=episode_id, jsonl_path=jsonl_path
+            )
+
+        else:  # general
+            from forge.envgen.episode_runner import ContainerEpisodeRunner, EpisodeConfig
+            from forge.envgen.agents.container_agent import make_container_agent
+            if container_port is None:
+                raise RuntimeError(f"General sandbox {env_name} has no container_port")
+            cfg = EpisodeConfig(
+                base_url=f"http://localhost:{container_port}",
+                objective=objective,
+                max_steps=max_steps,
+                divergence_threshold=divergence_threshold,
+                consecutive_below_threshold=consecutive_below_threshold,
+                dead_end_patience=dead_end_patience,
+                success_threshold=success_threshold,
+            )
+            agent = make_container_agent(agent_id, seed=seed)
+            with ContainerEpisodeRunner(cfg) as runner:
+                result = runner.run_episode(agent, episode_id=episode_id, jsonl_path=jsonl_path)
+
+        with SessionLocal() as db:
+            ep = db.get(AgentEpisode, episode_id)
+            if ep is not None:
+                ep.status = "completed"
+                ep.total_steps = len(result.steps)
+                ep.total_reward = result.total_reward
+                ep.final_objective_score = result.final_objective_score
+                ep.termination_reason = result.termination_reason
+                ep.completed_at = datetime.now(timezone.utc)
+                db.commit()
+
+    except Exception as exc:
+        logger.exception("[container-ep] episode %s failed: %s", episode_id, exc)
+        with SessionLocal() as db:
+            ep = db.get(AgentEpisode, episode_id)
+            if ep is not None:
+                ep.status = "failed"
+                ep.termination_reason = str(exc)[:255]
+                ep.completed_at = datetime.now(timezone.utc)
+                db.commit()
+
+    # Atomically increment run counter; mark run completed when all done
+    with SessionLocal() as db:
+        db.execute(
+            update(AgentRun)
+            .where(AgentRun.id == run_id)
+            .values(episodes_completed=AgentRun.episodes_completed + 1)
+        )
+        db.commit()
+        run2 = db.get(AgentRun, run_id)
+        if run2 and run2.episodes_completed >= run2.num_episodes:
+            run2.status = "completed"
+            run2.completed_at = datetime.now(timezone.utc)
+            db.commit()
+
+    return episode_id
+
+
+@celery.task(bind=True)
+def run_container_run_task(self, run_id: str) -> None:
+    """Dispatch all episode subtasks for an AgentRun."""
+    from backend.app.database import get_session_factory
+
+    logger.info("[container-run] STARTED — run_id=%s", run_id)
+    SessionLocal = get_session_factory()
+
+    with SessionLocal() as db:
+        run = db.get(AgentRun, run_id)
+        if run is None:
+            logger.error("[container-run] AgentRun %s not found", run_id)
+            return
+        run.status = "running"
+        num_episodes = run.num_episodes
+        seed_start = run.seed_start
+        db.commit()
+
+    try:
+        subtasks = group(
+            run_container_episode_task.s(run_id, i, seed_start + i)
+            for i in range(num_episodes)
+        )
+        subtasks.apply_async()
+    except Exception as exc:
+        logger.exception("[container-run] dispatch failed for %s: %s", run_id, exc)
+        with SessionLocal() as db:
+            run_fail = db.get(AgentRun, run_id)
+            if run_fail is not None:
+                run_fail.status = "failed"
+                run_fail.error = str(exc)
+                run_fail.completed_at = datetime.now(timezone.utc)
+                db.commit()
 
 
 @celery.task(bind=True)
