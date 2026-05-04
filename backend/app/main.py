@@ -23,6 +23,7 @@ from backend.app.api.exports import router as exports_router
 from backend.app.api.audit import router as audit_router
 from backend.app.api.sandbox import router as sandbox_router
 from backend.app.api.agent_runs import router as agent_runs_router
+from backend.app.api.evaluate import router as evaluate_router
 from backend.app.database import init_db
 
 app = FastAPI(title="Forge API", version="0.3.0")
@@ -46,6 +47,7 @@ app.include_router(exports_router)
 app.include_router(audit_router)
 app.include_router(sandbox_router)
 app.include_router(agent_runs_router)
+app.include_router(evaluate_router)
 
 
 @app.on_event("startup")
