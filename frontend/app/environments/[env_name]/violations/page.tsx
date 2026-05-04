@@ -5,6 +5,10 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import { API_BASE } from "@/lib/api";
 
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
 interface AuditLog {
   id: string;
   episode_id: string;
@@ -18,12 +22,47 @@ interface AuditLog {
   created_at: string;
 }
 
+interface DetectionFinding {
+  category: string;
+  severity: "high" | "medium" | "low";
+  episode_ids: string[];
+  description: string;
+  evidence: string;
+}
+
+interface DetectionResult {
+  episodes_analysed: number;
+  is_clean: boolean;
+  summary: string;
+  findings: DetectionFinding[];
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
 const SEVERITY_COLORS: Record<string, string> = {
   critical: "bg-red-100 text-red-700",
-  high:     "bg-orange-100 text-orange-700",
-  medium:   "bg-yellow-100 text-yellow-700",
+  high:     "bg-red-100 text-red-700",
+  medium:   "bg-orange-100 text-orange-700",
   low:      "bg-gray-100 text-gray-500",
   info:     "bg-blue-100 text-blue-700",
+};
+
+const CATEGORY_LABELS: Record<string, string> = {
+  reward_hacking:      "Reward Hacking",
+  distribution_drift:  "Distribution Drift",
+  policy_gaming:       "Policy Gaming",
+  anomalous_pattern:   "Anomalous Pattern",
+  reward_collapse:     "Reward Collapse",
+};
+
+const CATEGORY_COLORS: Record<string, string> = {
+  reward_hacking:      "bg-red-50 border-red-200",
+  distribution_drift:  "bg-orange-50 border-orange-200",
+  policy_gaming:       "bg-purple-50 border-purple-200",
+  anomalous_pattern:   "bg-blue-50 border-blue-200",
+  reward_collapse:     "bg-yellow-50 border-yellow-200",
 };
 
 const SEVERITIES = ["all", "critical", "high", "medium", "low", "info"] as const;
@@ -31,6 +70,99 @@ const SEVERITIES = ["all", "critical", "high", "medium", "low", "info"] as const
 function fmt(ts: string) {
   return new Date(ts).toLocaleString();
 }
+
+// ---------------------------------------------------------------------------
+// Detection panel
+// ---------------------------------------------------------------------------
+
+function DetectionPanel({ envName }: { envName: string }) {
+  const [running, setRunning] = useState(false);
+  const [result, setResult] = useState<DetectionResult | null>(null);
+  const [error, setError] = useState("");
+
+  async function runDetection() {
+    setRunning(true);
+    setError("");
+    try {
+      const res = await fetch(`${API_BASE}/api/sandbox/${envName}/detect`, {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail ?? `HTTP ${res.status}`);
+      setResult(data as DetectionResult);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Detection failed");
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  return (
+    <div className="border rounded-lg overflow-hidden">
+      {/* Header */}
+      <div className="px-4 py-3 bg-muted/30 border-b flex items-center justify-between">
+        <div>
+          <h2 className="text-sm font-semibold">Trajectory Analysis</h2>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Detect reward hacking, distribution drift, policy gaming, and anomalous patterns in agent trajectories.
+          </p>
+        </div>
+        <button
+          onClick={runDetection}
+          disabled={running}
+          className="px-3 py-1.5 text-xs font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors shrink-0"
+        >
+          {running ? "Analysing…" : "Run Detection"}
+        </button>
+      </div>
+
+      {/* Results */}
+      {(result || error) && (
+        <div className="p-4 space-y-3">
+          {error && <p className="text-xs text-red-600">{error}</p>}
+
+          {result && (
+            <>
+              {/* Summary banner */}
+              <div className={`rounded-lg px-4 py-3 text-sm ${result.is_clean ? "bg-green-50 text-green-800 border border-green-200" : "bg-orange-50 text-orange-800 border border-orange-200"}`}>
+                <span className="font-medium">{result.is_clean ? "✓ No issues detected" : `${result.findings.length} issue${result.findings.length !== 1 ? "s" : ""} detected`}</span>
+                {" — "}{result.summary}
+                <span className="text-xs opacity-70 ml-2">({result.episodes_analysed} episodes analysed)</span>
+              </div>
+
+              {/* Findings */}
+              {result.findings.map((f, i) => (
+                <div key={i} className={`rounded-lg border p-4 ${CATEGORY_COLORS[f.category] ?? "bg-gray-50 border-gray-200"}`}>
+                  <div className="flex items-start justify-between gap-3 mb-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-xs font-semibold uppercase tracking-wide">
+                        {CATEGORY_LABELS[f.category] ?? f.category}
+                      </span>
+                      <span className={`px-2 py-0.5 rounded text-xs font-medium ${SEVERITY_COLORS[f.severity] ?? SEVERITY_COLORS.low}`}>
+                        {f.severity}
+                      </span>
+                      {f.episode_ids.length > 0 && (
+                        <span className="text-xs text-muted-foreground font-mono">
+                          {f.episode_ids.join(", ")}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <p className="text-sm mb-1">{f.description}</p>
+                  <p className="text-xs text-muted-foreground border-l-2 border-current pl-2 opacity-70">{f.evidence}</p>
+                </div>
+              ))}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Page
+// ---------------------------------------------------------------------------
 
 export default function ViolationsPage() {
   const params = useParams<{ env_name: string }>();
@@ -70,9 +202,9 @@ export default function ViolationsPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">Policy Violations</h1>
+          <h1 className="text-xl font-semibold tracking-tight">Violations</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            {violations.length} violation{violations.length !== 1 ? "s" : ""} · {logs.length} total audit entries
+            {violations.length} policy violation{violations.length !== 1 ? "s" : ""} · {logs.length} total audit entries
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -91,6 +223,9 @@ export default function ViolationsPage() {
           </Link>
         </div>
       </div>
+
+      {/* Detection panel */}
+      <DetectionPanel envName={envName} />
 
       {/* Filter row */}
       <div className="flex flex-wrap items-center gap-3">
@@ -118,7 +253,6 @@ export default function ViolationsPage() {
           onChange={(e) => setEpisodeFilter(e.target.value)}
           className="border rounded px-2.5 py-1 text-xs w-36 focus:outline-none focus:ring-1 focus:ring-foreground/30"
         />
-
         <input
           type="text"
           placeholder="Rule ID…"
@@ -130,18 +264,17 @@ export default function ViolationsPage() {
         {(severity !== "all" || episodeFilter || ruleFilter) && (
           <button
             onClick={() => { setSeverity("all"); setEpisodeFilter(""); setRuleFilter(""); }}
-            className="text-xs text-muted-foreground hover:text-foreground underline transition-colors"
+            className="text-xs text-muted-foreground hover:text-foreground underline"
           >
             Clear filters
           </button>
         )}
-
         <span className="ml-auto text-xs text-muted-foreground tabular-nums">
           {filtered.length} result{filtered.length !== 1 ? "s" : ""}
         </span>
       </div>
 
-      {/* Table */}
+      {/* Violations table */}
       {loading ? (
         <p className="text-sm text-muted-foreground py-10 text-center">Loading…</p>
       ) : filtered.length === 0 ? (
@@ -167,31 +300,21 @@ export default function ViolationsPage() {
             <tbody>
               {filtered.map((log) => (
                 <tr key={log.id} className="border-b last:border-0 hover:bg-muted/20">
-                  <td className="px-4 py-3 text-xs text-muted-foreground whitespace-nowrap">
-                    {fmt(log.created_at)}
-                  </td>
-                  <td className="px-4 py-3 font-mono text-xs text-muted-foreground">
-                    {log.episode_id.slice(0, 8)}
-                  </td>
+                  <td className="px-4 py-3 text-xs text-muted-foreground whitespace-nowrap">{fmt(log.created_at)}</td>
+                  <td className="px-4 py-3 font-mono text-xs text-muted-foreground">{log.episode_id.slice(0, 8)}</td>
                   <td className="px-4 py-3 text-xs">{log.step_index ?? "—"}</td>
                   <td className="px-4 py-3 font-mono text-xs">{log.action_type ?? "—"}</td>
                   <td className="px-4 py-3 font-mono text-xs">{log.rule_id ?? "—"}</td>
                   <td className="px-4 py-3">
                     {log.severity ? (
-                      <span
-                        className={`px-2 py-0.5 rounded text-xs font-medium ${
-                          SEVERITY_COLORS[log.severity.toLowerCase()] ?? "bg-gray-100 text-gray-500"
-                        }`}
-                      >
+                      <span className={`px-2 py-0.5 rounded text-xs font-medium ${SEVERITY_COLORS[log.severity.toLowerCase()] ?? "bg-gray-100 text-gray-500"}`}>
                         {log.severity}
                       </span>
                     ) : (
                       <span className="text-xs text-muted-foreground">—</span>
                     )}
                   </td>
-                  <td className="px-4 py-3 text-xs max-w-xs truncate" title={log.message ?? undefined}>
-                    {log.message ?? "—"}
-                  </td>
+                  <td className="px-4 py-3 text-xs max-w-xs truncate" title={log.message ?? undefined}>{log.message ?? "—"}</td>
                 </tr>
               ))}
             </tbody>

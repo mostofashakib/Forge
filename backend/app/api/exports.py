@@ -61,6 +61,7 @@ _ALLOWED_FILENAMES = frozenset([
     "sft_pairs.jsonl",
     "preference_pairs.jsonl",
     "grpo_rollouts.parquet",
+    "failure_dataset.jsonl",
 ])
 
 
