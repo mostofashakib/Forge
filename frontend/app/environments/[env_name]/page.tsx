@@ -10,6 +10,10 @@ interface SandboxInfo {
   ttl_days: number;
 }
 
+interface EvalConfig {
+  policy_requirements: string;
+  reward_requirements: string;
+}
 
 const STATUS_COLORS: Record<string, string> = {
   running:  "bg-green-100 text-green-700",
@@ -19,30 +23,6 @@ const STATUS_COLORS: Record<string, string> = {
   error:    "bg-red-100 text-red-600",
 };
 
-const ACTIONS = [
-  {
-    id: "agent",
-    label: "Agent Runs",
-    description: "Run agents inside the sandbox, record trajectories, and collect data for policy training",
-    href: (env: string) => `/environments/${env}/agent`,
-    requiresSandbox: true,
-  },
-  {
-    id: "violations",
-    label: "Violations",
-    description: "Policy audit log — view rule violations and severity across all episodes",
-    href: (env: string) => `/environments/${env}/violations`,
-    requiresSandbox: false,
-  },
-  {
-    id: "dashboard",
-    label: "Dashboard",
-    description: "Aggregated metrics across all agent runs — pass rate, reward distribution, and step efficiency",
-    href: (env: string) => `/environments/${env}/dashboard`,
-    requiresSandbox: false,
-  },
-];
-
 export default async function EnvironmentHubPage({
   params,
 }: {
@@ -50,13 +30,72 @@ export default async function EnvironmentHubPage({
 }) {
   const { env_name } = await params;
 
-  const sandbox = await fetch(`${API_BASE}/api/sandbox/${env_name}`, { cache: "no-store" })
-    .then((r) => (r.ok ? (r.json() as Promise<SandboxInfo>) : null))
-    .catch(() => null);
+  const [sandbox, evalConfig] = await Promise.all([
+    fetch(`${API_BASE}/api/sandbox/${env_name}`, { cache: "no-store" })
+      .then((r) => (r.ok ? (r.json() as Promise<SandboxInfo>) : null))
+      .catch(() => null),
+    fetch(`${API_BASE}/api/sandbox/${env_name}/evaluate`, { cache: "no-store" })
+      .then((r) => (r.ok ? (r.json() as Promise<EvalConfig>) : null))
+      .catch(() => null),
+  ]);
 
   const hasSandbox = sandbox !== null;
   const isLive = sandbox?.status === "running";
   const inProgress = sandbox?.status === "queued" || sandbox?.status === "building";
+
+  const policyConfigured = !!(evalConfig?.policy_requirements?.trim());
+  const rewardConfigured = !!(evalConfig?.reward_requirements?.trim());
+
+  const ACTIONS = [
+    {
+      id: "agent",
+      label: "Agent Runs",
+      description: "Run agents inside the sandbox, record trajectories, and collect data for policy training",
+      href: `/environments/${env_name}/agent`,
+      requiresSandbox: true,
+      badge: null as string | null,
+    },
+    {
+      id: "dashboard",
+      label: "Dashboard",
+      description: "Aggregated metrics across all agent runs — pass rate, reward distribution, and step efficiency",
+      href: `/environments/${env_name}/dashboard`,
+      requiresSandbox: false,
+      badge: null,
+    },
+    {
+      id: "policy",
+      label: "Policy",
+      description: "Define rules that constrain agent behaviour — what the agent must not do",
+      href: `/environments/${env_name}/policy`,
+      requiresSandbox: false,
+      badge: policyConfigured ? "Custom" : "Default",
+    },
+    {
+      id: "reward",
+      label: "Reward",
+      description: "Define how success is measured — what a good trajectory looks like",
+      href: `/environments/${env_name}/reward`,
+      requiresSandbox: false,
+      badge: rewardConfigured ? "Custom" : "Default",
+    },
+    {
+      id: "evaluate",
+      label: "Evaluate",
+      description: "Re-run policy and reward evaluation against recent agent trajectories",
+      href: `/environments/${env_name}/evaluate`,
+      requiresSandbox: false,
+      badge: null,
+    },
+    {
+      id: "violations",
+      label: "Violations",
+      description: "Policy audit log — view rule violations and severity across all episodes",
+      href: `/environments/${env_name}/violations`,
+      requiresSandbox: false,
+      badge: null,
+    },
+  ];
 
   return (
     <div className="space-y-8">
@@ -120,7 +159,9 @@ export default async function EnvironmentHubPage({
       {inProgress && (
         <div className="border rounded-lg p-5 flex items-center justify-between">
           <p className="text-sm font-medium">
-            {sandbox!.status === "queued" ? "Waiting for worker…" : "Generating environment — agents running in parallel"}
+            {sandbox!.status === "queued"
+              ? "Waiting for worker…"
+              : "Generating environment — agents running in parallel"}
           </p>
           <Link
             href={`/environments/${env_name}/progress`}
@@ -131,7 +172,7 @@ export default async function EnvironmentHubPage({
         </div>
       )}
 
-      {/* Action cards */}
+      {/* Controls grid */}
       <div>
         <h2 className="text-xs font-medium text-muted-foreground uppercase tracking-widest mb-3">
           Controls
@@ -139,11 +180,10 @@ export default async function EnvironmentHubPage({
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {ACTIONS.map((action) => {
             const disabled = action.requiresSandbox && !isLive;
-            const href = action.href(env_name);
 
             const card = (
               <div
-                className={`border rounded-lg p-4 h-full transition-colors ${
+                className={`border rounded-lg p-4 transition-colors ${
                   disabled
                     ? "opacity-50 cursor-not-allowed"
                     : "hover:border-primary/40 hover:bg-muted/30 cursor-pointer"
@@ -160,6 +200,11 @@ export default async function EnvironmentHubPage({
                   {action.requiresSandbox && hasSandbox && !isLive && (
                     <span className="text-xs text-muted-foreground">{sandbox!.status}</span>
                   )}
+                  {action.badge && (
+                    <span className={`text-xs font-medium ${action.badge === "Custom" ? "text-green-600" : "text-muted-foreground"}`}>
+                      {action.badge === "Custom" ? "● Custom" : "Default"}
+                    </span>
+                  )}
                 </div>
                 <p className="text-xs text-muted-foreground">{action.description}</p>
               </div>
@@ -168,7 +213,7 @@ export default async function EnvironmentHubPage({
             return disabled ? (
               <div key={action.id}>{card}</div>
             ) : (
-              <Link key={action.id} href={href}>
+              <Link key={action.id} href={action.href}>
                 {card}
               </Link>
             );
