@@ -140,28 +140,76 @@ function QuickCreateModal({
 // Option card
 // ---------------------------------------------------------------------------
 
+const CARD_THEMES: Record<string, { iconBg: string; iconText: string; accent: string }> = {
+  cli:     { iconBg: "bg-emerald-50",  iconText: "text-emerald-600",  accent: "group-hover:border-emerald-300/60" },
+  browser: { iconBg: "bg-blue-50",     iconText: "text-blue-600",     accent: "group-hover:border-blue-300/60" },
+  custom:  { iconBg: "bg-violet-50",   iconText: "text-violet-600",   accent: "group-hover:border-violet-300/60" },
+  premade: { iconBg: "bg-orange-50",   iconText: "text-orange-500",   accent: "group-hover:border-orange-300/60" },
+};
+
+const CARD_ICONS: Record<string, React.ReactNode> = {
+  cli: (
+    <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="1.5" y="2.5" width="15" height="13" rx="2" />
+      <path d="M5 7l3 2.5L5 12" />
+      <path d="M10 12h3" />
+    </svg>
+  ),
+  browser: (
+    <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="9" cy="9" r="7" />
+      <path d="M2 9h14" />
+      <path d="M9 2c-2 2-3 4-3 7s1 5 3 7" />
+      <path d="M9 2c2 2 3 4 3 7s-1 5-3 7" />
+    </svg>
+  ),
+  custom: (
+    <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M9 1.5C9.4 4.8 10.8 6.2 14 6.5C10.8 6.8 9.4 8.2 9 11.5C8.6 8.2 7.2 6.8 4 6.5C7.2 6.2 8.6 4.8 9 1.5Z" fill="currentColor" stroke="none" />
+      <path d="M13.5 12C13.7 13.1 14.3 13.7 15.5 14C14.3 14.3 13.7 14.9 13.5 16C13.3 14.9 12.7 14.3 11.5 14C12.7 13.7 13.3 13.1 13.5 12Z" fill="currentColor" stroke="none" opacity="0.7" />
+    </svg>
+  ),
+  premade: (
+    <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="2" y="2" width="6" height="6" rx="1.5" fill="currentColor" opacity="0.2" />
+      <rect x="10" y="2" width="6" height="6" rx="1.5" fill="currentColor" />
+      <rect x="2" y="10" width="6" height="6" rx="1.5" fill="currentColor" />
+      <rect x="10" y="10" width="6" height="6" rx="1.5" fill="currentColor" opacity="0.2" />
+    </svg>
+  ),
+};
+
 function OptionCard({
   icon,
   label,
   description,
+  themeKey,
   onClick,
   href,
 }: {
   icon: string;
   label: string;
   description: string;
+  themeKey: string;
   onClick?: () => void;
   href?: string;
 }) {
+  const theme = CARD_THEMES[themeKey] ?? CARD_THEMES.custom;
+
   const inner = (
-    <div className="h-full border-2 border-border rounded-2xl p-7 flex flex-col gap-4 hover:border-foreground/30 hover:bg-muted/10 transition-all group cursor-pointer">
-      <span className="text-3xl font-mono leading-none">{icon}</span>
-      <div>
-        <div className="font-semibold text-base mb-1.5">{label}</div>
-        <p className="text-sm text-muted-foreground leading-relaxed">{description}</p>
+    <div className={`group h-full card-shadow hover:card-shadow-hover hover:-translate-y-0.5 bg-card border border-border/60 rounded-2xl p-6 flex flex-col gap-4 transition-all duration-200 cursor-pointer ${theme.accent}`}>
+      <div className={`w-10 h-10 rounded-xl ${theme.iconBg} ${theme.iconText} flex items-center justify-center shrink-0`}>
+        {CARD_ICONS[themeKey]}
       </div>
-      <span className="mt-auto text-xs text-muted-foreground group-hover:text-foreground transition-colors">
-        Select →
+      <div className="flex-1">
+        <div className="font-semibold text-sm mb-1.5">{label}</div>
+        <p className="text-xs text-muted-foreground leading-relaxed">{description}</p>
+      </div>
+      <span className="text-xs text-muted-foreground/60 group-hover:text-muted-foreground flex items-center gap-1 transition-colors">
+        Select
+        <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M2 5h6M5.5 2.5L8 5l-2.5 2.5" />
+        </svg>
       </span>
     </div>
   );
@@ -250,26 +298,30 @@ export default function NewEnvironmentPage() {
         {/* 2×2 grid */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <OptionCard
-            icon=">_"
-            label="CLI"
+            icon="cli"
+            label="CLI Terminal"
+            themeKey="cli"
             description="Full Ubuntu 22.04 terminal in Docker for shell scripting, package management, and system administration tasks."
             onClick={() => !atLimit && setModal("cli")}
           />
           <OptionCard
-            icon="⬡"
+            icon="browser"
             label="Browser"
+            themeKey="browser"
             description="Real Chromium browser in Docker for web automation, multi-step form filling, scraping, and navigation tasks."
             onClick={() => !atLimit && setModal("browser")}
           />
           <OptionCard
-            icon="◈"
+            icon="custom"
             label="Custom Environment"
+            themeKey="custom"
             description="Describe any real-world application and Forge generates a complete RL environment with policy, reward, and observability."
             href="/environments/new/custom"
           />
           <OptionCard
-            icon="▤"
+            icon="premade"
             label="Premade"
+            themeKey="premade"
             description="Ready-to-use environments pre-configured with realistic apps, policies, and reward functions. Gmail and Slack available now."
             href="/environments/new/premade"
           />
