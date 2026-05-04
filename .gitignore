@@ -58,3 +58,6 @@ __pycache__/
 generated_envs/*
 !generated_envs/.gitkeep
 forge.db
+
+# IDE
+.vscode/
