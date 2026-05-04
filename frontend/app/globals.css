@@ -40,33 +40,33 @@
 }
 
 :root {
-  --background: oklch(0.97 0.004 265);
-  --foreground: oklch(0.13 0.015 265);
+  --background: oklch(0.98 0.005 255);
+  --foreground: oklch(0.12 0.018 265);
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.13 0.015 265);
+  --card-foreground: oklch(0.12 0.018 265);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.13 0.015 265);
-  --primary: oklch(0.44 0.20 265);
-  --primary-foreground: oklch(0.98 0 0);
-  --secondary: oklch(0.93 0.006 265);
-  --secondary-foreground: oklch(0.25 0.015 265);
-  --muted: oklch(0.93 0.006 265);
-  --muted-foreground: oklch(0.48 0.012 265);
-  --accent: oklch(0.93 0.006 265);
-  --accent-foreground: oklch(0.13 0.015 265);
+  --popover-foreground: oklch(0.12 0.018 265);
+  --primary: oklch(0.48 0.24 265);
+  --primary-foreground: oklch(0.99 0 0);
+  --secondary: oklch(0.94 0.008 265);
+  --secondary-foreground: oklch(0.22 0.018 265);
+  --muted: oklch(0.94 0.008 265);
+  --muted-foreground: oklch(0.46 0.014 265);
+  --accent: oklch(0.94 0.008 265);
+  --accent-foreground: oklch(0.12 0.018 265);
   --destructive: oklch(0.55 0.22 25);
-  --border: oklch(0.87 0.007 265);
-  --input: oklch(0.93 0.006 265);
-  --ring: oklch(0.44 0.20 265);
-  --radius: 0.5rem;
-  --sidebar: oklch(0.95 0.005 265);
-  --sidebar-foreground: oklch(0.13 0.015 265);
-  --sidebar-primary: oklch(0.44 0.20 265);
-  --sidebar-primary-foreground: oklch(0.98 0 0);
-  --sidebar-accent: oklch(0.93 0.006 265);
-  --sidebar-accent-foreground: oklch(0.13 0.015 265);
-  --sidebar-border: oklch(0.87 0.007 265);
-  --sidebar-ring: oklch(0.44 0.20 265);
+  --border: oklch(0.88 0.010 265);
+  --input: oklch(0.94 0.008 265);
+  --ring: oklch(0.48 0.24 265);
+  --radius: 0.625rem;
+  --sidebar: oklch(0.96 0.006 265);
+  --sidebar-foreground: oklch(0.12 0.018 265);
+  --sidebar-primary: oklch(0.48 0.24 265);
+  --sidebar-primary-foreground: oklch(0.99 0 0);
+  --sidebar-accent: oklch(0.94 0.008 265);
+  --sidebar-accent-foreground: oklch(0.12 0.018 265);
+  --sidebar-border: oklch(0.88 0.010 265);
+  --sidebar-ring: oklch(0.48 0.24 265);
 }
 
 @keyframes progress-slide {
@@ -84,5 +84,65 @@
   }
   body {
     @apply bg-background text-foreground antialiased;
+    background-image:
+      radial-gradient(ellipse 80% 50% at 50% -20%, oklch(0.90 0.06 265 / 0.12), transparent);
+    background-attachment: fixed;
+  }
+}
+
+@layer utilities {
+  .card-shadow {
+    box-shadow:
+      0 1px 2px oklch(0.12 0.018 265 / 0.04),
+      0 2px 8px oklch(0.12 0.018 265 / 0.06);
+  }
+  .card-shadow-hover {
+    box-shadow:
+      0 2px 4px oklch(0.12 0.018 265 / 0.06),
+      0 8px 24px oklch(0.12 0.018 265 / 0.10);
+  }
+  .card-shadow-md {
+    box-shadow:
+      0 1px 3px oklch(0.12 0.018 265 / 0.05),
+      0 4px 16px oklch(0.12 0.018 265 / 0.08);
+  }
+
+  /* Reusable section label */
+  .section-label {
+    @apply text-xs font-medium text-muted-foreground uppercase tracking-widest;
+  }
+
+  /* KPI / stat card */
+  .kpi-card {
+    @apply border border-border/60 rounded-xl p-5 bg-card;
+    box-shadow:
+      0 1px 2px oklch(0.12 0.018 265 / 0.04),
+      0 2px 8px oklch(0.12 0.018 265 / 0.06);
+  }
+
+  /* Forge form input — use on <input> and <textarea> to avoid repetition */
+  .forge-input {
+    @apply w-full border border-border rounded-lg px-3 py-2.5 text-sm bg-background text-foreground
+           placeholder:text-muted-foreground/60
+           transition-shadow duration-150
+           focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40
+           disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  /* Inset panel (used inside cards, config boxes) */
+  .inset-panel {
+    @apply bg-muted/30 border border-border/50 rounded-lg;
+  }
+
+  /* Thin scrollbar */
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: oklch(0.88 0.010 265) transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar { width: 5px; height: 5px; }
+  .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: oklch(0.88 0.010 265);
+    border-radius: 99px;
   }
 }
