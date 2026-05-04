@@ -26,46 +26,79 @@ interface AgentEpisode {
 }
 
 const STATUS_BADGE: Record<string, string> = {
-  pending:   "bg-yellow-100 text-yellow-700",
-  running:   "bg-blue-100 text-blue-700",
-  completed: "bg-green-100 text-green-700",
-  failed:    "bg-red-100 text-red-600",
-  stopped:   "bg-gray-100 text-gray-500",
+  pending:   "bg-amber-50 text-amber-700 ring-1 ring-amber-200",
+  running:   "bg-blue-50 text-blue-700 ring-1 ring-blue-200",
+  completed: "bg-green-50 text-green-700 ring-1 ring-green-200",
+  failed:    "bg-red-50 text-red-600 ring-1 ring-red-200",
+  stopped:   "bg-slate-50 text-slate-500 ring-1 ring-slate-200",
 };
 
-function StatCard({ label, value, sub }: { label: string; value: string; sub?: string }) {
+// ---------------------------------------------------------------------------
+// KPI card
+// ---------------------------------------------------------------------------
+
+function KpiCard({
+  label,
+  value,
+  sub,
+  icon,
+  accent,
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+  icon: React.ReactNode;
+  accent: string;
+}) {
   return (
-    <div className="border rounded-lg p-5">
-      <p className="text-xs text-muted-foreground uppercase tracking-widest mb-1">{label}</p>
-      <p className="text-2xl font-semibold">{value}</p>
-      {sub && <p className="text-xs text-muted-foreground mt-0.5">{sub}</p>}
+    <div className="kpi-card flex gap-4 items-start">
+      <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${accent}`}>
+        {icon}
+      </div>
+      <div className="min-w-0">
+        <p className="text-xs text-muted-foreground font-medium mb-0.5">{label}</p>
+        <p className="text-2xl font-semibold tracking-tight leading-none">{value}</p>
+        {sub && <p className="text-xs text-muted-foreground mt-1">{sub}</p>}
+      </div>
     </div>
   );
 }
+
+// ---------------------------------------------------------------------------
+// Termination bar
+// ---------------------------------------------------------------------------
+
+const TERM_COLORS: Record<string, string> = {
+  success:       "bg-green-500",
+  max_steps:     "bg-amber-400",
+  diverged:      "bg-orange-400",
+  dead_end:      "bg-slate-300",
+  loop_detected: "bg-red-400",
+  stuck_failing: "bg-red-300",
+};
 
 function TermBar({ reason, count, total }: { reason: string; count: number; total: number }) {
   const pct = total > 0 ? (count / total) * 100 : 0;
-  const colors: Record<string, string> = {
-    success:       "bg-green-500",
-    max_steps:     "bg-yellow-400",
-    diverged:      "bg-orange-400",
-    dead_end:      "bg-gray-300",
-    loop_detected: "bg-red-400",
-    stuck_failing: "bg-red-300",
-  };
   return (
     <div className="flex items-center gap-3">
-      <span className="text-xs text-muted-foreground w-28 shrink-0 truncate" title={reason}>{reason}</span>
-      <div className="flex-1 h-2 bg-muted rounded overflow-hidden">
+      <span className="text-xs text-muted-foreground w-28 shrink-0 truncate" title={reason}>
+        {reason.replace(/_/g, " ")}
+      </span>
+      <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
         <div
-          className={`h-full rounded ${colors[reason] ?? "bg-blue-400"}`}
+          className={`h-full rounded-full ${TERM_COLORS[reason] ?? "bg-primary/60"} transition-all duration-500`}
           style={{ width: `${pct}%` }}
         />
       </div>
-      <span className="text-xs font-medium w-10 text-right">{count}</span>
+      <span className="text-xs font-medium tabular-nums w-8 text-right text-muted-foreground">{count}</span>
+      <span className="text-xs text-muted-foreground/50 w-9 text-right tabular-nums">{pct.toFixed(0)}%</span>
     </div>
   );
 }
+
+// ---------------------------------------------------------------------------
+// Page
+// ---------------------------------------------------------------------------
 
 export default function DashboardPage() {
   const params = useParams<{ env_name: string }>();
@@ -106,7 +139,6 @@ export default function DashboardPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  // Auto-refresh while any run is still in progress.
   useEffect(() => {
     const hasActive = runs.some((r) => r.status === "running" || r.status === "pending");
     if (!hasActive) return;
@@ -142,139 +174,174 @@ export default function DashboardPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Dashboard</h1>
-          <p className="text-sm text-muted-foreground mt-1">{envName}</p>
+          <p className="text-sm text-muted-foreground mt-0.5">{envName}</p>
         </div>
         <div className="flex items-center gap-3">
           <button
             onClick={() => load(true)}
             disabled={refreshing}
-            className="text-sm text-muted-foreground hover:text-foreground transition-colors disabled:opacity-40"
-            title="Refresh"
+            className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors disabled:opacity-40"
           >
-            {refreshing ? "Refreshing…" : "↻ Refresh"}
+            <svg
+              width="13" height="13" viewBox="0 0 13 13" fill="none"
+              stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"
+              className={refreshing ? "animate-spin" : ""}
+            >
+              <path d="M11 6.5A4.5 4.5 0 1 1 9.5 3L11 1.5" />
+              <path d="M11 1.5v3h-3" />
+            </svg>
+            {refreshing ? "Refreshing…" : "Refresh"}
           </button>
-          <Link
-            href={`/environments/${envName}`}
-            className="text-sm text-muted-foreground hover:text-foreground transition-colors"
-          >
+          <Link href={`/environments/${envName}`} className="text-sm text-muted-foreground hover:text-foreground transition-colors">
             ← {envName}
           </Link>
         </div>
       </div>
 
       {loading ? (
-        <p className="text-sm text-muted-foreground">Loading metrics…</p>
+        <div className="py-20 flex flex-col items-center gap-3">
+          <div className="w-5 h-5 rounded-full border-2 border-primary/30 border-t-primary animate-spin" />
+          <p className="text-sm text-muted-foreground">Loading metrics…</p>
+        </div>
       ) : totalRuns === 0 ? (
-        <div className="border rounded-lg p-10 text-center text-sm text-muted-foreground">
-          No agent runs yet.{" "}
-          <Link href={`/environments/${envName}/agent`} className="text-primary hover:underline">
+        <div className="border border-dashed border-border rounded-xl p-14 text-center">
+          <p className="text-sm font-medium text-foreground mb-1">No agent runs yet</p>
+          <p className="text-xs text-muted-foreground mb-5">Run agents to start collecting metrics.</p>
+          <Link
+            href={`/environments/${envName}/agent`}
+            className="text-sm text-primary font-medium hover:underline"
+          >
             Launch a run →
           </Link>
         </div>
       ) : (
         <>
-          {/* KPI row */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-            <StatCard
-              label="Agent Runs"
-              value={String(totalRuns)}
-              sub={`${totalEps} total episodes`}
-            />
-            <StatCard
-              label="Pass Rate"
-              value={`${passRate.toFixed(1)}%`}
-              sub={`${successCount} / ${completed.length} completed`}
-            />
-            <StatCard
-              label="Avg Reward"
-              value={avgReward.toFixed(3)}
-              sub="across completed episodes"
-            />
-            <StatCard
-              label="Avg Steps"
-              value={avgSteps.toFixed(1)}
-              sub="per completed episode"
-            />
-          </div>
-
-          {/* Termination breakdown */}
-          {Object.keys(termCounts).length > 0 && (
-            <div>
-              <h2 className="text-xs font-medium text-muted-foreground uppercase tracking-widest mb-3">
-                Termination Reasons
-              </h2>
-              <div className="border rounded-lg p-4 space-y-3">
-                {Object.entries(termCounts)
-                  .sort((a, b) => b[1] - a[1])
-                  .map(([reason, count]) => (
-                    <TermBar key={reason} reason={reason} count={count} total={completed.length} />
-                  ))}
-              </div>
+          {/* KPI + Termination side-by-side */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            {/* KPI cards — left 8 cols */}
+            <div className="lg:col-span-8 grid grid-cols-2 gap-4">
+              <KpiCard
+                label="Agent Runs"
+                value={String(totalRuns)}
+                sub={`${totalEps} total episodes`}
+                accent="bg-indigo-50 text-indigo-600"
+                icon={
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                    <polygon points="4,2.5 13.5,8 4,13.5" fill="currentColor" />
+                  </svg>
+                }
+              />
+              <KpiCard
+                label="Pass Rate"
+                value={`${passRate.toFixed(1)}%`}
+                sub={`${successCount} / ${completed.length} completed`}
+                accent="bg-green-50 text-green-600"
+                icon={
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="8" cy="8" r="6" />
+                    <path d="M5.5 8.5l2 2 3.5-4" strokeWidth="1.4" />
+                  </svg>
+                }
+              />
+              <KpiCard
+                label="Avg Reward"
+                value={avgReward.toFixed(3)}
+                sub="per completed episode"
+                accent="bg-amber-50 text-amber-600"
+                icon={
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M8 1.5l1.7 3.4 3.8.55-2.75 2.68.65 3.77L8 9.85l-3.4 1.99.65-3.77L2.5 5.45l3.8-.55L8 1.5Z" />
+                  </svg>
+                }
+              />
+              <KpiCard
+                label="Avg Steps"
+                value={avgSteps.toFixed(1)}
+                sub="per completed episode"
+                accent="bg-violet-50 text-violet-600"
+                icon={
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                    <rect x="1.5" y="9.5" width="3.5" height="5" rx="0.5" fill="currentColor" />
+                    <rect x="6.25" y="6.5" width="3.5" height="8" rx="0.5" fill="currentColor" />
+                    <rect x="11" y="3.5" width="3.5" height="11" rx="0.5" fill="currentColor" />
+                  </svg>
+                }
+              />
             </div>
-          )}
+
+            {/* Termination breakdown — right 4 cols */}
+            {Object.keys(termCounts).length > 0 ? (
+              <div className="lg:col-span-4 border border-border/60 rounded-xl p-5 bg-card card-shadow flex flex-col">
+                <h2 className="section-label mb-4">Termination Reasons</h2>
+                <div className="space-y-3.5 flex-1">
+                  {Object.entries(termCounts)
+                    .sort((a, b) => b[1] - a[1])
+                    .map(([reason, count]) => (
+                      <TermBar key={reason} reason={reason} count={count} total={completed.length} />
+                    ))}
+                </div>
+              </div>
+            ) : (
+              <div className="lg:col-span-4 border border-border/40 rounded-xl p-5 bg-card/50 flex items-center justify-center">
+                <p className="text-xs text-muted-foreground">No completed episodes yet</p>
+              </div>
+            )}
+          </div>
 
           {/* Recent runs */}
           <div>
             <div className="flex items-center justify-between mb-3">
-              <h2 className="text-xs font-medium text-muted-foreground uppercase tracking-widest">
-                Recent Runs
-              </h2>
-              <Link
-                href={`/environments/${envName}/agent`}
-                className="text-xs text-primary hover:underline"
-              >
+              <h2 className="section-label">Recent Runs</h2>
+              <Link href={`/environments/${envName}/agent`} className="text-xs text-primary hover:underline font-medium">
                 View all →
               </Link>
             </div>
-            <div className="border rounded-lg overflow-hidden">
+            <div className="border border-border/60 rounded-xl overflow-hidden bg-card card-shadow">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="border-b bg-muted/40 text-xs text-muted-foreground">
-                    <th className="px-4 py-2.5 text-left">Objective</th>
-                    <th className="px-4 py-2.5 text-left">Status</th>
-                    <th className="px-4 py-2.5 text-left">Progress</th>
-                    <th className="px-4 py-2.5 text-left">Started</th>
+                  <tr className="border-b border-border/60 bg-muted/30">
+                    <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground">Objective</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground">Status</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground">Progress</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground">Started</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {recentRuns.map((run) => (
+                  {recentRuns.map((run, i) => (
                     <tr
                       key={run.id}
-                      className="border-b last:border-0 hover:bg-muted/20 cursor-pointer"
-                      onClick={() =>
-                        (window.location.href = `/environments/${envName}/agent`)
-                      }
+                      className={`border-b border-border/40 last:border-0 hover:bg-muted/20 cursor-pointer transition-colors ${i % 2 === 0 ? "" : "bg-muted/10"}`}
+                      onClick={() => (window.location.href = `/environments/${envName}/agent`)}
                     >
                       <td className="px-4 py-3 max-w-xs">
-                        <p className="truncate text-sm">{run.objective}</p>
-                        <p className="text-xs text-muted-foreground font-mono mt-0.5">{run.id.slice(0, 8)}</p>
+                        <p className="truncate text-sm font-medium">{run.objective}</p>
+                        <p className="text-xs text-muted-foreground/60 font-mono mt-0.5">{run.id.slice(0, 8)}</p>
                       </td>
                       <td className="px-4 py-3">
-                        <span
-                          className={`px-2 py-0.5 rounded text-xs font-medium ${
-                            STATUS_BADGE[run.status] ?? "bg-gray-100 text-gray-500"
-                          }`}
-                        >
+                        <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_BADGE[run.status] ?? STATUS_BADGE.stopped}`}>
                           {run.status}
                         </span>
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-2">
-                          <div className="w-20 h-1.5 bg-muted rounded overflow-hidden">
+                          <div className="w-20 h-1.5 bg-muted rounded-full overflow-hidden">
                             <div
-                              className="h-full bg-blue-500 rounded"
+                              className="h-full bg-primary/70 rounded-full transition-all"
                               style={{
                                 width: `${run.num_episodes > 0 ? (run.episodes_completed / run.num_episodes) * 100 : 0}%`,
                               }}
                             />
                           </div>
-                          <span className="text-xs text-muted-foreground">
+                          <span className="text-xs text-muted-foreground tabular-nums">
                             {run.episodes_completed}/{run.num_episodes}
                           </span>
                         </div>
                       </td>
                       <td className="px-4 py-3 text-xs text-muted-foreground whitespace-nowrap">
-                        {new Date(run.created_at).toLocaleString()}
+                        {new Date(run.created_at).toLocaleString("en-US", {
+                          month: "short", day: "numeric",
+                          hour: "2-digit", minute: "2-digit",
+                        })}
                       </td>
                     </tr>
                   ))}
