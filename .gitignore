@@ -48,6 +48,9 @@ __pycache__/
 # git worktrees
 .worktrees/
 
+# claude code
+.claude/
+
 # visual companion brainstorm sessions
 .superpowers/
 
