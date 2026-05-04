@@ -5,7 +5,7 @@ from forge.envgen.agents.base import EnvGenAgent
 from forge.envgen.artifact_bus import ArtifactBus
 from forge.envgen.context import EnvGenContext
 from forge.envgen.schemas import AppPlan, GeneratedFile
-from forge.extraction.llm_client import AnthropicClient, LLMClient
+from forge.extraction.llm_client import LLMClient, get_client
 
 # ---------------------------------------------------------------------------
 # Plan prompt
@@ -226,12 +226,10 @@ class AppGeneratorAgent(EnvGenAgent):
     produces: str = "app_code"
 
     def __init__(self, client: LLMClient | None = None) -> None:
-        # Sonnet for complex files (main.py, ui.html)
-        self._client = client or AnthropicClient(max_tokens=8192)
-        # Haiku for simple template-like files (requirements.txt, Dockerfile, etc.)
-        self._fast_client = AnthropicClient(
-            model="claude-haiku-4-5-20251001", max_tokens=2048
-        )
+        # Capable tier for complex files (main.py, ui.html)
+        self._client = client or get_client(max_tokens=8192, capable=True)
+        # Fast tier for simple template-like files (requirements.txt, Dockerfile, etc.)
+        self._fast_client = get_client(max_tokens=2048)
 
     # ------------------------------------------------------------------
     # Internal helpers

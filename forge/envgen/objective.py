@@ -4,7 +4,7 @@ import json
 
 from pydantic import BaseModel
 
-from forge.extraction.llm_client import AnthropicClient, LLMClient
+from forge.extraction.llm_client import LLMClient, get_client
 
 
 class _ScoreSchema(BaseModel):
@@ -29,9 +29,7 @@ class ObjectiveScorer:
     """LLM-based scorer that evaluates how well a state achieves an objective."""
 
     def __init__(self, client: LLMClient | None = None) -> None:
-        self._client = client or AnthropicClient(
-            model="claude-haiku-4-5-20251001", max_tokens=256
-        )
+        self._client = client or get_client(max_tokens=256)
 
     def score(self, state: dict, objective: str) -> float:
         """Return 0.0–1.0 representing how well state achieves objective.
@@ -54,8 +52,7 @@ class ObjectiveScorer:
     def score_with_image(self, screenshot_b64: str, url: str, objective: str) -> float:
         """Score a browser state using a screenshot. Falls back to 0.5 on error."""
         try:
-            from forge.extraction.llm_client import AnthropicClient
-            client = AnthropicClient(model="claude-haiku-4-5-20251001", max_tokens=256)
+            client = get_client(max_tokens=256)
             user = f"Objective: {objective}\n\nCurrent URL: {url}\n\nSee the screenshot for the current browser state."
             result = client.extract_with_image(
                 system=_SCORER_SYSTEM, user=user,

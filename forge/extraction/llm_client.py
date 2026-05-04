@@ -1,4 +1,6 @@
 from __future__ import annotations
+import json
+import os
 from typing import Any, Protocol, runtime_checkable
 from pydantic import BaseModel
 
@@ -7,6 +9,10 @@ from pydantic import BaseModel
 class LLMClient(Protocol):
     def extract(self, system: str, user: str, schema: type[BaseModel]) -> BaseModel: ...
 
+
+# ---------------------------------------------------------------------------
+# Schema helpers
+# ---------------------------------------------------------------------------
 
 def _inline_refs(obj: Any, defs: dict[str, Any]) -> Any:
     """Recursively resolve $ref pointers so the schema has no $defs."""
@@ -29,21 +35,24 @@ def _flat_schema(schema_cls: type[BaseModel]) -> dict[str, Any]:
     return flat
 
 
+# ---------------------------------------------------------------------------
+# Anthropic
+# ---------------------------------------------------------------------------
+
 class AnthropicClient:
-    def __init__(self, model: str = "claude-sonnet-4-6", max_retries: int = 3, max_tokens: int = 8192) -> None:
+    def __init__(
+        self,
+        model: str = "claude-haiku-4-5-20251001",
+        max_retries: int = 3,
+        max_tokens: int = 8192,
+    ) -> None:
         import anthropic
         self._client = anthropic.Anthropic()
         self._model = model
         self._max_retries = max_retries
         self._max_tokens = max_tokens
 
-    def _stream_extract(
-        self,
-        system: str,
-        messages: list,
-        schema: type[BaseModel],
-    ) -> BaseModel:
-        """Shared extraction logic for both text-only and vision requests."""
+    def _stream_extract(self, system: str, messages: list, schema: type[BaseModel]) -> BaseModel:
         input_schema = _flat_schema(schema)
         last_error: Exception | None = None
         budget = self._max_tokens
@@ -51,9 +60,7 @@ class AnthropicClient:
 
         while attempts_remaining > 0:
             extra_headers = (
-                {"anthropic-beta": "output-128k-2025-02-19"}
-                if budget > 8192
-                else {}
+                {"anthropic-beta": "output-128k-2025-02-19"} if budget > 8192 else {}
             )
             try:
                 extra = f"\n\nPrevious attempt failed: {last_error}" if last_error else ""
@@ -82,9 +89,7 @@ class AnthropicClient:
                             f"schema={schema.__name__}"
                         )
                     budget = min(budget * 2, 128_000)
-                    last_error = ValueError(
-                        f"stop_reason=max_tokens; budget doubled to {budget}"
-                    )
+                    last_error = ValueError(f"stop_reason=max_tokens; budget doubled to {budget}")
                     continue
 
                 tool_block = next(b for b in response.content if b.type == "tool_use")
@@ -118,23 +123,146 @@ class AnthropicClient:
         schema: type[BaseModel],
         media_type: str = "image/png",
     ) -> BaseModel:
-        """Like extract() but includes a base64-encoded image in the user message."""
         messages = [{
             "role": "user",
             "content": [
                 {
                     "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": media_type,
-                        "data": image_b64,
-                    },
+                    "source": {"type": "base64", "media_type": media_type, "data": image_b64},
                 },
                 {"type": "text", "text": user},
             ],
         }]
         return self._stream_extract(system=system, messages=messages, schema=schema)
 
+
+# ---------------------------------------------------------------------------
+# Ollama
+# ---------------------------------------------------------------------------
+
+class OllamaClient:
+    """LLM client backed by a local Ollama instance.
+
+    Uses Ollama's structured-output mode (``format=<json_schema>``) so the
+    model is constrained to emit valid JSON matching the Pydantic schema.
+    Works with any model served by Ollama; defaults to ``gemma4:26b``.
+
+    Environment variables (all optional):
+        OLLAMA_BASE_URL   Base URL of the Ollama server (default: http://localhost:11434)
+    """
+
+    def __init__(
+        self,
+        model: str = "gemma4:26b",
+        max_retries: int = 3,
+        max_tokens: int = 8192,
+        base_url: str = "http://localhost:11434",
+    ) -> None:
+        self._model = model
+        self._max_retries = max_retries
+        self._max_tokens = max_tokens
+        self._base_url = base_url
+
+    def extract(self, system: str, user: str, schema: type[BaseModel]) -> BaseModel:
+        import ollama  # lazy import — only required when Ollama is the active provider
+
+        json_schema = _flat_schema(schema)
+        last_error: Exception | None = None
+        client = ollama.Client(host=self._base_url)
+
+        for _ in range(self._max_retries):
+            try:
+                extra = f"\n\nPrevious attempt failed: {last_error}" if last_error else ""
+                response = client.chat(
+                    model=self._model,
+                    messages=[
+                        {"role": "system", "content": system + extra},
+                        {"role": "user", "content": user},
+                    ],
+                    format=json_schema,
+                    options={"num_predict": self._max_tokens},
+                )
+                data = json.loads(response.message.content)
+                return schema.model_validate(data)
+            except Exception as e:
+                last_error = e
+
+        raise RuntimeError(
+            f"Ollama extraction failed after {self._max_retries} attempts "
+            f"(model={self._model}): {last_error}"
+        ) from last_error
+
+
+# ---------------------------------------------------------------------------
+# Factory
+# ---------------------------------------------------------------------------
+
+_ANTHROPIC_DEFAULT  = "claude-haiku-4-5-20251001"
+_ANTHROPIC_CAPABLE  = "claude-sonnet-4-6"
+_OLLAMA_DEFAULT     = "gemma4:26b"
+
+
+def get_client(
+    max_tokens: int = 8192,
+    max_retries: int = 3,
+    *,
+    capable: bool = False,
+    model: str | None = None,
+    provider: str | None = None,
+) -> LLMClient:
+    """Return an LLM client configured from environment variables.
+
+    Provider selection (in priority order):
+        1. ``provider`` argument
+        2. ``FORGE_LLM_PROVIDER`` env var  (default: ``anthropic``)
+
+    Model selection (in priority order):
+        1. ``model`` argument
+        2. ``FORGE_LLM_MODEL_CAPABLE`` / ``FORGE_LLM_MODEL`` env vars
+        3. Built-in defaults per provider
+
+    Args:
+        max_tokens:  Token budget passed to the underlying client.
+        max_retries: Number of retry attempts on failure.
+        capable:     When True, prefer the more powerful model tier
+                     (e.g. Sonnet over Haiku for Anthropic). Ignored for
+                     Ollama because a single model serves all tiers.
+        model:       Explicit model override; skips env-var lookup.
+        provider:    Explicit provider override; skips env-var lookup.
+
+    Supported providers:
+        anthropic — Anthropic API (requires ``ANTHROPIC_API_KEY``)
+        ollama    — Local Ollama server (requires ``ollama`` package)
+    """
+    p = (provider or os.environ.get("FORGE_LLM_PROVIDER", "anthropic")).lower()
+
+    if model is None:
+        if capable:
+            model = os.environ.get(
+                "FORGE_LLM_MODEL_CAPABLE",
+                _ANTHROPIC_CAPABLE if p == "anthropic" else _OLLAMA_DEFAULT,
+            )
+        else:
+            model = os.environ.get(
+                "FORGE_LLM_MODEL",
+                _ANTHROPIC_DEFAULT if p == "anthropic" else _OLLAMA_DEFAULT,
+            )
+
+    if p == "anthropic":
+        return AnthropicClient(model=model, max_tokens=max_tokens, max_retries=max_retries)
+
+    if p == "ollama":
+        base_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+        return OllamaClient(
+            model=model, max_tokens=max_tokens, max_retries=max_retries, base_url=base_url
+        )
+
+    raise ValueError(f"Unknown LLM provider: {p!r}. Valid: anthropic, ollama")
+
+
+# ---------------------------------------------------------------------------
+# Test doubles
+# ---------------------------------------------------------------------------
 
 class MockLLMClient:
     """Deterministic mock for testing. Keyed by schema class name."""
@@ -150,7 +278,7 @@ class MockLLMClient:
 
 
 class RetryMockLLMClient:
-    """Fails `fail_times` times then succeeds. For testing retry logic."""
+    """Fails ``fail_times`` times then succeeds. For testing retry logic."""
 
     def __init__(self, fail_times: int, then_return: dict[str, BaseModel]) -> None:
         self._fail_times = fail_times
