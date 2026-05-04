@@ -1,60 +1,203 @@
 "use client";
+
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { API_BASE } from "@/lib/api";
-import { Toast } from "@/components/Toast";
 
 const ENV_LIMIT = 10;
 
-type EnvType = "general" | "cli" | "browser";
+// ---------------------------------------------------------------------------
+// Quick-create modal (Browser / CLI)
+// ---------------------------------------------------------------------------
 
-const ENV_TYPES: { id: EnvType; label: string; subtitle: string; description: string }[] = [
-  {
-    id: "browser",
-    label: "Browser",
-    subtitle: "Chromium + KasmVNC",
-    description: "A full Chromium browser running in Docker, accessible via a web UI. Ideal for web automation and browser-based RL tasks.",
-  },
-  {
-    id: "cli",
-    label: "CLI",
-    subtitle: "Ubuntu 22.04 terminal",
-    description: "A Linux VM in Docker with a real bash terminal. Run scripts, install packages, and interact via the integrated terminal.",
-  },
-  {
-    id: "general",
-    label: "General Purpose",
-    subtitle: "High fidelity app",
-    description: "Describe a real-world application and our agents will generate a full-stack environment with observability, policy rules, and reward functions.",
-  },
-];
-
-interface FormState {
-  env_name: string;
-  env_type: EnvType;
-  description: string;
-  domain: string;
-  policy_requirements: string;
-  reward_requirements: string;
-  ttl_days: number;
+interface QuickCreateDef {
+  label: string;
+  envType: string;
+  icon: string;
+  placeholder: string;
 }
 
-export default function NewEnvironmentPage() {
+function QuickCreateModal({
+  def,
+  atLimit,
+  activeCount,
+  onClose,
+}: {
+  def: QuickCreateDef;
+  atLimit: boolean;
+  activeCount: number | null;
+  onClose: () => void;
+}) {
   const router = useRouter();
-  const [showToast, setShowToast] = useState(false);
+  const [envName, setEnvName] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [error, setError] = useState("");
+
+  async function handleCreate(e: React.FormEvent) {
+    e.preventDefault();
+    if (!envName.trim()) return;
+    setSubmitting(true);
+    setError("");
+    try {
+      const res = await fetch(`${API_BASE}/api/sandbox/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          env_name: envName.trim(),
+          env_type: def.envType,
+          ttl_days: 30,
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        const detail = body.detail;
+        setError(
+          Array.isArray(detail)
+            ? detail.map((e: { msg?: string }) => e.msg ?? String(e)).join("; ")
+            : (detail ?? `Request failed (${res.status})`)
+        );
+        return;
+      }
+      const data = await res.json();
+      router.push(`/environments/${data.env_name}/progress`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Network error — is the backend running?");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="bg-background border border-border rounded-2xl shadow-xl w-full max-w-sm">
+        <div className="flex items-center justify-between px-6 pt-6 pb-4 border-b border-border">
+          <div className="flex items-center gap-2.5">
+            <span className="font-mono text-lg">{def.icon}</span>
+            <h2 className="font-semibold text-sm">{def.label}</h2>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-muted-foreground hover:text-foreground text-lg leading-none"
+          >
+            ✕
+          </button>
+        </div>
+
+        <form onSubmit={handleCreate} className="px-6 py-5 space-y-4">
+          {atLimit && (
+            <div className="border border-red-200 bg-red-50 rounded-lg p-3">
+              <p className="text-xs font-semibold text-red-700">Environment limit reached</p>
+              <p className="text-xs text-red-600 mt-0.5">
+                {activeCount} / {ENV_LIMIT} used.{" "}
+                <Link href="/environments" className="underline font-medium">Delete one</Link> to continue.
+              </p>
+            </div>
+          )}
+
+          <div>
+            <label className="block text-sm font-medium mb-1.5">Environment name</label>
+            <input
+              className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-foreground/20 disabled:opacity-50"
+              placeholder={def.placeholder}
+              value={envName}
+              onChange={(e) => setEnvName(e.target.value.replace(/\s+/g, "_"))}
+              disabled={atLimit || submitting}
+              required
+              autoFocus
+            />
+          </div>
+
+          {error && <p className="text-sm text-red-600">{error}</p>}
+
+          <div className="flex items-center gap-3 pt-1">
+            <button
+              type="submit"
+              disabled={submitting || atLimit || !envName.trim()}
+              className="px-5 py-2 text-sm font-medium text-white bg-foreground rounded-lg hover:opacity-90 disabled:opacity-50 transition-opacity"
+            >
+              {submitting ? "Creating…" : "Create environment →"}
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="text-sm text-muted-foreground hover:text-foreground"
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Option card
+// ---------------------------------------------------------------------------
+
+function OptionCard({
+  icon,
+  label,
+  description,
+  onClick,
+  href,
+}: {
+  icon: string;
+  label: string;
+  description: string;
+  onClick?: () => void;
+  href?: string;
+}) {
+  const inner = (
+    <div className="h-full border-2 border-border rounded-2xl p-7 flex flex-col gap-4 hover:border-foreground/30 hover:bg-muted/10 transition-all group cursor-pointer">
+      <span className="text-3xl font-mono leading-none">{icon}</span>
+      <div>
+        <div className="font-semibold text-base mb-1.5">{label}</div>
+        <p className="text-sm text-muted-foreground leading-relaxed">{description}</p>
+      </div>
+      <span className="mt-auto text-xs text-muted-foreground group-hover:text-foreground transition-colors">
+        Select →
+      </span>
+    </div>
+  );
+
+  if (href) {
+    return <Link href={href} className="block h-full">{inner}</Link>;
+  }
+  return (
+    <button type="button" onClick={onClick} className="text-left w-full h-full">
+      {inner}
+    </button>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Page
+// ---------------------------------------------------------------------------
+
+const QUICK_CREATE: Record<string, QuickCreateDef> = {
+  cli: {
+    label: "Terminal / CLI",
+    envType: "cli",
+    icon: ">_",
+    placeholder: "e.g. cli_training_env",
+  },
+  browser: {
+    label: "Browser",
+    envType: "browser",
+    icon: "⬡",
+    placeholder: "e.g. browser_training_env",
+  },
+};
+
+export default function NewEnvironmentPage() {
+  const [modal, setModal] = useState<"cli" | "browser" | null>(null);
   const [activeCount, setActiveCount] = useState<number | null>(null);
-  const [form, setForm] = useState<FormState>({
-    env_name: "",
-    env_type: "general",
-    description: "",
-    domain: "",
-    policy_requirements: "",
-    reward_requirements: "",
-    ttl_days: 30,
-  });
 
   useEffect(() => {
     fetch(`${API_BASE}/api/sandbox/`, { cache: "no-store" })
@@ -65,55 +208,31 @@ export default function NewEnvironmentPage() {
 
   const atLimit = activeCount !== null && activeCount >= ENV_LIMIT;
 
-  function update<K extends keyof FormState>(field: K, value: FormState[K]) {
-    setForm((prev) => ({ ...prev, [field]: value }));
-  }
-
-  async function handleSubmit(e: { preventDefault(): void }) {
-    e.preventDefault();
-    setSubmitError(null);
-    setSubmitting(true);
-    try {
-      const res = await fetch(`${API_BASE}/api/sandbox/`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(form),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        const detail = err.detail;
-        // Pydantic validation errors return detail as an array of {msg, loc, ...}
-        const msg = Array.isArray(detail)
-          ? detail.map((e: { msg?: string }) => e.msg ?? String(e)).join("; ")
-          : (detail ?? `Request failed (${res.status})`);
-        setSubmitError(msg);
-        return;
-      }
-      const data = await res.json();
-      setShowToast(true);
-      setTimeout(() => router.push(`/environments/${data.env_name}/progress`), 1500);
-    } catch (err) {
-      setSubmitError(err instanceof Error ? err.message : "Network error — is the backend running?");
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  const isGeneral = form.env_type === "general";
-
   return (
     <>
-      {showToast && (
-        <Toast message="Environment added to queue" onDismiss={() => setShowToast(false)} />
+      {modal && (
+        <QuickCreateModal
+          def={QUICK_CREATE[modal]}
+          atLimit={atLimit}
+          activeCount={activeCount}
+          onClose={() => setModal(null)}
+        />
       )}
-      <form onSubmit={handleSubmit} className="max-w-lg mx-auto p-8 space-y-6">
-        <div className="flex items-center justify-between">
-          <h1 className="text-2xl font-bold">New Environment</h1>
+
+      <div className="max-w-3xl mx-auto space-y-8">
+        {/* Header */}
+        <div className="flex items-start justify-between">
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight">New Environment</h1>
+            <p className="text-sm text-muted-foreground mt-1.5">
+              Choose an environment type to get started.
+            </p>
+          </div>
           {activeCount !== null && (
-            <span className={`text-xs px-2 py-1 rounded-full font-medium ${
-              atLimit ? "bg-red-100 text-red-700" : "bg-gray-100 text-gray-600"
+            <span className={`text-xs px-2.5 py-1 rounded-full font-medium shrink-0 ${
+              atLimit ? "bg-red-100 text-red-700" : "bg-muted text-muted-foreground"
             }`}>
-              {activeCount} / {ENV_LIMIT} environments
+              {activeCount} / {ENV_LIMIT}
             </span>
           )}
         </div>
@@ -123,146 +242,39 @@ export default function NewEnvironmentPage() {
             <p className="text-sm font-semibold text-red-700">Environment limit reached</p>
             <p className="text-xs text-red-600 mt-1">
               You have {activeCount} active environments (max {ENV_LIMIT}).{" "}
-              <Link href="/environments" className="underline font-medium">
-                Delete an environment
-              </Link>{" "}
-              to create a new one.
+              <Link href="/environments" className="underline font-medium">Delete one</Link> to continue.
             </p>
           </div>
         )}
 
-        {/* Environment type selector */}
-        <div>
-          <label className="block text-sm font-medium mb-2">Environment Type</label>
-          <div className="grid grid-cols-3 gap-3">
-            {ENV_TYPES.map((t) => (
-              <button
-                key={t.id}
-                type="button"
-                disabled={atLimit}
-                onClick={() => update("env_type", t.id)}
-                className={`text-left p-3 rounded-lg border-2 transition-colors disabled:opacity-50 ${
-                  form.env_type === t.id
-                    ? "border-blue-500 bg-blue-50"
-                    : "border-gray-200 hover:border-gray-300"
-                }`}
-              >
-                <div className="font-medium text-sm">{t.label}</div>
-                <div className="text-xs text-gray-500 mt-0.5">{t.subtitle}</div>
-              </button>
-            ))}
-          </div>
-          <p className="text-xs text-gray-500 mt-2">
-            {ENV_TYPES.find((t) => t.id === form.env_type)?.description}
-          </p>
-        </div>
-
-        {/* Environment name */}
-        <div>
-          <label className="block text-sm font-medium mb-1">Environment Name</label>
-          <input
-            className="w-full border rounded px-3 py-2 text-sm disabled:opacity-50"
-            placeholder="e.g. my_env"
-            value={form.env_name}
-            onChange={(e) => update("env_name", e.target.value.replace(/\s+/g, "_"))}
-            disabled={atLimit}
-            required
+        {/* 2×2 grid */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <OptionCard
+            icon=">_"
+            label="CLI"
+            description="Full Ubuntu 22.04 terminal in Docker for shell scripting, package management, and system administration tasks."
+            onClick={() => !atLimit && setModal("cli")}
+          />
+          <OptionCard
+            icon="⬡"
+            label="Browser"
+            description="Real Chromium browser in Docker for web automation, multi-step form filling, scraping, and navigation tasks."
+            onClick={() => !atLimit && setModal("browser")}
+          />
+          <OptionCard
+            icon="◈"
+            label="Custom Environment"
+            description="Describe any real-world application and Forge generates a complete RL environment with policy, reward, and observability."
+            href="/environments/new/custom"
+          />
+          <OptionCard
+            icon="▤"
+            label="Premade"
+            description="Ready-to-use environments pre-configured with realistic apps, policies, and reward functions. Gmail and Slack available now."
+            href="/environments/new/premade"
           />
         </div>
-
-        {/* Description — General Purpose only */}
-        {isGeneral && (
-          <div>
-            <label className="block text-sm font-medium mb-1">Description</label>
-            <textarea
-              className="w-full border rounded px-3 py-2 text-sm h-28 disabled:opacity-50"
-              placeholder="Describe the real-world application you want to simulate..."
-              value={form.description}
-              onChange={(e) => update("description", e.target.value)}
-              disabled={atLimit}
-              required
-            />
-          </div>
-        )}
-
-        {/* Shared fields */}
-        <div>
-          <label className="block text-sm font-medium mb-1">
-            Domain <span className="font-normal text-gray-400">(optional)</span>
-          </label>
-          <input
-            className="w-full border rounded px-3 py-2 text-sm disabled:opacity-50"
-            placeholder="e.g. support, email, crm — defaults to localhost"
-            value={form.domain}
-            onChange={(e) => update("domain", e.target.value)}
-            disabled={atLimit}
-          />
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium mb-1">
-            Policy Requirements <span className="font-normal text-gray-400">(optional)</span>
-          </label>
-          <textarea
-            className="w-full border rounded px-3 py-2 text-sm h-20 disabled:opacity-50"
-            placeholder="e.g. The agent cannot delete records."
-            value={form.policy_requirements}
-            onChange={(e) => update("policy_requirements", e.target.value)}
-            disabled={atLimit}
-          />
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium mb-1">
-            Reward Requirements <span className="font-normal text-gray-400">(optional)</span>
-          </label>
-          <textarea
-            className="w-full border rounded px-3 py-2 text-sm h-20 disabled:opacity-50"
-            placeholder="e.g. Reward speed. Penalize errors heavily."
-            value={form.reward_requirements}
-            onChange={(e) => update("reward_requirements", e.target.value)}
-            disabled={atLimit}
-          />
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium mb-1">TTL (days)</label>
-          <input
-            type="number"
-            min={1}
-            max={365}
-            className="w-full border rounded px-3 py-2 text-sm disabled:opacity-50"
-            value={form.ttl_days}
-            onChange={(e) => update("ttl_days", parseInt(e.target.value, 10))}
-            disabled={atLimit}
-          />
-        </div>
-
-        {submitError && (
-          <div className="border border-red-200 bg-red-50 rounded-lg p-3">
-            <p className="text-sm text-red-600">{submitError}</p>
-            {submitError.includes("limit") && (
-              <Link href="/environments" className="text-sm text-red-700 underline font-medium mt-1 block">
-                Go to environments →
-              </Link>
-            )}
-          </div>
-        )}
-
-        <button
-          type="submit"
-          disabled={submitting || atLimit}
-          className="w-full py-2 bg-blue-600 text-white rounded hover:bg-blue-700 font-medium disabled:opacity-60 disabled:cursor-not-allowed"
-        >
-          {submitting
-            ? "Submitting…"
-            : form.env_type === "cli"
-            ? "Create CLI Environment"
-            : form.env_type === "browser"
-            ? "Create Browser Environment"
-            : "Generate Environment"}
-        </button>
-      </form>
+      </div>
     </>
   );
 }

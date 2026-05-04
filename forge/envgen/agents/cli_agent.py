@@ -54,6 +54,21 @@ class RandomCliAgent:
         return self._rng.choice(self._COMMANDS)
 
 
+class ReplayCliAgent:
+    """Replays a pre-recorded command sequence from a synthetic trajectory manifest."""
+
+    def __init__(self, commands: list[str]) -> None:
+        self._commands = commands
+        self._step = 0
+
+    def act(self, state: dict, objective: str) -> str:
+        if self._step < len(self._commands):
+            cmd = self._commands[self._step]
+            self._step += 1
+            return cmd
+        return "echo 'trajectory complete'"
+
+
 def make_cli_agent(agent_id: str, seed: int | None = None):
     if agent_id == "random":
         return RandomCliAgent(seed=seed)
