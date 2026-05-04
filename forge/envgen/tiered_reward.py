@@ -255,11 +255,18 @@ class TieredRewardConfig:
     # count alone. 0.5 means "at most 2× penalty for inefficiency".
     min_efficiency: float = 0.5
     # Above this fraction of failed assertions, a "partial" trajectory falls
-    # through to the LLM grader instead of being scored from pass-rate alone.
-    # (i.e. only invoke the LLM when `pass_rate == 0`.)
+    # through to the grader instead of being scored from pass-rate alone.
+    # (i.e. only invoke the grader when `pass_rate == 0`.)
     llm_grade_when_zero_pass: bool = True
     # Per-assertion exec timeout, seconds.
     assertion_timeout: float = 15.0
+    # Scoring methods for partial credit when no assertions pass.
+    # Multiple methods are averaged together.
+    # "llm"        — LLM-as-judge (Claude Haiku, default)
+    # "embeddings" — cosine similarity via sentence-transformers
+    # "rouge"      — ROUGE-L lexical overlap
+    # "bleu"       — BLEU n-gram precision
+    partial_credit_methods: list[str] = field(default_factory=lambda: ["llm"])
 
 
 class TieredRewardEngine:
@@ -356,14 +363,18 @@ class TieredRewardEngine:
             partial_credit = 0.0
             reasoning = f"{passed}/{total} end-state assertions passed."
         else:
-            # No tests passed — defer to the LLM grader.
-            partial_credit = self._grade_partial(objective, spec, history) \
-                if self._cfg.llm_grade_when_zero_pass else 0.0
+            # No tests passed — defer to the configured grader(s).
+            if self._cfg.llm_grade_when_zero_pass:
+                partial_credit = self._grade_partial_combined(objective, spec, history)
+                method_label = "+".join(self._cfg.partial_credit_methods)
+            else:
+                partial_credit = 0.0
+                method_label = "none"
             base = partial_credit
             reasoning = (
-                f"No assertions passed; LLM partial credit = {partial_credit:.2f}."
+                f"No assertions passed; {method_label} partial credit = {partial_credit:.2f}."
                 if test_results
-                else f"No assertions generated; LLM partial credit = {partial_credit:.2f}."
+                else f"No assertions generated; {method_label} partial credit = {partial_credit:.2f}."
             )
 
         final = max(0.0, min(1.0, efficiency * base))
@@ -431,6 +442,43 @@ class TieredRewardEngine:
                     stderr=str(exc)[:500],
                 ))
         return results
+
+    def _trajectory_to_text(self, history: Sequence[dict]) -> str:
+        """Compact text representation of a trajectory for ML scoring."""
+        lines = []
+        for step in history[-30:]:
+            cmd = (step.get("command") or "")[:120]
+            stdout = (step.get("stdout") or "").strip().split("\n", 1)[0][:160]
+            lines.append(f"$ {cmd}\n{stdout}")
+        return "\n".join(lines)
+
+    def _grade_partial_combined(
+        self, objective: str, spec: EndStateSpec, history: Sequence[dict]
+    ) -> float:
+        """Average partial credit across all configured methods.
+
+        LLM returns 0.0–0.4 directly. ML methods return 0.0–1.0 similarity
+        which is scaled to 0.0–0.4 to match the same range.
+        """
+        from forge.envgen.ml_reward import build_scorer
+        scores: list[float] = []
+        reference = f"{objective}\n{spec.summary}"
+        candidate = self._trajectory_to_text(history)
+
+        for method in self._cfg.partial_credit_methods:
+            if method == "llm":
+                scores.append(self._grade_partial(objective, spec, history))
+            else:
+                scorer = build_scorer(method)
+                if scorer is None:
+                    continue
+                try:
+                    raw = scorer.score(reference, candidate)
+                    scores.append(max(0.0, min(0.4, raw * 0.4)))
+                except Exception as exc:
+                    logger.warning("[tiered-reward] ML partial credit (%s) failed: %s", method, exc)
+
+        return sum(scores) / len(scores) if scores else 0.0
 
     def _grade_partial(
         self, objective: str, spec: EndStateSpec, history: Sequence[dict]

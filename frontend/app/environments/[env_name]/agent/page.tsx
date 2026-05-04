@@ -143,12 +143,16 @@ function NewRunModal({
   envName,
   onClose,
   onCreated,
+  defaultObjective,
+  replayMode,
 }: {
   envName: string;
   onClose: () => void;
   onCreated: () => void;
+  defaultObjective?: string;
+  replayMode?: boolean;
 }) {
-  const [objective, setObjective] = useState("");
+  const [objective, setObjective] = useState(defaultObjective ?? "");
   const [agentId, setAgentId] = useState("llm");
   const [numEpisodes, setNumEpisodes] = useState(5);
   const [maxSteps, setMaxSteps] = useState(50);
@@ -199,6 +203,12 @@ function NewRunModal({
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
+          {replayMode && (
+            <div className="flex items-start gap-2 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2.5 text-sm text-blue-800">
+              <span className="shrink-0">●</span>
+              <span>Replay mode — the agent will follow the imported synthetic trajectory instead of using the LLM to pick actions.</span>
+            </div>
+          )}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Objective</label>
             <textarea
@@ -843,6 +853,89 @@ function DataCollectionPanel({
 }
 
 // ---------------------------------------------------------------------------
+// Synthetic epoch card
+// ---------------------------------------------------------------------------
+
+interface ReplayStatus {
+  active: boolean;
+  objective?: string;
+  num_episodes?: number;
+  episodes?: { index: number; num_commands: number }[];
+}
+
+function SyntheticEpochCard({
+  status,
+  envName,
+  onLaunch,
+  launching,
+}: {
+  status: ReplayStatus;
+  envName: string;
+  onLaunch: (seedStart: number, numEpisodes: number) => void;
+  launching: string | null;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const total = status.num_episodes ?? 0;
+
+  return (
+    <div className="border border-indigo-200 rounded-xl overflow-hidden">
+      {/* Epoch header */}
+      <div
+        className="bg-indigo-50 px-5 py-4 flex items-center justify-between gap-4 cursor-pointer hover:bg-indigo-100/60 transition-colors"
+        onClick={() => setExpanded((v) => !v)}
+      >
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 mb-0.5">
+            <span className="text-sm font-semibold text-indigo-900">Synthetic Epoch</span>
+            <span className="px-1.5 py-0.5 bg-indigo-100 text-indigo-600 text-xs rounded font-medium">
+              {total} episode{total !== 1 ? "s" : ""}
+            </span>
+          </div>
+          <p className="text-xs text-indigo-600 font-mono truncate">{status.objective}</p>
+        </div>
+        <div className="flex items-center gap-3 shrink-0" onClick={(e) => e.stopPropagation()}>
+          <button
+            onClick={() => onLaunch(0, total)}
+            disabled={launching !== null}
+            className="px-3 py-1.5 text-xs font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+          >
+            {launching === `0-${total}` ? "Launching…" : `Run all ${total} episodes →`}
+          </button>
+          <Link
+            href={`/environments/${envName}/synthetic`}
+            className="text-xs text-indigo-500 hover:text-indigo-700 underline"
+          >
+            Manage
+          </Link>
+          <span className="text-xs text-indigo-400">{expanded ? "▲" : "▼"}</span>
+        </div>
+      </div>
+
+      {/* Episodes list */}
+      {expanded && (
+        <div className="divide-y divide-indigo-100">
+          {status.episodes?.map((ep) => (
+            <div key={ep.index} className="flex items-center justify-between px-5 py-3 hover:bg-indigo-50/40">
+              <div className="flex items-center gap-3">
+                <span className="text-sm font-medium text-gray-700">Episode {ep.index + 1}</span>
+                <span className="text-xs text-gray-400">{ep.num_commands} steps in trajectory</span>
+              </div>
+              <button
+                onClick={() => onLaunch(ep.index, 1)}
+                disabled={launching !== null}
+                className="px-3 py-1.5 text-xs font-medium text-indigo-700 border border-indigo-300 rounded-lg hover:bg-indigo-50 disabled:opacity-50 transition-colors"
+              >
+                {launching === `${ep.index}-1` ? "Launching…" : "Run episode →"}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
 
@@ -853,19 +946,61 @@ export default function AgentRunsPage() {
   const [runs, setRuns] = useState<AgentRun[]>([]);
   const [loading, setLoading] = useState(true);
   const [showNew, setShowNew] = useState(false);
+  const [newRunObjective, setNewRunObjective] = useState<string | undefined>(undefined);
   const [selection, setSelection] = useState<Record<string, string[]>>({});
+  const [replayStatus, setReplayStatus] = useState<ReplayStatus | null>(null);
+
+  const [launching, setLaunching] = useState<string | null>(null);
 
   const loadRuns = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/sandbox/${envName}/agent-runs`);
-      const data = await res.json();
-      setRuns(data);
+      const [runsRes, synthRes] = await Promise.all([
+        fetch(`${API_BASE}/api/sandbox/${envName}/agent-runs`),
+        fetch(`${API_BASE}/api/sandbox/${envName}/synthetic`, { cache: "no-store" }),
+      ]);
+      setRuns(await runsRes.json());
+      if (synthRes.ok) setReplayStatus(await synthRes.json());
     } finally {
       setLoading(false);
     }
   }, [envName]);
 
   useEffect(() => { loadRuns(); }, [loadRuns]);
+
+  async function launchReplayRun(seedStart: number, numEpisodes: number) {
+    if (!replayStatus?.objective) return;
+    const key = `${seedStart}-${numEpisodes}`;
+    setLaunching(key);
+    try {
+      const res = await fetch(`${API_BASE}/api/sandbox/${envName}/agent-runs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          agent_id: "llm",
+          objective: replayStatus.objective,
+          num_episodes: numEpisodes,
+          max_steps: 50,
+          divergence_threshold: 0.2,
+          dead_end_patience: 5,
+          success_threshold: 0.9,
+          seed_start: seedStart,
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        alert(body.detail ?? `HTTP ${res.status}`);
+        return;
+      }
+      await loadRuns();
+    } finally {
+      setLaunching(null);
+    }
+  }
+
+  function openNewRun(prefillObjective?: string) {
+    setNewRunObjective(prefillObjective);
+    setShowNew(true);
+  }
 
   function handleSelectionChange(runId: string, episodeIds: string[]) {
     setSelection(prev => ({ ...prev, [runId]: episodeIds }));
@@ -888,7 +1023,7 @@ export default function AgentRunsPage() {
           <h1 className="text-sm font-semibold text-gray-900">Agent Runs</h1>
         </div>
         <button
-          onClick={() => setShowNew(true)}
+          onClick={() => openNewRun()}
           className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700"
         >
           + New Run
@@ -904,14 +1039,26 @@ export default function AgentRunsPage() {
       </div>
 
       {/* Content */}
-      <div className="max-w-5xl mx-auto px-6 py-6">
+      <div className="max-w-5xl mx-auto px-6 py-6 space-y-6">
+
+        {/* Synthetic epoch */}
+        {replayStatus?.active && replayStatus.episodes && replayStatus.episodes.length > 0 && (
+          <SyntheticEpochCard
+            status={replayStatus}
+            envName={envName}
+            onLaunch={launchReplayRun}
+            launching={launching}
+          />
+        )}
+
+        {/* Runs list */}
         {loading ? (
           <div className="text-sm text-gray-400 py-10 text-center">Loading runs…</div>
         ) : runs.length === 0 ? (
-          <div className="text-center py-20">
+          <div className="text-center py-16">
             <p className="text-gray-500 mb-4">No agent runs yet.</p>
             <button
-              onClick={() => setShowNew(true)}
+              onClick={() => openNewRun()}
               className="px-5 py-2.5 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700"
             >
               Launch your first run
@@ -935,6 +1082,8 @@ export default function AgentRunsPage() {
           envName={envName}
           onClose={() => setShowNew(false)}
           onCreated={loadRuns}
+          defaultObjective={newRunObjective}
+          replayMode={replayStatus?.active && newRunObjective === replayStatus?.objective}
         />
       )}
 

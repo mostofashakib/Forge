@@ -151,6 +151,27 @@ def build_sandbox_task(
                 sb.image_tag = image_tag
                 db.commit()
 
+    async def _build_premade() -> None:
+        template = env_type[len("premade:"):]
+        publish({"log": f"[forge] setting up premade '{template}' environment…"})
+        _set_status("building")
+        project_root = Path(__file__).parent.parent.parent.parent
+        premade_dir = project_root / "docker" / "premade" / template
+        if not premade_dir.exists():
+            raise FileNotFoundError(f"Premade template '{template}' not found at {premade_dir}")
+        publish({"log": f"[forge] building Docker image for '{template}'…"})
+        runtime = ContainerRuntime()
+        loop = asyncio.get_running_loop()
+
+        def _docker_ops() -> tuple[str, str, int]:
+            image_tag = runtime.build(env_name, premade_dir)
+            container_id, port = runtime.run(env_name, image_tag)
+            return image_tag, container_id, port
+
+        image_tag, container_id, port = await loop.run_in_executor(None, _docker_ops)
+        _set_running(container_id, port, image_tag)
+        publish({"log": f"[forge] {template} environment ready on port {port} ✓"})
+
     async def _build_cli() -> None:
         publish({"log": f"[forge] setting up CLI environment '{env_name}'…"})
         _set_status("building")
@@ -226,7 +247,10 @@ def build_sandbox_task(
         publish({"log": f"[forge] container running on port {port} ✓"})
         _set_running(container_id, port, image_tag)
 
-    _build_fn = {"cli": _build_cli, "browser": _build_browser}.get(env_type, _orchestrate)
+    if env_type.startswith("premade:"):
+        _build_fn = _build_premade
+    else:
+        _build_fn = {"cli": _build_cli, "browser": _build_browser}.get(env_type, _orchestrate)
 
     try:
         asyncio.run(_build_fn())
@@ -334,7 +358,8 @@ def run_container_episode_task(self, run_id: str, episode_index: int, seed: int)
     try:
         if env_type == "cli":
             from forge.envgen.cli_runner import CliEpisodeRunner, CliEpisodeConfig
-            from forge.envgen.agents.cli_agent import make_cli_agent
+            from forge.envgen.agents.cli_agent import make_cli_agent, ReplayCliAgent
+            from forge.envgen.tiered_reward import TieredRewardEngine, TieredRewardConfig
             cfg = CliEpisodeConfig(
                 container_id=container_id,
                 objective=objective,
@@ -344,8 +369,38 @@ def run_container_episode_task(self, run_id: str, episode_index: int, seed: int)
                 dead_end_patience=dead_end_patience,
                 success_threshold=success_threshold,
             )
-            agent = make_cli_agent(agent_id, seed=seed)
-            result = CliEpisodeRunner(cfg).run_episode(
+            # Load scoring methods from reward_config.json if present.
+            import json as _json
+            reward_cfg_path = envs_root / env_name / "reward_config.json"
+            scoring_methods = ["llm"]
+            if reward_cfg_path.exists():
+                try:
+                    data = _json.loads(reward_cfg_path.read_text())
+                    if "scoring_methods" in data:
+                        scoring_methods = data["scoring_methods"] or ["llm"]
+                    elif "scoring_method" in data:
+                        scoring_methods = [data["scoring_method"]]
+                except Exception:
+                    pass
+            reward_engine = TieredRewardEngine(
+                config=TieredRewardConfig(partial_credit_methods=scoring_methods)
+            )
+            replay_path = envs_root / env_name / "synthetic_replay.json"
+            if replay_path.exists():
+                manifest = _json.loads(replay_path.read_text(encoding="utf-8"))
+                trajectory_episodes = manifest.get("episodes", [])
+                if trajectory_episodes:
+                    ep_commands = trajectory_episodes[seed % len(trajectory_episodes)]
+                    agent = ReplayCliAgent(ep_commands)
+                    logger.info(
+                        "[container-ep] using replay agent seed=%d → trajectory %d (%d commands)",
+                        seed, seed % len(trajectory_episodes), len(ep_commands),
+                    )
+                else:
+                    agent = make_cli_agent(agent_id, seed=seed)
+            else:
+                agent = make_cli_agent(agent_id, seed=seed)
+            result = CliEpisodeRunner(cfg, reward_engine=reward_engine).run_episode(
                 agent, episode_id=episode_id, jsonl_path=jsonl_path
             )
 
@@ -377,7 +432,7 @@ def run_container_episode_task(self, run_id: str, episode_index: int, seed: int)
                 agent, episode_id=episode_id, jsonl_path=jsonl_path
             )
 
-        else:  # general
+        else:  # general / premade (both run FastAPI over HTTP)
             from forge.envgen.episode_runner import ContainerEpisodeRunner, EpisodeConfig
             from forge.envgen.agents.container_agent import make_container_agent
             if container_port is None:
