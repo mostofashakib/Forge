@@ -15,13 +15,228 @@ interface EvalConfig {
   reward_requirements: string;
 }
 
-const STATUS_COLORS: Record<string, string> = {
-  running:  "bg-green-100 text-green-700",
-  building: "bg-blue-100 text-blue-700",
-  queued:   "bg-yellow-100 text-yellow-700",
-  stopped:  "bg-gray-100 text-gray-500",
-  error:    "bg-red-100 text-red-600",
+// ---------------------------------------------------------------------------
+// Status badge
+// ---------------------------------------------------------------------------
+
+const STATUS_STYLES: Record<string, { badge: string; dot?: string }> = {
+  running:  { badge: "bg-green-50 text-green-700 ring-1 ring-green-200",  dot: "bg-green-500" },
+  building: { badge: "bg-blue-50 text-blue-700 ring-1 ring-blue-200",    dot: "bg-blue-500 animate-pulse" },
+  queued:   { badge: "bg-amber-50 text-amber-700 ring-1 ring-amber-200", dot: "bg-amber-400 animate-pulse" },
+  stopped:  { badge: "bg-slate-50 text-slate-500 ring-1 ring-slate-200", dot: "bg-slate-300" },
+  error:    { badge: "bg-red-50 text-red-600 ring-1 ring-red-200",       dot: "bg-red-500" },
 };
+
+function StatusBadge({ status }: { status: string }) {
+  const s = STATUS_STYLES[status] ?? STATUS_STYLES.stopped;
+  return (
+    <span className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full font-medium ${s.badge}`}>
+      {s.dot && <span className={`w-1.5 h-1.5 rounded-full ${s.dot}`} />}
+      {status}
+    </span>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Icons
+// ---------------------------------------------------------------------------
+
+function AgentIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+      <polygon points="4,2.5 13.5,8 4,13.5" fill="currentColor" />
+    </svg>
+  );
+}
+
+function ChartIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+      <rect x="1.5" y="9.5" width="3.5" height="5" rx="0.5" fill="currentColor" />
+      <rect x="6.25" y="6.5" width="3.5" height="8" rx="0.5" fill="currentColor" />
+      <rect x="11" y="3.5" width="3.5" height="11" rx="0.5" fill="currentColor" />
+    </svg>
+  );
+}
+
+function ShieldIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M8 1.5L13.5 3.5V8C13.5 11.5 11 13.5 8 14.5C5 13.5 2.5 11.5 2.5 8V3.5L8 1.5Z" />
+      <path d="M5.5 8.5L7 10l3.5-4" strokeWidth="1.3" />
+    </svg>
+  );
+}
+
+function StarIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M8 1.5l1.7 3.4 3.8.55-2.75 2.68.65 3.77L8 9.85l-3.4 1.99.65-3.77L2.5 5.45l3.8-.55L8 1.5Z" />
+    </svg>
+  );
+}
+
+function CheckIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="8" cy="8" r="6" />
+      <path d="M5.5 8.5l2 2 3.5-4" strokeWidth="1.4" />
+    </svg>
+  );
+}
+
+function AlertIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M8 1.5L14.5 13.5H1.5L8 1.5Z" />
+      <path d="M8 6.5V10" strokeWidth="1.3" />
+      <circle cx="8" cy="11.5" r="0.5" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+function SparkleIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+      <path
+        d="M8 1.5C8.3 3.8 9.7 5.2 12 5.5C9.7 5.8 8.3 7.2 8 9.5C7.7 7.2 6.3 5.8 4 5.5C6.3 5.2 7.7 3.8 8 1.5Z"
+        fill="currentColor"
+      />
+      <path
+        d="M12.5 10C12.7 11.1 13.3 11.8 14.5 12C13.3 12.2 12.7 12.9 12.5 14C12.3 12.9 11.7 12.2 10.5 12C11.7 11.8 12.3 11.1 12.5 10Z"
+        fill="currentColor"
+        opacity="0.7"
+      />
+    </svg>
+  );
+}
+
+function ExportIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M8 2v8M5.5 7.5L8 10l2.5-2.5" />
+      <path d="M2.5 12h11" />
+      <path d="M2.5 12v1.5h11V12" />
+    </svg>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Section + action config
+// ---------------------------------------------------------------------------
+
+type ActionId = "agent" | "dashboard" | "policy" | "reward" | "evaluate" | "violations" | "synthetic" | "export";
+
+const ACTION_ICONS: Record<ActionId, React.ReactNode> = {
+  agent:      <AgentIcon />,
+  dashboard:  <ChartIcon />,
+  policy:     <ShieldIcon />,
+  reward:     <StarIcon />,
+  evaluate:   <CheckIcon />,
+  violations: <AlertIcon />,
+  synthetic:  <SparkleIcon />,
+  export:     <ExportIcon />,
+};
+
+const ICON_THEME: Record<ActionId, { bg: string; color: string }> = {
+  agent:      { bg: "bg-indigo-50",  color: "text-indigo-600" },
+  dashboard:  { bg: "bg-indigo-50",  color: "text-indigo-600" },
+  policy:     { bg: "bg-violet-50",  color: "text-violet-600" },
+  reward:     { bg: "bg-violet-50",  color: "text-violet-600" },
+  evaluate:   { bg: "bg-amber-50",   color: "text-amber-600"  },
+  violations: { bg: "bg-amber-50",   color: "text-amber-600"  },
+  synthetic:  { bg: "bg-emerald-50", color: "text-emerald-600" },
+  export:     { bg: "bg-emerald-50", color: "text-emerald-600" },
+};
+
+interface Section {
+  id: string;
+  label: string;
+  actions: ActionId[];
+}
+
+const SECTIONS: Section[] = [
+  { id: "training",      label: "Training",       actions: ["agent", "dashboard"] },
+  { id: "configuration", label: "Configuration",  actions: ["policy", "reward"] },
+  { id: "analysis",      label: "Analysis",       actions: ["evaluate", "violations"] },
+  { id: "data",          label: "Data",           actions: ["synthetic", "export"] },
+];
+
+interface ActionDef {
+  id: ActionId;
+  label: string;
+  description: string;
+  href: (env: string) => string;
+  requiresSandbox: boolean;
+  badge?: (cfg: { policyConfigured: boolean; rewardConfigured: boolean; isLive: boolean; hasSandbox: boolean; sandbox: SandboxInfo | null }) => string | null;
+}
+
+const ACTIONS: ActionDef[] = [
+  {
+    id: "agent",
+    label: "Agent Runs",
+    description: "Run agents inside the sandbox and record trajectories for policy training.",
+    href: (e) => `/environments/${e}/agent`,
+    requiresSandbox: true,
+  },
+  {
+    id: "dashboard",
+    label: "Dashboard",
+    description: "Pass rate, reward distribution, and step efficiency across all agent runs.",
+    href: (e) => `/environments/${e}/dashboard`,
+    requiresSandbox: false,
+  },
+  {
+    id: "policy",
+    label: "Policy",
+    description: "Define rules that constrain agent behaviour — what the agent must not do.",
+    href: (e) => `/environments/${e}/policy`,
+    requiresSandbox: false,
+    badge: ({ policyConfigured }) => policyConfigured ? "Custom" : "Default",
+  },
+  {
+    id: "reward",
+    label: "Reward",
+    description: "Define how success is measured — what a good trajectory looks like.",
+    href: (e) => `/environments/${e}/reward`,
+    requiresSandbox: false,
+    badge: ({ rewardConfigured }) => rewardConfigured ? "Custom" : "Default",
+  },
+  {
+    id: "evaluate",
+    label: "Evaluate",
+    description: "Re-run policy and reward checks against recent agent trajectories.",
+    href: (e) => `/environments/${e}/evaluate`,
+    requiresSandbox: false,
+  },
+  {
+    id: "violations",
+    label: "Violations",
+    description: "Policy audit log — view rule violations and detect reward hacking.",
+    href: (e) => `/environments/${e}/violations`,
+    requiresSandbox: false,
+  },
+  {
+    id: "synthetic",
+    label: "Synthetic Data",
+    description: "Generate synthetic episodes from a research goal for agent replay.",
+    href: (e) => `/environments/${e}/synthetic`,
+    requiresSandbox: false,
+  },
+  {
+    id: "export",
+    label: "Export Dataset",
+    description: "Package trajectories as SFT pairs, DPO preferences, RL rollouts, and more.",
+    href: (e) => `/environments/${e}/export`,
+    requiresSandbox: false,
+  },
+];
+
+const ACTION_MAP = Object.fromEntries(ACTIONS.map((a) => [a.id, a])) as Record<ActionId, ActionDef>;
+
+// ---------------------------------------------------------------------------
+// Page
+// ---------------------------------------------------------------------------
 
 export default async function EnvironmentHubPage({
   params,
@@ -46,99 +261,35 @@ export default async function EnvironmentHubPage({
   const policyConfigured = !!(evalConfig?.policy_requirements?.trim());
   const rewardConfigured = !!(evalConfig?.reward_requirements?.trim());
 
-  const ACTIONS = [
-    {
-      id: "agent",
-      label: "Agent Runs",
-      description: "Run agents inside the sandbox, record trajectories, and collect data for policy training",
-      href: `/environments/${env_name}/agent`,
-      requiresSandbox: true,
-      badge: null as string | null,
-    },
-    {
-      id: "dashboard",
-      label: "Dashboard",
-      description: "Aggregated metrics across all agent runs — pass rate, reward distribution, and step efficiency",
-      href: `/environments/${env_name}/dashboard`,
-      requiresSandbox: false,
-      badge: null,
-    },
-    {
-      id: "policy",
-      label: "Policy",
-      description: "Define rules that constrain agent behaviour — what the agent must not do",
-      href: `/environments/${env_name}/policy`,
-      requiresSandbox: false,
-      badge: policyConfigured ? "Custom" : "Default",
-    },
-    {
-      id: "reward",
-      label: "Reward",
-      description: "Define how success is measured — what a good trajectory looks like",
-      href: `/environments/${env_name}/reward`,
-      requiresSandbox: false,
-      badge: rewardConfigured ? "Custom" : "Default",
-    },
-    {
-      id: "evaluate",
-      label: "Evaluate",
-      description: "Re-run policy and reward evaluation against recent agent trajectories",
-      href: `/environments/${env_name}/evaluate`,
-      requiresSandbox: false,
-      badge: null,
-    },
-    {
-      id: "synthetic",
-      label: "Synthetic Data",
-      description: "Generate a synthetic epoch — a bundle of episodes each with a trajectory — from a research goal",
-      href: `/environments/${env_name}/synthetic`,
-      requiresSandbox: false,
-      badge: null,
-    },
-    {
-      id: "violations",
-      label: "Violations",
-      description: "Policy audit log — view rule violations, run trajectory analysis, and detect reward hacking",
-      href: `/environments/${env_name}/violations`,
-      requiresSandbox: false,
-      badge: null,
-    },
-    {
-      id: "export",
-      label: "Export Dataset",
-      description: "Export trajectories as SFT pairs, DPO preferences, RL rollouts, and failure datasets for training.",
-      href: `/environments/${env_name}/export`,
-      requiresSandbox: false,
-      badge: null,
-    },
-  ];
+  const badgeCtx = { policyConfigured, rewardConfigured, isLive, hasSandbox, sandbox };
 
   return (
     <div className="space-y-8">
+      {/* ------------------------------------------------------------------ */}
       {/* Header */}
-      <div className="flex items-start justify-between">
-        <div>
-          <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-semibold tracking-tight">{env_name}</h1>
-            {sandbox && (
-              <span
-                className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-                  STATUS_COLORS[sandbox.status] ?? "bg-gray-100 text-gray-500"
-                }`}
-              >
-                {sandbox.status}
-              </span>
-            )}
+      {/* ------------------------------------------------------------------ */}
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex items-center gap-4 min-w-0">
+          <div className="w-11 h-11 rounded-2xl bg-primary/10 flex items-center justify-center shrink-0 ring-1 ring-primary/15">
+            <svg width="18" height="18" viewBox="0 0 14 14" fill="none">
+              <path d="M7 1L13 4V10L7 13L1 10V4L7 1Z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" className="text-primary" />
+              <path d="M7 5L9 6.5V9L7 10.5L5 9V6.5L7 5Z" fill="currentColor" className="text-primary" />
+            </svg>
           </div>
-          <p className="text-sm text-muted-foreground mt-1.5">
-            {hasSandbox
-              ? `Sandbox · TTL ${sandbox!.ttl_days}d · expires ${new Date(
-                  sandbox!.expires_at
-                ).toLocaleDateString()}`
-              : "File-based environment"}
-          </p>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2.5 flex-wrap">
+              <h1 className="text-2xl font-semibold tracking-tight">{env_name}</h1>
+              {sandbox && <StatusBadge status={sandbox.status} />}
+            </div>
+            <p className="text-sm text-muted-foreground mt-0.5">
+              {hasSandbox
+                ? `Sandbox · TTL ${sandbox!.ttl_days}d · expires ${new Date(sandbox!.expires_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`
+                : "File-based environment"}
+            </p>
+          </div>
         </div>
-        <div className="flex items-center gap-3">
+
+        <div className="flex items-center gap-3 shrink-0">
           <SandboxControls
             envName={env_name}
             status={sandbox?.status ?? ""}
@@ -148,18 +299,20 @@ export default async function EnvironmentHubPage({
             href="/environments"
             className="text-sm text-muted-foreground hover:text-foreground transition-colors"
           >
-            ← All environments
+            ← All
           </Link>
         </div>
       </div>
 
-      {/* Ready banner */}
+      {/* ------------------------------------------------------------------ */}
+      {/* Status banners */}
+      {/* ------------------------------------------------------------------ */}
       {isLive && (
-        <div className="border border-green-200 bg-green-50 rounded-lg p-5 flex items-center justify-between">
+        <div className="border border-green-200 bg-green-50/60 rounded-xl p-4 flex items-center justify-between">
           <div>
             <p className="text-sm font-semibold text-green-800">Environment is ready</p>
             <p className="text-xs text-green-700 mt-0.5">
-              Your app is running on port {sandbox!.container_port} and available via the Sandbox below.
+              App running on port {sandbox!.container_port} · available via Sandbox
             </p>
           </div>
           <Link
@@ -171,70 +324,99 @@ export default async function EnvironmentHubPage({
         </div>
       )}
 
-      {/* Build progress */}
       {inProgress && (
-        <div className="border rounded-lg p-5 flex items-center justify-between">
-          <p className="text-sm font-medium">
-            {sandbox!.status === "queued"
-              ? "Waiting for worker…"
-              : "Generating environment — agents running in parallel"}
-          </p>
+        <div className="border border-border/60 rounded-xl p-4 flex items-center justify-between bg-muted/20">
+          <div className="flex items-center gap-3">
+            <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse shrink-0" />
+            <p className="text-sm font-medium">
+              {sandbox!.status === "queued" ? "Waiting for worker…" : "Generating environment — agents running in parallel"}
+            </p>
+          </div>
           <Link
             href={`/environments/${env_name}/progress`}
-            className="text-sm text-primary hover:underline shrink-0 ml-4"
+            className="text-sm text-primary hover:underline shrink-0 ml-4 font-medium"
           >
             View progress →
           </Link>
         </div>
       )}
 
-      {/* Controls grid */}
-      <div>
-        <h2 className="text-xs font-medium text-muted-foreground uppercase tracking-widest mb-3">
-          Controls
-        </h2>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {ACTIONS.map((action) => {
-            const disabled = action.requiresSandbox && !isLive;
+      {/* ------------------------------------------------------------------ */}
+      {/* Grouped sections */}
+      {/* ------------------------------------------------------------------ */}
+      <div className="space-y-8">
+        {SECTIONS.map((section) => (
+          <div key={section.id}>
+            <h2 className="section-label mb-3">{section.label}</h2>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {section.actions.map((actionId) => {
+                const action = ACTION_MAP[actionId];
+                const theme = ICON_THEME[actionId];
+                const disabled = action.requiresSandbox && !isLive;
+                const badge = action.badge?.(badgeCtx);
 
-            const card = (
-              <div
-                className={`border rounded-lg p-4 transition-colors ${
-                  disabled
-                    ? "opacity-50 cursor-not-allowed"
-                    : "hover:border-primary/40 hover:bg-muted/30 cursor-pointer"
-                }`}
-              >
-                <div className="flex items-center justify-between mb-2">
-                  <span className="font-medium text-sm">{action.label}</span>
-                  {action.requiresSandbox && isLive && (
-                    <span className="text-xs text-green-600 font-medium">● Live</span>
-                  )}
-                  {action.requiresSandbox && !hasSandbox && (
-                    <span className="text-xs text-muted-foreground">No sandbox</span>
-                  )}
-                  {action.requiresSandbox && hasSandbox && !isLive && (
-                    <span className="text-xs text-muted-foreground">{sandbox!.status}</span>
-                  )}
-                  {action.badge && (
-                    <span className={`text-xs font-medium ${action.badge === "Custom" ? "text-green-600" : "text-muted-foreground"}`}>
-                      {action.badge === "Custom" ? "● Custom" : "Default"}
-                    </span>
-                  )}
-                </div>
-                <p className="text-xs text-muted-foreground">{action.description}</p>
-              </div>
-            );
+                const card = (
+                  <div
+                    className={`group relative border rounded-xl p-4 bg-card transition-all duration-200 ${
+                      disabled
+                        ? "border-border/40 opacity-40 cursor-not-allowed"
+                        : "border-border/60 card-shadow hover:card-shadow-hover hover:-translate-y-0.5 cursor-pointer"
+                    }`}
+                  >
+                    <div className="flex items-start gap-3">
+                      {/* Icon well */}
+                      <div className={`w-10 h-10 rounded-xl ${theme.bg} ${theme.color} flex items-center justify-center shrink-0 mt-0.5`}>
+                        {ACTION_ICONS[actionId]}
+                      </div>
 
-            return disabled ? (
-              <div key={action.id}>{card}</div>
-            ) : (
-              <Link key={action.id} href={action.href}>
-                {card}
-              </Link>
-            );
-          })}
-        </div>
+                      {/* Content */}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-2 mb-1">
+                          <span className="font-medium text-sm">{action.label}</span>
+                          <span className="shrink-0 text-xs">
+                            {action.requiresSandbox && isLive && (
+                              <span className="text-green-600 font-medium flex items-center gap-1">
+                                <span className="w-1.5 h-1.5 rounded-full bg-green-500 inline-block" />
+                                Live
+                              </span>
+                            )}
+                            {action.requiresSandbox && !isLive && hasSandbox && (
+                              <span className="text-muted-foreground">{sandbox!.status}</span>
+                            )}
+                            {action.requiresSandbox && !hasSandbox && (
+                              <span className="text-muted-foreground">No sandbox</span>
+                            )}
+                            {badge && (
+                              <span className={badge === "Custom" ? "text-emerald-600 font-medium" : "text-muted-foreground"}>
+                                {badge === "Custom" ? "● Custom" : "Default"}
+                              </span>
+                            )}
+                          </span>
+                        </div>
+                        <p className="text-xs text-muted-foreground leading-relaxed">{action.description}</p>
+                      </div>
+                    </div>
+
+                    {/* Hover arrow */}
+                    {!disabled && (
+                      <span className="absolute bottom-3.5 right-4 text-muted-foreground/0 group-hover:text-muted-foreground transition-colors text-xs">
+                        →
+                      </span>
+                    )}
+                  </div>
+                );
+
+                return disabled ? (
+                  <div key={actionId}>{card}</div>
+                ) : (
+                  <Link key={actionId} href={action.href(env_name)}>
+                    {card}
+                  </Link>
+                );
+              })}
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );

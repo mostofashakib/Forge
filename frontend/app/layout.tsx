@@ -99,9 +99,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       </head>
       <body className={`${plexSans.className} ${plexMono.variable}`}>
         <div className="min-h-screen bg-background flex flex-col">
-          <header className="border-b border-border/60 px-6 h-14 flex items-center justify-between">
-            <Link href="/environments/new" className="flex items-center gap-2.5">
-              <div className="w-6 h-6 rounded bg-primary flex items-center justify-center">
+          {/* Header */}
+          <header className="sticky top-0 z-50 bg-background/80 backdrop-blur-md border-b border-border/50 px-6 h-14 flex items-center justify-between">
+            <Link href="/environments/new" className="flex items-center gap-2.5 group">
+              <div className="w-7 h-7 rounded-lg bg-primary flex items-center justify-center shadow-sm group-hover:shadow-md group-hover:scale-105 transition-all">
                 <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
                   <path d="M7 1L13 4V10L7 13L1 10V4L7 1Z" stroke="white" strokeWidth="1.5" strokeLinejoin="round" />
                   <path d="M7 5L9 6.5V9L7 10.5L5 9V6.5L7 5Z" fill="white" />
@@ -115,7 +116,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 <Link
                   key={item.href}
                   href={item.href}
-                  className="px-3 py-1.5 rounded text-sm text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                  className="px-3 py-1.5 rounded-lg text-sm text-muted-foreground hover:text-foreground hover:bg-muted/80 transition-colors"
                 >
                   {item.label}
                 </Link>
@@ -123,16 +124,16 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             </nav>
           </header>
 
-          <main className="container mx-auto px-6 py-8 max-w-5xl flex-1">{children}</main>
+          <main className="container mx-auto px-6 py-10 max-w-5xl flex-1">{children}</main>
 
-          <footer className="border-t border-border/60 mt-auto py-4 px-6 flex items-center justify-center">
-            <p className="text-xs text-muted-foreground">
+          <footer className="border-t border-border/40 mt-auto py-5 px-6 flex items-center justify-center">
+            <p className="text-xs text-muted-foreground/70">
               Developed by{" "}
               <a
                 href="https://www.mostofashakib.com/"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-foreground font-medium hover:text-primary transition-colors"
+                className="text-muted-foreground font-medium hover:text-foreground transition-colors"
               >
                 Mostofa Shakib
               </a>
