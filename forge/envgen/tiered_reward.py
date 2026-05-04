@@ -44,7 +44,7 @@ from typing import Sequence
 
 from pydantic import BaseModel, Field
 
-from forge.extraction.llm_client import AnthropicClient, LLMClient
+from forge.extraction.llm_client import LLMClient, get_client
 
 logger = logging.getLogger(__name__)
 
@@ -277,9 +277,7 @@ class TieredRewardEngine:
         client: LLMClient | None = None,
         config: TieredRewardConfig | None = None,
     ) -> None:
-        self._client = client or AnthropicClient(
-            model="claude-haiku-4-5-20251001", max_tokens=1024
-        )
+        self._client = client or get_client(max_tokens=1024)
         self._cfg = config or TieredRewardConfig()
 
     # -- Tier 1: planning ---------------------------------------------------

@@ -215,8 +215,8 @@ Call the extract tool with {"objective": "<one sentence>"}.
 
 
 def _derive_objective(research_goal: str) -> str:
-    from forge.extraction.llm_client import AnthropicClient
-    client = AnthropicClient(model="claude-haiku-4-5-20251001", max_tokens=256)
+    from forge.extraction.llm_client import get_client as _get_client
+    client = _get_client(max_tokens=256)
     try:
         result = client.extract(
             system=_OBJECTIVE_SYSTEM,
@@ -261,8 +261,8 @@ def _generate_one_episode(
     difficulty: int = 3,
     edge_cases: list[str] | None = None,
 ) -> _SyntheticEpisode | None:
-    from forge.extraction.llm_client import AnthropicClient
-    client = AnthropicClient(model="claude-haiku-4-5-20251001", max_tokens=1024)
+    from forge.extraction.llm_client import get_client as _get_client
+    client = _get_client(max_tokens=1024)
     user = _build_episode_user_prompt(
         objective, env_type, episode_index, quality, difficulty, edge_cases or []
     )
@@ -288,8 +288,8 @@ def suggest_goals(
     if sb is None:
         raise HTTPException(status_code=404, detail="Sandbox not found")
 
-    from forge.extraction.llm_client import AnthropicClient
-    client = AnthropicClient(model="claude-haiku-4-5-20251001", max_tokens=512)
+    from forge.extraction.llm_client import get_client as _get_client
+    client = _get_client(max_tokens=512)
 
     difficulty_label = _DIFFICULTY_LABELS[body.difficulty]
     user_parts = [

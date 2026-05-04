@@ -184,8 +184,8 @@ def detect_issues(env_name: str, db: Session = Depends(get_db)):
         f"{trajectory_text}"
     )
 
-    from forge.extraction.llm_client import AnthropicClient
-    client = AnthropicClient(model="claude-sonnet-4-6", max_tokens=1024)
+    from forge.extraction.llm_client import get_client as _get_client
+    client = _get_client(max_tokens=1024, capable=True)
     try:
         result: _DetectionResult = client.extract(
             system=_DETECT_SYSTEM, user=user, schema=_DetectionResult

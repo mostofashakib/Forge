@@ -5,7 +5,7 @@ from typing import Protocol, runtime_checkable
 
 from pydantic import BaseModel
 
-from forge.extraction.llm_client import AnthropicClient, LLMClient
+from forge.extraction.llm_client import LLMClient, get_client
 
 
 @runtime_checkable
@@ -46,9 +46,7 @@ _AGENT_SYSTEM = (
 
 class LLMContainerAgent:
     def __init__(self, client: LLMClient | None = None) -> None:
-        self._client = client or AnthropicClient(
-            model="claude-haiku-4-5-20251001", max_tokens=512
-        )
+        self._client = client or get_client(max_tokens=512)
 
     def act(
         self,
@@ -133,5 +131,5 @@ def make_container_agent(agent_id: str, seed: int | None = None) -> ContainerAge
         return RandomContainerAgent(seed=seed)
     if agent_id == "llm" or agent_id.startswith("llm:"):
         model = agent_id[4:] if agent_id.startswith("llm:") else "claude-haiku-4-5-20251001"
-        return LLMContainerAgent(AnthropicClient(model=model, max_tokens=512))
+        return LLMContainerAgent(get_client(max_tokens=512, model=model))
     raise ValueError(f"Unknown container agent id: {agent_id!r}. Use 'random', 'llm', or 'llm:<model>'.")

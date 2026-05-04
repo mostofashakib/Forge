@@ -180,8 +180,8 @@ def _run_policy_eval(
     requirements: str,
     episodes: list[tuple[AgentEpisode, list[dict]]],
 ) -> _PolicyEvalResult:
-    from forge.extraction.llm_client import AnthropicClient
-    client = AnthropicClient(model="claude-haiku-4-5-20251001", max_tokens=1024)
+    from forge.extraction.llm_client import get_client as _get_client
+    client = _get_client(max_tokens=1024)
     user = (
         f"Policy requirements:\n{requirements}\n\n"
         f"Agent trajectories:\n{_build_trajectory_text(episodes)}"
@@ -197,8 +197,8 @@ def _run_reward_eval(
     requirements: str,
     episodes: list[tuple[AgentEpisode, list[dict]]],
 ) -> _RewardEvalResult:
-    from forge.extraction.llm_client import AnthropicClient
-    client = AnthropicClient(model="claude-haiku-4-5-20251001", max_tokens=1024)
+    from forge.extraction.llm_client import get_client as _get_client
+    client = _get_client(max_tokens=1024)
     user = (
         f"Reward requirements:\n{requirements}\n\n"
         f"Agent trajectories:\n{_build_trajectory_text(episodes)}"

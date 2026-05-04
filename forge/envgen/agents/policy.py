@@ -4,7 +4,7 @@ from forge.envgen.agents.base import EnvGenAgent
 from forge.envgen.artifact_bus import ArtifactBus
 from forge.envgen.context import EnvGenContext
 from forge.envgen.schemas import GeneratedFile
-from forge.extraction.llm_client import AnthropicClient, LLMClient
+from forge.extraction.llm_client import LLMClient, get_client
 
 _DEFAULT_POLICY = """\
 policies:
@@ -35,7 +35,7 @@ class PolicyAgent(EnvGenAgent):
     produces: str = "policy_dsl"
 
     def __init__(self, client: LLMClient | None = None) -> None:
-        self._client = client or AnthropicClient(max_tokens=2048)
+        self._client = client or get_client(max_tokens=2048)
 
     async def run(self, ctx: EnvGenContext, bus: ArtifactBus) -> None:
         if not ctx.policy_requirements.strip():
