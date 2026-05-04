@@ -140,6 +140,17 @@ Seven export formats, accessible from the per-environment **Export Dataset** pag
 - **Clock** — logical time advancement per step for temporally-sensitive verifiers
 - **Parallel Celery rollouts** — configurable worker pool for batch episode execution
 
+### UI
+
+The frontend is a Next.js 14 app styled with Tailwind CSS and shadcn/ui. The design system was produced using [Google Stitch](https://stitch.google.com) and then translated into component code:
+
+- **Environments list** — status-coded cards with coloured accent bars, expiry countdown, and inline delete
+- **Environment hub** — 4-section action grid (Training / Configuration / Analysis / Data) with icon wells, live-status banner, and sandbox controls
+- **Dashboard** — KPI cards with watermark icons + termination-reason panel side-by-side; recent-runs table with duration and colour-coded progress bars
+- **Synthetic data** — goal suggestion, difficulty picker, edge case injection, generated episode cards
+- **Export** — format cards with JSONL/Parquet tags, quick-select bar, per-format download strips on completion
+- **New environment** — 4-option card grid (CLI / Browser / Custom / Premade) with SVG icon wells
+
 ---
 
 ## Architecture
@@ -296,6 +307,8 @@ pytest
 
 ## Environment Variables
 
+### Infrastructure
+
 | Variable | Default | Description |
 |---|---|---|
 | `FORGE_GENERATED_ENVS_DIR` | `generated_envs` | Where compiled environments are written |
@@ -305,6 +318,24 @@ pytest
 | `NEXT_PUBLIC_API_URL` | `http://localhost:8000` | Backend URL used by the frontend |
 | `CELERY_BROKER_URL` | `redis://localhost:6379/0` | Override Celery broker (defaults to `REDIS_URL`) |
 | `CELERY_RESULT_BACKEND` | `redis://localhost:6379/0` | Override Celery result backend |
+
+### LLM Provider
+
+All LLM calls across agents, reward scoring, and evaluation go through a single `get_client()` factory. Swap providers or models without touching code.
+
+| Variable | Default | Description |
+|---|---|---|
+| `FORGE_LLM_PROVIDER` | `anthropic` | LLM backend to use. Supported: `anthropic`, `ollama` |
+| `FORGE_LLM_MODEL` | `claude-haiku-4-5-20251001` | Model for standard-tier calls (faster, cheaper) |
+| `FORGE_LLM_MODEL_CAPABLE` | `claude-sonnet-4-6` | Model for capable-tier calls (complex reasoning, code generation) |
+| `ANTHROPIC_API_KEY` | — | Required when `FORGE_LLM_PROVIDER=anthropic` |
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL when `FORGE_LLM_PROVIDER=ollama` |
+
+**Example — run fully locally with Ollama:**
+
+```bash
+FORGE_LLM_PROVIDER=ollama FORGE_LLM_MODEL=gemma4:12b ./run.sh
+```
 
 ---
 
