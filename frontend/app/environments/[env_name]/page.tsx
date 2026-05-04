@@ -342,81 +342,82 @@ export default async function EnvironmentHubPage({
       )}
 
       {/* ------------------------------------------------------------------ */}
-      {/* Grouped sections */}
+      {/* All action cards in one flat grid — section labels as col-span-2 separators */}
       {/* ------------------------------------------------------------------ */}
-      <div className="space-y-8">
-        {SECTIONS.map((section) => (
-          <div key={section.id}>
-            <h2 className="section-label mb-3">{section.label}</h2>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {section.actions.map((actionId) => {
-                const action = ACTION_MAP[actionId];
-                const theme = ICON_THEME[actionId];
-                const disabled = action.requiresSandbox && !isLive;
-                const badge = action.badge?.(badgeCtx);
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        {SECTIONS.flatMap((section) => [
+          /* Section label — spans both columns */
+          <div key={`label-${section.id}`} className="col-span-full mt-2 first:mt-0">
+            <h2 className="section-label">{section.label}</h2>
+          </div>,
 
-                const card = (
-                  <div
-                    className={`group relative border rounded-xl p-4 bg-card transition-all duration-200 ${
-                      disabled
-                        ? "border-border/40 opacity-40 cursor-not-allowed"
-                        : "border-border/60 card-shadow hover:card-shadow-hover hover:-translate-y-0.5 cursor-pointer"
-                    }`}
-                  >
-                    <div className="flex items-start gap-3">
-                      {/* Icon well */}
-                      <div className={`w-10 h-10 rounded-xl ${theme.bg} ${theme.color} flex items-center justify-center shrink-0 mt-0.5`}>
-                        {ACTION_ICONS[actionId]}
-                      </div>
+          /* Action cards for this section */
+          ...section.actions.map((actionId) => {
+            const action = ACTION_MAP[actionId];
+            const theme = ICON_THEME[actionId];
+            const disabled = action.requiresSandbox && !isLive;
+            const badge = action.badge?.(badgeCtx);
 
-                      {/* Content */}
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center justify-between gap-2 mb-1">
-                          <span className="font-medium text-sm">{action.label}</span>
-                          <span className="shrink-0 text-xs">
-                            {action.requiresSandbox && isLive && (
-                              <span className="text-green-600 font-medium flex items-center gap-1">
-                                <span className="w-1.5 h-1.5 rounded-full bg-green-500 inline-block" />
-                                Live
-                              </span>
-                            )}
-                            {action.requiresSandbox && !isLive && hasSandbox && (
-                              <span className="text-muted-foreground">{sandbox!.status}</span>
-                            )}
-                            {action.requiresSandbox && !hasSandbox && (
-                              <span className="text-muted-foreground">No sandbox</span>
-                            )}
-                            {badge && (
-                              <span className={badge === "Custom" ? "text-emerald-600 font-medium" : "text-muted-foreground"}>
-                                {badge === "Custom" ? "● Custom" : "Default"}
-                              </span>
-                            )}
-                          </span>
-                        </div>
-                        <p className="text-xs text-muted-foreground leading-relaxed">{action.description}</p>
-                      </div>
-                    </div>
-
-                    {/* Hover arrow */}
-                    {!disabled && (
-                      <span className="absolute bottom-3.5 right-4 text-muted-foreground/0 group-hover:text-muted-foreground transition-colors text-xs">
-                        →
-                      </span>
-                    )}
+            const card = (
+              <div
+                className={`group relative h-full min-h-24 border rounded-xl p-4 bg-card transition-all duration-200 ${
+                  disabled
+                    ? "border-border/40 opacity-40 cursor-not-allowed"
+                    : "border-border/60 card-shadow hover:card-shadow-hover hover:-translate-y-0.5 cursor-pointer"
+                }`}
+              >
+                <div className="flex items-start gap-3">
+                  {/* Icon well */}
+                  <div className={`w-10 h-10 rounded-xl ${theme.bg} ${theme.color} flex items-center justify-center shrink-0 mt-0.5`}>
+                    {ACTION_ICONS[actionId]}
                   </div>
-                );
 
-                return disabled ? (
-                  <div key={actionId}>{card}</div>
-                ) : (
-                  <Link key={actionId} href={action.href(env_name)}>
-                    {card}
-                  </Link>
-                );
-              })}
-            </div>
-          </div>
-        ))}
+                  {/* Content */}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between gap-2 mb-1">
+                      <span className="font-medium text-sm">{action.label}</span>
+                      <span className="shrink-0 text-xs">
+                        {action.requiresSandbox && isLive && (
+                          <span className="text-green-600 font-medium flex items-center gap-1">
+                            <span className="w-1.5 h-1.5 rounded-full bg-green-500 inline-block" />
+                            Live
+                          </span>
+                        )}
+                        {action.requiresSandbox && !isLive && hasSandbox && (
+                          <span className="text-muted-foreground">{sandbox!.status}</span>
+                        )}
+                        {action.requiresSandbox && !hasSandbox && (
+                          <span className="text-muted-foreground">No sandbox</span>
+                        )}
+                        {badge && (
+                          <span className={badge === "Custom" ? "text-emerald-600 font-medium" : "text-muted-foreground"}>
+                            {badge === "Custom" ? "● Custom" : "Default"}
+                          </span>
+                        )}
+                      </span>
+                    </div>
+                    <p className="text-xs text-muted-foreground leading-relaxed line-clamp-2">{action.description}</p>
+                  </div>
+                </div>
+
+                {/* Hover arrow */}
+                {!disabled && (
+                  <span className="absolute bottom-3.5 right-4 text-muted-foreground/0 group-hover:text-muted-foreground transition-colors text-xs">
+                    →
+                  </span>
+                )}
+              </div>
+            );
+
+            return disabled ? (
+              <div key={actionId} className="h-full">{card}</div>
+            ) : (
+              <Link key={actionId} href={action.href(env_name)} className="h-full block">
+                {card}
+              </Link>
+            );
+          }),
+        ])}
       </div>
     </div>
   );
