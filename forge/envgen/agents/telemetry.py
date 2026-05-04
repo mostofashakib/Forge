@@ -4,7 +4,7 @@ from forge.envgen.agents.base import EnvGenAgent
 from forge.envgen.artifact_bus import ArtifactBus
 from forge.envgen.context import EnvGenContext
 from forge.envgen.schemas import GeneratedApp
-from forge.extraction.llm_client import AnthropicClient, LLMClient
+from forge.extraction.llm_client import LLMClient, get_client
 
 _SYSTEM = (
     "Instrument the provided FastAPI app to emit events to Redis Streams on every state-mutating route.\n"
@@ -32,7 +32,7 @@ class TelemetryAgent(EnvGenAgent):
     produces: str = "instrumented_code"
 
     def __init__(self, client: LLMClient | None = None) -> None:
-        self._client = client or AnthropicClient(max_tokens=32768)
+        self._client = client or get_client(max_tokens=32768)
 
     async def run(self, ctx: EnvGenContext, bus: ArtifactBus) -> None:
         app_code: dict[str, str] = await bus.wait_for("app_code")
