@@ -769,6 +769,13 @@
 </div>
 
 <script>
+// ─── Base URL ────────────────────────────────────────────────────────────────
+// When served through the Forge proxy the page URL is
+//   http://localhost:3000/api/proxy/{env_name}/ui
+// API calls must go to   /api/proxy/{env_name}/forge/state  etc.
+// Strip the trailing "/ui" segment so all relative paths resolve correctly.
+const BASE = window.location.href.replace(/\/ui\/?(\?.*)?$/, '');
+
 // ─── State ───────────────────────────────────────────────────────────────────
 let forgeState = null;
 let activeChannelName = null;
@@ -836,7 +843,7 @@ async function api(path, body = null) {
   } else {
     opts.method = 'GET';
   }
-  const res = await fetch(path, opts);
+  const res = await fetch(`${BASE}${path}`, opts);
   return res.json();
 }
 
