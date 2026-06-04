@@ -522,8 +522,17 @@ def run_container_episode_task(self, run_id: str, episode_index: int, seed: int)
                 dead_end_patience=dead_end_patience,
                 success_threshold=success_threshold,
             )
+            # Load manifest from disk if available — enables HashNormalizer + StateDiffFloor
+            manifest = None
+            manifest_path = envs_root / env_name / "state_schema.json"
+            if manifest_path.exists():
+                try:
+                    from forge.schema.state_schema import StateSchemaManifest
+                    manifest = StateSchemaManifest.model_validate_json(manifest_path.read_text())
+                except Exception as exc:
+                    logger.warning("[container-ep] could not load manifest for %s: %s", env_name, exc)
             agent = make_container_agent(agent_id, seed=seed)
-            with ContainerEpisodeRunner(cfg) as runner:
+            with ContainerEpisodeRunner(cfg, manifest=manifest) as runner:
                 result = runner.run_episode(agent, episode_id=episode_id, jsonl_path=jsonl_path)
 
         with SessionLocal() as db:
