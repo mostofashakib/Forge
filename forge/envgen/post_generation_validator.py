@@ -26,9 +26,9 @@ class PostGenerationValidator:
     def validate(self, manifest: StateSchemaManifest) -> ValidationResult:
         with httpx.Client(base_url=self._base_url, timeout=self._timeout) as client:
             # Step 1: reset and check base state
-            client.post("/forge/reset")
-            state = client.get("/forge/state").json()
-            missing = manifest.missing_fields(state)
+            client.post("/forge/reset").raise_for_status()
+            reset_state = client.get("/forge/state").raise_for_status().json()
+            missing = manifest.missing_fields(reset_state)
 
             # Step 2: exercise derived_from actions; check derived fields appear
             derived_fields_to_check: dict[str, list[str]] = {}
@@ -38,14 +38,14 @@ class PostGenerationValidator:
 
             for action_endpoint, field_names in derived_fields_to_check.items():
                 try:
-                    client.post(f"/{action_endpoint}", json={})
-                    state_after = client.get("/forge/state").json()
+                    client.post(f"/{action_endpoint}")
+                    state_after = client.get("/forge/state").raise_for_status().json()
                     for fname in field_names:
                         if fname in state_after:
                             missing = [f for f in missing if f != fname]
                 except Exception as exc:
                     logger.warning("[validator] could not exercise /%s: %s", action_endpoint, exc)
 
-            coverage = manifest.coverage_score(state)
+            coverage = manifest.coverage_score(reset_state)
             passed = len(missing) == 0
             return ValidationResult(passed=passed, missing_fields=missing, coverage_score=coverage)
