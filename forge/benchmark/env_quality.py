@@ -25,7 +25,7 @@ def compute_env_quality(
     manifest: StateSchemaManifest,
 ) -> EnvQualityMetrics:
     """Compute quality metrics from JSONL episode files in episode_dir."""
-    jsonl_files = list(episode_dir.glob("*.jsonl"))
+    jsonl_files = list(episode_dir.rglob("*.jsonl"))
 
     total_steps = 0
     steps_with_reward = 0

@@ -570,7 +570,7 @@ def diagnose(
 
         if avg_steps < 5:
             issues.append(f"Episodes terminate very early (avg {avg_steps:.1f} steps) — environment may be too hard or divergence threshold too aggressive")
-            recommendations.append("Consider increasing consecutive_below_threshold (currently 3) or reducing divergence_threshold (currently 0.2) for this environment type")
+            recommendations.append("Consider reducing divergence_threshold (currently 0.2) or increasing max_steps for this environment type")
 
     # ── Analyse gym episodes ──────────────────────────────────────────────
     gym_stats: dict = {}
