@@ -32,7 +32,7 @@ _SYSTEM = (
 
 class PolicyAgent(EnvGenAgent):
     depends_on: list[str] = []
-    produces: str = "policy_dsl"
+    produces: list[str] = ["policy_dsl"]
 
     def __init__(self, client: LLMClient | None = None) -> None:
         self._client = client or get_client(max_tokens=2048)

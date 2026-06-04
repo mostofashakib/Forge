@@ -37,7 +37,7 @@ def _mock_output() -> StateBridgeOutput:
 async def test_state_bridge_depends_on_instrumented_code():
     agent = StateBridgeAgent(client=MockLLMClient({"StateBridgeOutput": _mock_output()}))
     assert "instrumented_code" in agent.depends_on
-    assert agent.produces == "state_bridge_code"
+    assert agent.produces == ["state_bridge_code", "state_schema_manifest"]
 
 
 @pytest.mark.asyncio

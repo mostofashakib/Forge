@@ -64,7 +64,7 @@ async def test_app_generator_publishes_app_code():
 async def test_app_generator_has_no_dependencies():
     agent = AppGeneratorAgent(client=_mock_client([("main.py", "# app")]))
     assert agent.depends_on == []
-    assert agent.produces == "app_code"
+    assert agent.produces == ["app_code"]
 
 
 @pytest.mark.asyncio
