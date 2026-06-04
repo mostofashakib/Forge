@@ -86,6 +86,7 @@ const JSON_LD = {
 
 const NAV = [
   { label: "Environments", href: "/environments" },
+  { label: "Benchmark", href: "/benchmark" },
 ];
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
