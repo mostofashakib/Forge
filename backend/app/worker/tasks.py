@@ -261,10 +261,14 @@ def build_sandbox_task(
             max_validation_attempts = 3
             for attempt in range(max_validation_attempts):
                 publish({"log": f"[forge] validating manifest (attempt {attempt + 1}/{max_validation_attempts})…"})
-                v_result = await loop.run_in_executor(
-                    None,
-                    lambda m=manifest: PostGenerationValidator(base_url=base_url).validate(m),
-                )
+                try:
+                    v_result = await loop.run_in_executor(
+                        None,
+                        lambda m=manifest: PostGenerationValidator(base_url=base_url).validate(m),
+                    )
+                except Exception as _ve:
+                    publish({"log": f"[forge] manifest validation error (container not ready?): {_ve}"})
+                    break
                 if v_result.passed:
                     publish({"log": f"[forge] manifest validation passed (coverage={v_result.coverage_score:.2f}) ✓"})
                     with SessionLocal() as db:
@@ -300,11 +304,11 @@ def build_sandbox_task(
                     )
                     retry_bus = ArtifactBus()
                     # Load instrumented code from disk so StateBridgeAgent has its input
-                    app_dir = envs_root / env_name / "app"
                     instrumented: dict[str, str] = {}
                     if app_dir.exists():
-                        for p in app_dir.glob("*.py"):
-                            instrumented[p.name] = p.read_text()
+                        for p in app_dir.rglob("*.py"):
+                            rel = str(p.relative_to(app_dir))
+                            instrumented[rel] = p.read_text()
                     await retry_bus.publish("instrumented_code", instrumented)
                     retry_agent = StateBridgeAgent(
                         missing_fields_feedback=v_result.missing_fields
@@ -314,6 +318,10 @@ def build_sandbox_task(
                     if new_manifest is not None:
                         manifest = new_manifest
                         manifest_path.write_text(manifest.model_dump_json())
+                        publish({"log": "[forge] state bridge agent produced updated manifest ✓"})
+                    new_bridge = retry_bus.get("state_bridge_code")
+                    if new_bridge:
+                        (envs_root / env_name / "container_env.py").write_text(new_bridge)
 
     if env_type.startswith("premade:"):
         _build_fn = _build_premade
