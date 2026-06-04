@@ -11,6 +11,7 @@ import httpx
 
 from forge.envgen.agents.container_agent import ContainerAgentBase
 from forge.envgen.objective import ObjectiveScorer
+from forge.schema.state_schema import StateSchemaManifest
 
 logger = logging.getLogger(__name__)
 
@@ -26,13 +27,30 @@ class EpisodeConfig:
     max_steps: int = 50
     # Stop if objective score stays below this for `consecutive_below_threshold` steps
     divergence_threshold: float = 0.2
-    consecutive_below_threshold: int = 3
+    consecutive_below_threshold: int = 8
     # Stop if state is identical for `dead_end_patience` consecutive steps
     dead_end_patience: int = 5
     # Stop early with "success" if score reaches this
     success_threshold: float = 0.9
     # httpx timeout per request (seconds)
     http_timeout: float = 15.0
+    diff_floor: float = 0.1
+
+
+@dataclass
+class HashNormalizer:
+    manifest: StateSchemaManifest | None
+
+    def hash(self, state: dict) -> str:
+        import hashlib
+        import json
+        if self.manifest is None:
+            canonical = json.dumps(state, sort_keys=True)
+        else:
+            stable = self.manifest.stable_fields()
+            filtered = {k: v for k, v in state.items() if k in stable}
+            canonical = json.dumps(filtered, sort_keys=True)
+        return hashlib.sha256(canonical.encode()).hexdigest()[:16]
 
 
 @dataclass
@@ -121,9 +139,12 @@ class ContainerEpisodeRunner:
         self,
         config: EpisodeConfig,
         scorer: ObjectiveScorer | None = None,
+        manifest: StateSchemaManifest | None = None,
     ) -> None:
         self._cfg = config
         self._scorer = scorer or ObjectiveScorer()
+        self._normalizer = HashNormalizer(manifest=manifest)
+        self._manifest = manifest
         self._http = httpx.Client(
             base_url=config.base_url,
             timeout=config.http_timeout,
@@ -265,7 +286,7 @@ class ContainerEpisodeRunner:
         recent_hashes: list[str] = []
 
         for step_idx in range(cfg.max_steps):
-            state_hash_before = ObjectiveScorer.state_hash(state)
+            state_hash_before = self._normalizer.hash(state)
             recent_hashes.append(state_hash_before)
 
             # Agent picks an action
@@ -299,11 +320,29 @@ class ContainerEpisodeRunner:
                 logger.warning("[%s] step %d: get_state failed: %s", episode_id, step_idx, exc)
                 new_state = state
 
-            state_hash_after = ObjectiveScorer.state_hash(new_state)
+            state_hash_after = self._normalizer.hash(new_state)
 
-            # Score objective alignment (also used as reward signal)
-            obj_score = self._scorer.score(new_state, cfg.objective)
-            reward = obj_score
+            # Build derived-field diff for richer LLM judge context
+            derived_diff: dict = {}
+            if self._manifest is not None:
+                for fname, fspec in self._manifest.fields.items():
+                    if fspec.derived_from:
+                        bv = state.get(fname)
+                        av = new_state.get(fname)
+                        if bv != av:
+                            derived_diff[fname] = {"before": bv, "after": av}
+
+            obj_score = self._scorer.score(
+                new_state, cfg.objective,
+                derived_diff=derived_diff or None,
+                action_taken=action or None,
+            )
+
+            # StateDiffFloor: reward at least diff_floor if stable state changed
+            if self._manifest is not None and self._manifest.state_changed(state, new_state):
+                reward = max(obj_score, cfg.diff_floor)
+            else:
+                reward = obj_score
 
             # Evaluate stopping conditions
             terminated = False

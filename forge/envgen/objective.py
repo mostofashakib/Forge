@@ -31,11 +31,14 @@ class ObjectiveScorer:
     def __init__(self, client: LLMClient | None = None) -> None:
         self._client = client or get_client(max_tokens=256)
 
-    def score(self, state: dict, objective: str) -> float:
+    def score(self, state: dict, objective: str, **kwargs: object) -> float:
         """Return 0.0–1.0 representing how well state achieves objective.
 
         Falls back to 0.5 (neutral) on any LLM/network error so the episode
         keeps running rather than crashing.
+
+        Extra kwargs (e.g. derived_diff, action_taken) are accepted here and
+        ignored until Task 8 adds proper handling.
         """
         try:
             state_text = json.dumps(state, indent=2)
