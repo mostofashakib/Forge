@@ -247,6 +247,74 @@ def build_sandbox_task(
         publish({"log": f"[forge] container running on port {port} ✓"})
         _set_running(container_id, port, image_tag)
 
+        # ── PostGenerationValidator ────────────────────────────────────────
+        manifest_path = envs_root / env_name / "state_schema.json"
+        if manifest_path.exists():
+            from forge.schema.state_schema import StateSchemaManifest
+            from forge.envgen.post_generation_validator import PostGenerationValidator
+            from forge.envgen.context import EnvGenContext
+            import json as _json
+
+            base_url = f"http://localhost:{port}"
+            manifest = StateSchemaManifest.model_validate_json(manifest_path.read_text())
+
+            max_validation_attempts = 3
+            for attempt in range(max_validation_attempts):
+                publish({"log": f"[forge] validating manifest (attempt {attempt + 1}/{max_validation_attempts})…"})
+                v_result = await loop.run_in_executor(
+                    None,
+                    lambda m=manifest: PostGenerationValidator(base_url=base_url).validate(m),
+                )
+                if v_result.passed:
+                    publish({"log": f"[forge] manifest validation passed (coverage={v_result.coverage_score:.2f}) ✓"})
+                    with SessionLocal() as db:
+                        sb = db.get(SandboxEnvironment, env_name)
+                        if sb:
+                            sb.state_schema = manifest.model_dump_json()
+                            db.commit()
+                    break
+                else:
+                    publish({
+                        "log": f"[forge] manifest validation failed — missing fields: {v_result.missing_fields}"
+                    })
+                    if attempt == max_validation_attempts - 1:
+                        with SessionLocal() as db:
+                            sb = db.get(SandboxEnvironment, env_name)
+                            if sb:
+                                sb.validation_missing_fields = _json.dumps(v_result.missing_fields)
+                                db.commit()
+                        publish({
+                            "log": f"[forge] WARNING: manifest validation gave up after "
+                                   f"{max_validation_attempts} attempts. Missing: {v_result.missing_fields}"
+                        })
+                        break
+                    # Re-run StateBridgeAgent standalone with feedback
+                    publish({"log": "[forge] re-running state bridge agent with missing field feedback…"})
+                    from forge.envgen.agents.state_bridge import StateBridgeAgent
+                    from forge.envgen.artifact_bus import ArtifactBus
+
+                    ctx = EnvGenContext(
+                        env_name=env_name,
+                        description=description,
+                        compiler_input=compiler_input,
+                    )
+                    retry_bus = ArtifactBus()
+                    # Load instrumented code from disk so StateBridgeAgent has its input
+                    app_dir = envs_root / env_name / "app"
+                    instrumented: dict[str, str] = {}
+                    if app_dir.exists():
+                        for p in app_dir.glob("*.py"):
+                            instrumented[p.name] = p.read_text()
+                    await retry_bus.publish("instrumented_code", instrumented)
+                    retry_agent = StateBridgeAgent(
+                        missing_fields_feedback=v_result.missing_fields
+                    )
+                    await retry_agent.run(ctx, retry_bus)
+                    new_manifest = retry_bus.get("state_schema_manifest")
+                    if new_manifest is not None:
+                        manifest = new_manifest
+                        manifest_path.write_text(manifest.model_dump_json())
+
     if env_type.startswith("premade:"):
         _build_fn = _build_premade
     else:
