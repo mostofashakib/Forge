@@ -91,3 +91,7 @@ class EnvironmentOrchestrator:
         reward_fn: str = bus.get("reward_fn_code") or ""
         if reward_fn:
             (pkg_dir / "reward_fn.py").write_text(reward_fn)
+
+        manifest = bus.get("state_schema_manifest")
+        if manifest is not None:
+            (pkg_dir / "state_schema.json").write_text(manifest.model_dump_json())
