@@ -26,6 +26,7 @@ from backend.app.api.agent_runs import router as agent_runs_router
 from backend.app.api.evaluate import router as evaluate_router
 from backend.app.api.synthetic import router as synthetic_router
 from backend.app.api.detect import router as detect_router
+from backend.app.api.benchmark import router as benchmark_router
 from backend.app.database import init_db
 
 app = FastAPI(title="Forge API", version="0.3.0")
@@ -52,6 +53,7 @@ app.include_router(agent_runs_router)
 app.include_router(evaluate_router)
 app.include_router(synthetic_router)
 app.include_router(detect_router)
+app.include_router(benchmark_router)
 
 
 @app.on_event("startup")
