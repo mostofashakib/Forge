@@ -118,3 +118,40 @@ def test_get_benchmark_run_report_with_data(api_client, tmp_path):
     assert len(body) == 1
     assert body[0]["env_name"] == "email"
     assert body[0]["state_coverage_score"] == 0.8
+
+
+def test_run_benchmark_task_no_redis(monkeypatch, tmp_path):
+    """Task fails gracefully when Redis is unreachable."""
+    from backend.app.worker.celery_app import celery as celery_app
+    celery_app.conf.task_always_eager = True
+    celery_app.conf.task_eager_propagates = False
+
+    monkeypatch.setenv("FORGE_DB_URL", f"sqlite:///{tmp_path}/task_test.db")
+    from backend.app import database
+    database._engine = None
+    database._SessionLocal = None
+    database.init_db()
+
+    from backend.app.database import get_session_factory
+    from backend.app.models import BenchmarkRun
+    SessionLocal = get_session_factory()
+    with SessionLocal() as db:
+        db.add(BenchmarkRun(
+            id="bm_tasktest01",
+            status="queued",
+            domains="email",
+            depth=1,
+            seeds=1,
+            output_dir=str(tmp_path / "out"),
+            created_at=datetime.now(timezone.utc),
+        ))
+        db.commit()
+
+    monkeypatch.setenv("REDIS_URL", "redis://localhost:19999/0")  # unreachable port
+    from backend.app.worker.tasks import run_benchmark_task
+    run_benchmark_task.apply(args=["bm_tasktest01", ["email"], 1, 1, str(tmp_path / "out")])
+
+    with SessionLocal() as db:
+        run = db.get(BenchmarkRun, "bm_tasktest01")
+        assert run.status == "failed"
+        assert run.error is not None
