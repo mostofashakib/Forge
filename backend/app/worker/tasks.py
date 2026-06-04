@@ -666,7 +666,7 @@ def run_benchmark_task(
     import json as _json
     import redis as _redis
     from pathlib import Path as _Path
-    from datetime import datetime as _dt, timezone as _tz
+    from forge.schema.state_schema import StateSchemaManifest as _StateSchemaManifest
     from backend.app.database import get_session_factory
     from backend.app.models import BenchmarkRun
 
@@ -710,7 +710,6 @@ def run_benchmark_task(
 
         def run_episode(task, seed, jsonl_path):
             nonlocal completed
-            from forge.schema.state_schema import StateSchemaManifest
             from forge.envgen.episode_runner import ContainerEpisodeRunner, EpisodeConfig
             from forge.envgen.agents.container_agent import make_container_agent
 
@@ -718,7 +717,7 @@ def run_benchmark_task(
             manifest_path = envs_root / task.domain / "state_schema.json"
             if manifest_path.exists():
                 try:
-                    manifest = StateSchemaManifest.model_validate_json(manifest_path.read_text())
+                    manifest = _StateSchemaManifest.model_validate_json(manifest_path.read_text())
                 except Exception:
                     pass
 
@@ -745,8 +744,7 @@ def run_benchmark_task(
             manifest_path = envs_root / domain / "state_schema.json"
             if manifest_path.exists():
                 try:
-                    from forge.schema.state_schema import StateSchemaManifest
-                    manifest = StateSchemaManifest.model_validate_json(manifest_path.read_text())
+                    manifest = _StateSchemaManifest.model_validate_json(manifest_path.read_text())
                 except Exception:
                     pass
             if manifest:
