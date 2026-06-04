@@ -24,7 +24,7 @@ async def test_telemetry_agent_depends_on_app_code():
         "GeneratedApp": GeneratedApp(files=[FileContent(path="main.py", content="# instrumented")])
     }))
     assert "app_code" in agent.depends_on
-    assert agent.produces == "instrumented_code"
+    assert agent.produces == ["instrumented_code"]
 
 
 @pytest.mark.asyncio

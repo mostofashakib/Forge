@@ -53,7 +53,7 @@ _SYSTEM = (
 
 class StateBridgeAgent(EnvGenAgent):
     depends_on: list[str] = ["instrumented_code"]
-    produces: str = "state_bridge_code"
+    produces: list[str] = ["state_bridge_code", "state_schema_manifest"]
 
     def __init__(
         self,
