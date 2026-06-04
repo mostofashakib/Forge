@@ -1,4 +1,5 @@
 import pytest
+from pydantic import ValidationError
 from forge.envgen.agents.state_bridge import StateBridgeAgent, StateBridgeOutput
 from forge.envgen.artifact_bus import ArtifactBus
 from forge.envgen.context import EnvGenContext
@@ -71,5 +72,5 @@ async def test_state_bridge_manifest_invalid_json_raises():
     agent = StateBridgeAgent(client=MockLLMClient({"StateBridgeOutput": bad_output}))
     bus = ArtifactBus()
     await bus.publish("instrumented_code", {"main.py": ""})
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         await agent.run(_ctx(), bus)
