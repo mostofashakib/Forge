@@ -21,16 +21,12 @@ export default function BenchmarkEvalPage() {
 
         <div>
           <p className="text-xs font-medium text-amber-800 mb-1.5">Implement the evaluation stub:</p>
-          <pre className="bg-amber-100 rounded-md px-3 py-2 text-xs font-mono text-amber-900 overflow-x-auto">
-            forge/benchmark/_eval.py → evaluate_on_suite()
-          </pre>
+          <pre className="bg-amber-100 rounded-md px-3 py-2 text-xs font-mono text-amber-900 overflow-x-auto">{`forge/benchmark/_eval.py → evaluate_on_suite()`}</pre>
         </div>
 
         <div>
           <p className="text-xs font-medium text-amber-800 mb-1.5">Once implemented, run via CLI:</p>
-          <pre className="bg-amber-100 rounded-md px-3 py-2 text-xs font-mono text-amber-900 overflow-x-auto">
-            forge benchmark eval --checkpoint ./benchmark_results/forge_ft --suite webArena
-          </pre>
+          <pre className="bg-amber-100 rounded-md px-3 py-2 text-xs font-mono text-amber-900 overflow-x-auto">{`forge benchmark eval --checkpoint ./benchmark_results/forge_ft --suite webArena`}</pre>
         </div>
       </div>
     </div>

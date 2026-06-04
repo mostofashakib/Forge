@@ -24,23 +24,17 @@ export default function BenchmarkTransferPage() {
 
         <div>
           <p className="text-xs font-medium text-amber-800 mb-1.5">Install dependencies on your GPU node:</p>
-          <pre className="bg-amber-100 rounded-md px-3 py-2 text-xs font-mono text-amber-900 overflow-x-auto">
-            pip install trl transformers datasets
-          </pre>
+          <pre className="bg-amber-100 rounded-md px-3 py-2 text-xs font-mono text-amber-900 overflow-x-auto">{`pip install trl transformers datasets`}</pre>
         </div>
 
         <div>
           <p className="text-xs font-medium text-amber-800 mb-1.5">Implement the fine-tuning stub:</p>
-          <pre className="bg-amber-100 rounded-md px-3 py-2 text-xs font-mono text-amber-900 overflow-x-auto">
-            forge/benchmark/_fine_tune.py → fine_tune_model()
-          </pre>
+          <pre className="bg-amber-100 rounded-md px-3 py-2 text-xs font-mono text-amber-900 overflow-x-auto">{`forge/benchmark/_fine_tune.py → fine_tune_model()`}</pre>
         </div>
 
         <div>
           <p className="text-xs font-medium text-amber-800 mb-1.5">Once implemented, run via CLI:</p>
-          <pre className="bg-amber-100 rounded-md px-3 py-2 text-xs font-mono text-amber-900 overflow-x-auto">
-            forge benchmark transfer --data benchmark_results/data --base-model meta-llama/Llama-3.1-8B
-          </pre>
+          <pre className="bg-amber-100 rounded-md px-3 py-2 text-xs font-mono text-amber-900 overflow-x-auto">{`forge benchmark transfer --data benchmark_results/data --base-model meta-llama/Llama-3.1-8B`}</pre>
         </div>
       </div>
     </div>
