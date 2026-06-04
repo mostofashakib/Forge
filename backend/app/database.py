@@ -40,6 +40,8 @@ def init_db() -> None:
     Base.metadata.create_all(bind=engine)
     with engine.connect() as conn:
         _try_alter(conn, "ALTER TABLE sandbox_environments ADD COLUMN env_type TEXT DEFAULT 'general'")
+        _try_alter(conn, "ALTER TABLE sandbox_environments ADD COLUMN state_schema TEXT")
+        _try_alter(conn, "ALTER TABLE sandbox_environments ADD COLUMN validation_missing_fields TEXT")
 
 
 def get_db():
