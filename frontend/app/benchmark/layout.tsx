@@ -3,10 +3,10 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const SIDEBAR_ITEMS = [
-  { href: "/benchmark/run",      label: "Run",      available: true  },
-  { href: "/benchmark/report",   label: "Report",   available: true  },
-  { href: "/benchmark/transfer", label: "Transfer", available: false },
-  { href: "/benchmark/eval",     label: "Eval",     available: false },
+  { href: "/benchmark/run",      label: "Run",      available: true,  badge: undefined },
+  { href: "/benchmark/report",   label: "Report",   available: true,  badge: undefined },
+  { href: "/benchmark/transfer", label: "Transfer", available: false, badge: "GPU"     },
+  { href: "/benchmark/eval",     label: "Eval",     available: false, badge: "soon"    },
 ];
 
 export default function BenchmarkLayout({ children }: { children: React.ReactNode }) {
@@ -35,8 +35,8 @@ export default function BenchmarkLayout({ children }: { children: React.ReactNod
                 }`}
               >
                 {item.label}
-                {!item.available && (
-                  <span className="text-[10px] opacity-60 font-normal">GPU</span>
+                {item.badge && (
+                  <span className="text-[10px] opacity-60 font-normal">{item.badge}</span>
                 )}
               </Link>
             );
