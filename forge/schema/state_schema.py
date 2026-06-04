@@ -25,6 +25,7 @@ class StateSchemaManifest(BaseModel):
         return present / len(required)
 
     def missing_fields(self, actual_state: dict) -> list[str]:
+        # Volatile fields are included: they must still appear in /forge/state even if they auto-change.
         return [
             name for name, spec in self.fields.items()
             if spec.required and name not in actual_state
