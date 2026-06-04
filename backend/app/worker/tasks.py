@@ -642,3 +642,165 @@ def run_rollout_task(self, rollout_job_id: str) -> None:
                 job_fail.error = str(exc)
                 job_fail.completed_at = datetime.now(timezone.utc)
                 db_fail.commit()
+
+
+@celery.task(bind=True)
+def run_benchmark_task(
+    self,
+    run_id: str,
+    domains: list[str],
+    depth: int,
+    seeds: int,
+    output_dir: str,
+) -> None:
+    """Collect benchmark episodes and compute env quality metrics.
+
+    Streams progress to Redis pub/sub channel forge:benchmark:{run_id}.
+    Message types:
+      {"total": N}           — total episodes to run
+      {"log": "..."}         — human-readable log line
+      {"progress": K}        — K episodes completed so far
+      {"done": true}         — run complete
+      {"error": "..."}       — run failed
+    """
+    import json as _json
+    import redis as _redis
+    from pathlib import Path as _Path
+    from datetime import datetime as _dt, timezone as _tz
+    from backend.app.database import get_session_factory
+    from backend.app.models import BenchmarkRun
+
+    redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+    channel = f"forge:benchmark:{run_id}"
+
+    try:
+        r = _redis.from_url(redis_url, socket_connect_timeout=3, socket_timeout=3)
+        r.ping()
+    except Exception as exc:
+        logger.error("[task:benchmark] Redis unavailable — %s", exc)
+        _update_run_status(run_id, "failed", error=str(exc))
+        return
+
+    def publish(msg: dict) -> None:
+        try:
+            r.publish(channel, _json.dumps(msg))
+        except Exception:
+            pass
+
+    _update_run_status(run_id, "running")
+    publish({"log": f"[benchmark] starting run {run_id} — domains={domains} depth={depth} seeds={seeds}"})
+
+    try:
+        from forge.benchmark.data_collector import DataCollector, CollectionConfig, CollectionCheckpoint
+        from forge.benchmark.env_quality import compute_env_quality
+        from forge.benchmark.report import BenchmarkReport, ReportConfig
+
+        output_path = _Path(output_dir)
+        cfg = CollectionConfig(domains=domains, depth=depth, seeds=seeds, output_dir=output_path / "data")
+        collector = DataCollector(cfg)
+        envs_root = _Path(os.environ.get("FORGE_GENERATED_ENVS_DIR", "generated_envs"))
+
+        checkpoint = CollectionCheckpoint(output_dir=output_path / "data")
+        pending = collector._pending_runs(checkpoint)
+        total = len(pending)
+        publish({"total": total})
+        publish({"log": f"[benchmark] {total} episodes pending"})
+
+        completed = 0
+
+        def run_episode(task, seed, jsonl_path):
+            nonlocal completed
+            from forge.schema.state_schema import StateSchemaManifest
+            from forge.envgen.episode_runner import ContainerEpisodeRunner, EpisodeConfig
+            from forge.envgen.agents.container_agent import make_container_agent
+
+            manifest = None
+            manifest_path = envs_root / task.domain / "state_schema.json"
+            if manifest_path.exists():
+                try:
+                    manifest = StateSchemaManifest.model_validate_json(manifest_path.read_text())
+                except Exception:
+                    pass
+
+            port_file = envs_root / task.domain / "port"
+            if not port_file.exists():
+                publish({"log": f"  [skip] no port file for domain '{task.domain}' — start that environment first"})
+                return
+
+            port = int(port_file.read_text().strip())
+            cfg_ep = EpisodeConfig(base_url=f"http://localhost:{port}", objective=task.objective)
+            agent = make_container_agent("random", seed=seed)
+            with ContainerEpisodeRunner(cfg_ep, manifest=manifest) as runner:
+                result = runner.run_episode(agent, jsonl_path=jsonl_path)
+
+            completed += 1
+            publish({"log": f"  {task.name} seed={seed}  reward={result.total_reward:.3f}  reason={result.termination_reason}"})
+            publish({"progress": completed})
+
+        collector.collect(run_episode)
+
+        metrics = []
+        for domain in domains:
+            manifest = None
+            manifest_path = envs_root / domain / "state_schema.json"
+            if manifest_path.exists():
+                try:
+                    from forge.schema.state_schema import StateSchemaManifest
+                    manifest = StateSchemaManifest.model_validate_json(manifest_path.read_text())
+                except Exception:
+                    pass
+            if manifest:
+                m = compute_env_quality(episode_dir=output_path / "data" / domain, manifest=manifest)
+                metrics.append(m)
+                publish({"log": f"  {domain}: coverage={m.state_coverage_score:.2f}  dead_end_rate={m.dead_end_rate:.2f}"})
+
+        report = BenchmarkReport(ReportConfig(output_dir=output_path))
+        report.write_env_quality(metrics)
+
+        report_data = [
+            {
+                "env_name": m.env_name,
+                "state_coverage_score": m.state_coverage_score,
+                "reward_density": m.reward_density,
+                "dead_end_rate": m.dead_end_rate,
+                "action_diversity": m.action_diversity,
+                "num_episodes": m.num_episodes,
+                "num_steps": m.num_steps,
+            }
+            for m in metrics
+        ]
+        _update_run_status(run_id, "done", report_json=_json.dumps(report_data))
+        publish({"done": True, "log": f"[benchmark] run complete — {len(metrics)} environments analyzed"})
+        logger.info("[task:benchmark] run %s complete", run_id)
+
+    except Exception as exc:
+        logger.exception("[task:benchmark] run %s failed: %s", run_id, exc)
+        _update_run_status(run_id, "failed", error=str(exc))
+        publish({"error": str(exc)})
+
+
+def _update_run_status(
+    run_id: str,
+    status: str,
+    error: str | None = None,
+    report_json: str | None = None,
+) -> None:
+    from backend.app.database import get_session_factory
+    from backend.app.models import BenchmarkRun
+    from datetime import datetime, timezone
+
+    try:
+        SessionLocal = get_session_factory()
+        with SessionLocal() as db:
+            run = db.get(BenchmarkRun, run_id)
+            if run:
+                run.status = status
+                if error is not None:
+                    run.error = error
+                if report_json is not None:
+                    run.report_json = report_json
+                if status in ("done", "failed"):
+                    run.completed_at = datetime.now(timezone.utc)
+                db.commit()
+    except Exception as exc:
+        logger.error("[task:benchmark] DB update failed for %s: %s", run_id, exc)
