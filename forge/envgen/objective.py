@@ -30,20 +30,27 @@ class ObjectiveScorer:
     def __init__(self, client: LLMClient | None = None) -> None:
         self._client = client or get_client(max_tokens=256)
 
-    def score(self, state: dict, objective: str, **kwargs: object) -> float:
+    def score(
+        self,
+        state: dict,
+        objective: str,
+        *,
+        derived_diff: dict | None = None,
+        action_taken: dict | None = None,
+    ) -> float:
         """Return 0.0–1.0 representing how well state achieves objective.
 
-        Falls back to 0.5 (neutral) on any LLM/network error so the episode
-        keeps running rather than crashing.
-
-        Extra kwargs (e.g. derived_diff, action_taken) are accepted here and
-        ignored until Task 8 adds proper handling.
+        Falls back to 0.5 on any LLM/network error.
         """
         try:
             state_text = json.dumps(state, indent=2)
             if len(state_text) > 3000:
                 state_text = state_text[:3000] + "\n... (truncated)"
             user = f"Objective: {objective}\n\nCurrent application state:\n{state_text}"
+            if derived_diff:
+                user += f"\n\nDerived field changes (populated by this action):\n{json.dumps(derived_diff, indent=2)}"
+            if action_taken:
+                user += f"\n\nAction taken: {json.dumps(action_taken)}"
             result = self._client.extract(
                 system=_SCORER_SYSTEM, user=user, schema=_ScoreSchema
             )
