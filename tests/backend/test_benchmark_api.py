@@ -4,6 +4,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 from backend.app.database import Base
 from backend.app.models import BenchmarkRun
+from unittest.mock import MagicMock, patch
+from fastapi.testclient import TestClient
+from backend.app.main import app
 
 
 @pytest.fixture
@@ -33,3 +36,85 @@ def test_benchmark_run_model(db):
     assert fetched.completed_at is None
     assert fetched.error is None
     assert fetched.report_json is None
+
+
+@pytest.fixture
+def api_client(tmp_path, monkeypatch):
+    monkeypatch.setenv("FORGE_DB_URL", f"sqlite:///{tmp_path}/test.db")
+    from backend.app import database
+    database._engine = None
+    database._SessionLocal = None
+    database.init_db()
+    return TestClient(app)
+
+
+def test_list_benchmark_runs_empty(api_client):
+    resp = api_client.get("/api/benchmark/runs")
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+def test_get_benchmark_run_not_found(api_client):
+    resp = api_client.get("/api/benchmark/runs/bm_nonexistent")
+    assert resp.status_code == 404
+
+
+def test_create_benchmark_run(api_client):
+    with patch("backend.app.api.benchmark.run_benchmark_task") as mock_task:
+        mock_task.delay = MagicMock(return_value=MagicMock(id="celery-id-1"))
+        resp = api_client.post("/api/benchmark/runs", json={
+            "domains": ["email"],
+            "depth": 3,
+            "seeds": 2,
+            "output_dir": "bench_out",
+        })
+    assert resp.status_code == 202
+    data = resp.json()
+    assert "run_id" in data
+    assert data["run_id"].startswith("bm_")
+
+
+def test_get_benchmark_run_report_not_ready(api_client):
+    with patch("backend.app.api.benchmark.run_benchmark_task") as mock_task:
+        mock_task.delay = MagicMock(return_value=MagicMock(id="celery-id-2"))
+        create_resp = api_client.post("/api/benchmark/runs", json={
+            "domains": ["email"],
+            "depth": 2,
+            "seeds": 1,
+            "output_dir": "bench_out2",
+        })
+    run_id = create_resp.json()["run_id"]
+    resp = api_client.get(f"/api/benchmark/runs/{run_id}/report")
+    assert resp.status_code == 404
+
+
+def test_get_benchmark_run_report_with_data(api_client, tmp_path):
+    import json
+    from backend.app.database import get_session_factory
+    from backend.app.models import BenchmarkRun
+    from datetime import datetime, timezone
+
+    report_data = [{"env_name": "email", "state_coverage_score": 0.8,
+                    "reward_density": 0.5, "dead_end_rate": 0.1,
+                    "action_diversity": 0.7, "num_episodes": 10, "num_steps": 100}]
+    SessionLocal = get_session_factory()
+    with SessionLocal() as db:
+        run = BenchmarkRun(
+            id="bm_withreport",
+            status="done",
+            domains="email",
+            depth=3,
+            seeds=2,
+            output_dir=str(tmp_path),
+            created_at=datetime.now(timezone.utc),
+            report_json=json.dumps(report_data),
+        )
+        db.add(run)
+        db.commit()
+
+    resp = api_client.get("/api/benchmark/runs/bm_withreport/report")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body) == 1
+    assert body[0]["env_name"] == "email"
+    assert body[0]["state_coverage_score"] == 0.8
