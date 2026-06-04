@@ -106,15 +106,22 @@ export default function BenchmarkRunPage() {
           </div>
 
           <div>
-            <p className="text-xs text-muted-foreground mb-2">Task depth: {depth}</p>
+            <div className="flex items-baseline justify-between mb-2">
+              <p className="text-xs text-muted-foreground">Max difficulty</p>
+              <span className="text-xs font-mono font-medium tabular-nums">{depth} / 5</span>
+            </div>
             <input
               type="range" min={1} max={5} value={depth} disabled={isRunning}
               onChange={(e) => setDepth(Number(e.target.value))}
               className="w-full accent-primary"
             />
-            <div className="flex justify-between text-xs text-muted-foreground mt-0.5">
-              <span>1</span><span>5</span>
+            <div className="flex justify-between text-xs text-muted-foreground mt-1">
+              <span>1 — easy only</span>
+              <span>5 — all tasks</span>
             </div>
+            <p className="text-xs text-muted-foreground/70 mt-1.5">
+              Includes tasks with difficulty ≤ {depth}
+            </p>
           </div>
 
           <div>
