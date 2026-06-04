@@ -1,5 +1,4 @@
 from __future__ import annotations
-import hashlib
 import json
 
 from pydantic import BaseModel
@@ -65,9 +64,3 @@ class ObjectiveScorer:
         except Exception:
             return 0.5
 
-    @staticmethod
-    def state_hash(state: dict) -> str:
-        """SHA-256 of canonical JSON — used to detect unchanged state (dead ends)."""
-        return hashlib.sha256(
-            json.dumps(state, sort_keys=True).encode()
-        ).hexdigest()[:16]

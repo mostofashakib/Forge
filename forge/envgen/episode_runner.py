@@ -1,4 +1,5 @@
 from __future__ import annotations
+import hashlib
 import json
 import logging
 import secrets
@@ -42,8 +43,6 @@ class HashNormalizer:
     manifest: StateSchemaManifest | None
 
     def hash(self, state: dict) -> str:
-        import hashlib
-        import json
         if self.manifest is None:
             canonical = json.dumps(state, sort_keys=True)
         else:
