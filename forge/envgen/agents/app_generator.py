@@ -223,7 +223,7 @@ def _fmt(seconds: float) -> str:
 
 class AppGeneratorAgent(EnvGenAgent):
     depends_on: list[str] = []
-    produces: str = "app_code"
+    produces: list[str] = ["app_code"]
 
     def __init__(self, client: LLMClient | None = None) -> None:
         # Capable tier for complex files (main.py, ui.html)

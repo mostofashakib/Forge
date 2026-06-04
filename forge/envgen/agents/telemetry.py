@@ -29,7 +29,7 @@ _SYSTEM = (
 
 class TelemetryAgent(EnvGenAgent):
     depends_on: list[str] = ["app_code"]
-    produces: str = "instrumented_code"
+    produces: list[str] = ["instrumented_code"]
 
     def __init__(self, client: LLMClient | None = None) -> None:
         self._client = client or get_client(max_tokens=32768)

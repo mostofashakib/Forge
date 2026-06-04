@@ -38,7 +38,7 @@ _SYSTEM = (
 
 class RewardAgent(EnvGenAgent):
     depends_on: list[str] = []
-    produces: str = "reward_fn_code"
+    produces: list[str] = ["reward_fn_code"]
 
     def __init__(self, client: LLMClient | None = None) -> None:
         self._client = client or get_client(max_tokens=2048)
