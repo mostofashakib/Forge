@@ -32,8 +32,7 @@ def test_coverage_score_all_present():
 def test_coverage_score_partial():
     m = _manifest()
     state = {"inbox_count": 3}
-    # 3 required fields: inbox_count, selected_email, search_results (last_updated is volatile but still required)
-    # Actually all 4 fields are required by default. 1 of 4 present → 0.25
+    # All 4 fields are required=True by default (volatile fields still count). 1 of 4 present → 0.25
     score = m.coverage_score(state)
     assert score == pytest.approx(0.25)
 
@@ -83,3 +82,5 @@ def test_manifest_serializes_and_round_trips():
     m2 = StateSchemaManifest.model_validate_json(json_str)
     assert m2.env_name == m.env_name
     assert m2.fields.keys() == m.fields.keys()
+    assert m2.fields["last_updated"].volatile is True
+    assert m2.fields["search_results"].derived_from == ["search"]
