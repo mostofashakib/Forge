@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from forge.envgen.objective import ObjectiveScorer
+from forge.runtime.interaction import BrowserUse, BrowserUseSchema
 
 logger = logging.getLogger(__name__)
 
@@ -69,9 +70,45 @@ class BrowserEpisodeRunner:
         logger.error("[browser-ep] CDP at %s not reachable after %d attempts", self._cfg.cdp_url, max_retries)
         return False
 
+    # Killing motion keeps screenshots stable between identical runs, so
+    # vision-based scoring doesn't flake on half-played transitions.
+    _NO_MOTION_CSS = (
+        "*, *::before, *::after {"
+        " animation: none !important;"
+        " transition: none !important;"
+        " scroll-behavior: auto !important; }"
+    )
+
+    @staticmethod
+    def _disable_motion(ctx, page) -> None:
+        """Disable CSS animations/transitions on the current and all future pages."""
+        css = BrowserEpisodeRunner._NO_MOTION_CSS
+        init_script = (
+            "const apply = () => {"
+            " const s = document.createElement('style');"
+            f" s.textContent = `{css}`;"
+            " (document.head || document.documentElement).appendChild(s); };"
+            "document.readyState === 'loading'"
+            " ? document.addEventListener('DOMContentLoaded', apply) : apply();"
+        )
+        try:
+            ctx.add_init_script(init_script)
+            page.emulate_media(reduced_motion="reduce")
+            page.add_style_tag(content=css)
+        except Exception as exc:
+            logger.warning("[browser-ep] could not disable animations: %s", exc)
+
     @staticmethod
     def _screenshot(page) -> str:
         return base64.b64encode(page.screenshot(type="png")).decode()
+
+    @staticmethod
+    def browser_use_for(page, schema: BrowserUseSchema | None = None) -> BrowserUse:
+        """The BrowserUse contract a browser environment grants the agent."""
+        return BrowserUse(
+            schema=schema or BrowserUseSchema(),
+            executor=lambda action: BrowserEpisodeRunner._apply_action(page, action),
+        )
 
     @staticmethod
     def _apply_action(page, action: dict) -> None:
@@ -109,6 +146,8 @@ class BrowserEpisodeRunner:
                 browser = pw.chromium.connect_over_cdp(self._cfg.cdp_url)
                 ctx = browser.contexts[0] if browser.contexts else browser.new_context()
                 page = ctx.pages[0] if ctx.pages else ctx.new_page()
+                self._disable_motion(ctx, page)
+                browser_use = self.browser_use_for(page)
 
                 for step_idx in range(self._cfg.max_steps):
                     ss_before = self._screenshot(page)
@@ -125,7 +164,7 @@ class BrowserEpisodeRunner:
                         action = {"action_type": "noop", "reasoning": f"agent error: {exc}"}
 
                     try:
-                        self._apply_action(page, action)
+                        browser_use.execute(action)
                         time.sleep(self._cfg.action_settle_s)
                     except Exception as exc:
                         logger.debug("[browser-ep] step %d: action failed: %s", step_idx, exc)
