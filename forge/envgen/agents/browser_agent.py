@@ -5,6 +5,7 @@ import random
 from pydantic import BaseModel
 
 from forge.extraction.llm_client import LLMClient, get_client
+from forge.runtime.errors import AgentError
 
 
 _BROWSER_SYSTEM = (
@@ -94,4 +95,4 @@ def make_browser_agent(agent_id: str, seed: int | None = None):
     if agent_id == "llm" or agent_id.startswith("llm:"):
         model = agent_id[4:] if agent_id.startswith("llm:") else None
         return LLMBrowserAgent(get_client(max_tokens=512, model=model))
-    raise ValueError(f"Unknown browser agent id: {agent_id!r}. Use 'random', 'llm', or 'llm:<model>'.")
+    raise AgentError(f"Unknown browser agent id: {agent_id!r}. Use 'random', 'llm', or 'llm:<model>'.")

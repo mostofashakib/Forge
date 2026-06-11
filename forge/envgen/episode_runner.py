@@ -11,6 +11,11 @@ from pathlib import Path
 import httpx
 
 from forge.envgen.agents.container_agent import ContainerAgentBase
+from forge.envgen.episode_base import (
+    BaseEpisodeConfig,
+    BaseEpisodeResult,
+    TerminationMonitor,
+)
 from forge.envgen.objective import ObjectiveScorer
 from forge.schema.state_schema import StateSchemaManifest
 
@@ -21,18 +26,11 @@ logger = logging.getLogger(__name__)
 # Config & result data classes
 # ---------------------------------------------------------------------------
 
-@dataclass
-class EpisodeConfig:
+@dataclass(kw_only=True)
+class EpisodeConfig(BaseEpisodeConfig):
     base_url: str
-    objective: str
     max_steps: int = 50
-    # Stop if objective score stays below this for `consecutive_below_threshold` steps
-    divergence_threshold: float = 0.2
     consecutive_below_threshold: int = 8
-    # Stop if state is identical for `dead_end_patience` consecutive steps
-    dead_end_patience: int = 5
-    # Stop early with "success" if score reaches this
-    success_threshold: float = 0.9
     # httpx timeout per request (seconds)
     http_timeout: float = 15.0
     diff_floor: float = 0.1
@@ -67,22 +65,15 @@ class StepRecord:
     termination_reason: str | None
 
 
-@dataclass
-class EpisodeResult:
+@dataclass(kw_only=True)
+class EpisodeResult(BaseEpisodeResult):
     episode_id: str
     config: EpisodeConfig
     steps: list[StepRecord] = field(default_factory=list)
-    total_reward: float = 0.0
-    final_objective_score: float = 0.0
-    termination_reason: str = "unknown"
-    started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    completed_at: datetime | None = None
 
-    def to_jsonl(self) -> str:
-        """Serialize the full episode as newline-delimited JSON."""
-        lines: list[str] = []
-        for step in self.steps:
-            lines.append(json.dumps({
+    def _step_dicts(self) -> list[dict]:
+        return [
+            {
                 "step_index": step.step_index,
                 "state_before": step.state_before,
                 "action": step.action,
@@ -94,23 +85,12 @@ class EpisodeResult:
                 "terminated": step.terminated,
                 "truncated": step.truncated,
                 "termination_reason": step.termination_reason,
-            }))
-        # Episode summary as final line
-        lines.append(json.dumps({
-            "type": "episode_summary",
-            "episode_id": self.episode_id,
-            "total_steps": len(self.steps),
-            "total_reward": self.total_reward,
-            "final_objective_score": self.final_objective_score,
-            "termination_reason": self.termination_reason,
-            "started_at": self.started_at.isoformat(),
-            "completed_at": self.completed_at.isoformat() if self.completed_at else None,
-        }))
-        return "\n".join(lines)
+            }
+            for step in self.steps
+        ]
 
-    def write_jsonl(self, path: Path) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(self.to_jsonl(), encoding="utf-8")
+    def summary(self) -> dict:
+        return {**super().summary(), "episode_id": self.episode_id}
 
 
 # ---------------------------------------------------------------------------
@@ -281,12 +261,10 @@ class ContainerEpisodeRunner:
             result.completed_at = datetime.now(timezone.utc)
             return result
 
-        below_threshold_count = 0
-        recent_hashes: list[str] = []
+        monitor = TerminationMonitor(cfg)
 
         for step_idx in range(cfg.max_steps):
             state_hash_before = self._normalizer.hash(state)
-            recent_hashes.append(state_hash_before)
 
             # Agent picks an action
             try:
@@ -343,35 +321,13 @@ class ContainerEpisodeRunner:
             else:
                 reward = obj_score
 
-            # Evaluate stopping conditions
-            terminated = False
+            # Evaluate stopping conditions (state hash is the progress marker
+            # so fluctuating scores over a frozen state still count as dead-end)
             truncated = step_idx >= cfg.max_steps - 1
-            termination_reason: str | None = None
-
-            if obj_score >= cfg.success_threshold:
-                terminated = True
-                termination_reason = "success"
-            else:
-                # Dead-end: state hash unchanged for dead_end_patience steps
-                if len(recent_hashes) >= cfg.dead_end_patience:
-                    window = recent_hashes[-cfg.dead_end_patience:]
-                    if len(set(window)) == 1 and state_hash_after == window[-1]:
-                        terminated = True
-                        termination_reason = "dead_end"
-
-                if not terminated:
-                    # Divergence: consecutive steps scoring below threshold
-                    if obj_score < cfg.divergence_threshold:
-                        below_threshold_count += 1
-                    else:
-                        below_threshold_count = 0
-
-                    if below_threshold_count >= cfg.consecutive_below_threshold:
-                        terminated = True
-                        termination_reason = "diverged"
-
-                if not terminated and truncated:
-                    termination_reason = "max_steps"
+            termination_reason = monitor.observe(obj_score, marker=state_hash_after)
+            terminated = termination_reason is not None
+            if not terminated and truncated:
+                termination_reason = "max_steps"
 
             step = StepRecord(
                 step_index=step_idx,

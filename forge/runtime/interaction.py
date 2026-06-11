@@ -4,7 +4,12 @@ from typing import Callable, Literal
 
 from pydantic import BaseModel
 
-from forge.runtime.snapshot import InvalidActionError, ToolSpec
+from forge.runtime.errors import (
+    BrowserContractViolation,
+    ComputerContractViolation,
+    ToolContractViolation,
+)
+from forge.runtime.snapshot import ToolSpec
 
 _PARAM_TYPES: dict[str, type | tuple[type, ...]] = {
     "string": str,
@@ -118,7 +123,7 @@ class ToolUse:
     def execute(self, action: dict):
         error = self.schema.validate_action(action)
         if error:
-            raise InvalidActionError(error, code="TOOL_CONTRACT_VIOLATION")
+            raise ToolContractViolation(error)
         return self.executor(action)
 
 
@@ -134,7 +139,7 @@ class ComputerUse:
     def execute(self, action: dict):
         error = self.schema.validate_action(action)
         if error:
-            raise InvalidActionError(error, code="COMPUTER_CONTRACT_VIOLATION")
+            raise ComputerContractViolation(error)
         return self.executor(action)
 
 
@@ -150,5 +155,5 @@ class BrowserUse:
     def execute(self, action: dict):
         error = self.schema.validate_action(action)
         if error:
-            raise InvalidActionError(error, code="BROWSER_CONTRACT_VIOLATION")
+            raise BrowserContractViolation(error)
         return self.executor(action)
