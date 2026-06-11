@@ -85,6 +85,19 @@ def validate(
     typer.echo("✓ Valid")
 
 
+def _verify_determinism(env_instance, seed: int) -> None:
+    """Abort launch if two identically-seeded rollouts produce different observations."""
+    if os.environ.get("FORGE_SKIP_DETERMINISM_CHECK") == "1":
+        return
+    from forge.runtime.determinism import DeterminismError, run_determinism_check
+    try:
+        report = run_determinism_check(env_instance, seed=seed)
+    except DeterminismError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(1)
+    typer.echo(f"Determinism check passed (obs hash {report.observation_hash[:16]})")
+
+
 @app.command()
 def run(
     env: str = typer.Option(..., "--env", help="Environment name under generated_envs/"),
@@ -111,6 +124,7 @@ def run(
         raise typer.Exit(1)
 
     env_instance = getattr(mod, build_fn_name)(max_steps=steps)
+    _verify_determinism(env_instance, seed)
     task_dict: dict | None = {"name": task, "verifier_id": task} if task else None
     obs, info = env_instance.reset(seed=seed, options={"task": task_dict} if task_dict else None)
     typer.echo(f"Episode: {info['episode_id']}  task={task or 'none'}  seed={seed}")
@@ -159,6 +173,7 @@ def export(
 
     build_fn_name = f"build_{env}_env"
     env_instance = getattr(mod, build_fn_name)(max_steps=steps)
+    _verify_determinism(env_instance, seed)
     task_dict: dict | None = {"name": task, "verifier_id": task} if task else None
     env_instance.reset(seed=seed, options={"task": task_dict} if task_dict else None)
 
