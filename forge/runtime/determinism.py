@@ -4,30 +4,9 @@ import json
 import random
 from dataclasses import dataclass
 
+from forge.runtime.errors import DeterminismError
 
-class DeterminismError(RuntimeError):
-    """Raised when two identically-seeded rollouts produce different observations."""
-
-    def __init__(
-        self,
-        seed: int,
-        first_hash: str,
-        second_hash: str,
-        divergent_step: int | None = None,
-    ) -> None:
-        self.seed = seed
-        self.first_hash = first_hash
-        self.second_hash = second_hash
-        self.divergent_step = divergent_step
-        location = (
-            f"first divergence at observation {divergent_step}"
-            if divergent_step is not None
-            else "observation counts differ"
-        )
-        super().__init__(
-            f"Environment is not deterministic for seed {seed}: "
-            f"{first_hash} != {second_hash} ({location})"
-        )
+__all__ = ["DeterminismError", "DeterminismReport", "run_determinism_check"]
 
 
 @dataclass

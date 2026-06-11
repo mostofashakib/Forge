@@ -1,11 +1,15 @@
 from __future__ import annotations
-import json
 import logging
 import subprocess
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from forge.envgen.episode_base import (
+    BaseEpisodeConfig,
+    BaseEpisodeResult,
+    TerminationMonitor,
+)
 from forge.envgen.objective import ObjectiveScorer
 from forge.runtime.interaction import ComputerUse, ComputerUseSchema
 from forge.runtime.snapshot import InvalidActionError
@@ -20,15 +24,9 @@ from forge.envgen.tiered_reward import (
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class CliEpisodeConfig:
+@dataclass(kw_only=True)
+class CliEpisodeConfig(BaseEpisodeConfig):
     container_id: str
-    objective: str
-    max_steps: int = 30
-    divergence_threshold: float = 0.2
-    consecutive_below_threshold: int = 3
-    dead_end_patience: int = 5
-    success_threshold: float = 0.9
     command_timeout: float = 30.0
     # Loop-detector knobs (Tier 2 of the tiered reward).
     loop_repeat_threshold: int = 3
@@ -36,35 +34,19 @@ class CliEpisodeConfig:
     loop_window_size: int = 10
 
 
-@dataclass
-class CliEpisodeResult:
-    steps: list[dict] = field(default_factory=list)
-    total_reward: float = 0.0
-    final_objective_score: float = 0.0
-    termination_reason: str = "unknown"
-    started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    completed_at: datetime | None = None
+@dataclass(kw_only=True)
+class CliEpisodeResult(BaseEpisodeResult):
     # Tiered-reward artifacts. None when grading was skipped (e.g. unit test
     # ran without a real container).
     end_state_spec: dict | None = None
     grade: dict | None = None
 
-    def write_jsonl(self, path: Path) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        lines = [json.dumps(s) for s in self.steps]
-        summary = {
-            "type": "episode_summary",
-            "total_steps": len(self.steps),
-            "total_reward": self.total_reward,
-            "final_objective_score": self.final_objective_score,
-            "termination_reason": self.termination_reason,
-            "started_at": self.started_at.isoformat(),
-            "completed_at": self.completed_at.isoformat() if self.completed_at else None,
+    def summary(self) -> dict:
+        return {
+            **super().summary(),
             "end_state_spec": self.end_state_spec,
             "grade": self.grade,
         }
-        lines.append(json.dumps(summary))
-        path.write_text("\n".join(lines), encoding="utf-8")
 
 
 class CliEpisodeRunner:
@@ -132,8 +114,7 @@ class CliEpisodeRunner:
             window_size=self._cfg.loop_window_size,
         ))
 
-        below_threshold_count = 0
-        score_window: list[float] = []
+        monitor = TerminationMonitor(self._cfg)
         early_termination: str | None = None
         computer_use = self.computer_use()
 
@@ -161,7 +142,6 @@ class CliEpisodeRunner:
             # Per-step score remains useful as a live signal in the UI even
             # though the FINAL reward now comes from the tiered grader.
             score = self._scorer.score(score_state, self._cfg.objective)
-            score_window.append(score)
 
             step_record = {
                 "step_index": step_idx,
@@ -190,22 +170,9 @@ class CliEpisodeRunner:
                 result.termination_reason = loop_termination
                 break
 
-            if score >= self._cfg.success_threshold:
-                result.termination_reason = "success"
-                break
-
-            if len(score_window) >= self._cfg.dead_end_patience:
-                recent = score_window[-self._cfg.dead_end_patience:]
-                if len(set(round(s, 2) for s in recent)) == 1:
-                    result.termination_reason = "dead_end"
-                    break
-
-            if score < self._cfg.divergence_threshold:
-                below_threshold_count += 1
-            else:
-                below_threshold_count = 0
-            if below_threshold_count >= self._cfg.consecutive_below_threshold:
-                result.termination_reason = "diverged"
+            reason = monitor.observe(score)
+            if reason is not None:
+                result.termination_reason = reason
                 break
         else:
             result.termination_reason = "max_steps"

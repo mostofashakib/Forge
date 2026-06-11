@@ -5,6 +5,7 @@ import random
 from pydantic import BaseModel
 
 from forge.extraction.llm_client import LLMClient, get_client
+from forge.runtime.errors import AgentError
 
 
 _CLI_SYSTEM = (
@@ -73,4 +74,4 @@ def make_cli_agent(agent_id: str, seed: int | None = None):
     if agent_id == "llm" or agent_id.startswith("llm:"):
         model = agent_id[4:] if agent_id.startswith("llm:") else None
         return LLMCliAgent(get_client(max_tokens=256, model=model))
-    raise ValueError(f"Unknown CLI agent id: {agent_id!r}. Use 'random', 'llm', or 'llm:<model>'.")
+    raise AgentError(f"Unknown CLI agent id: {agent_id!r}. Use 'random', 'llm', or 'llm:<model>'.")

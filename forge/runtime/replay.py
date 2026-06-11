@@ -4,6 +4,7 @@ import json
 from dataclasses import dataclass, field
 from sqlalchemy.orm import Session
 from backend.app.models import Episode, EpisodeStep
+from forge.runtime.errors import EpisodeNotFoundError
 
 
 @dataclass
@@ -76,7 +77,7 @@ class ReplayService:
     def load_episode(self, episode_id: str, db: Session) -> EpisodeRecord:
         ep = db.get(Episode, episode_id)
         if ep is None:
-            raise ValueError(f"Episode {episode_id!r} not found")
+            raise EpisodeNotFoundError(f"Episode {episode_id!r} not found")
         steps = (
             db.query(EpisodeStep)
             .filter_by(episode_id=episode_id)
@@ -87,7 +88,7 @@ class ReplayService:
 
     def branch_from(self, episode_id: str, step_n: int, db: Session) -> list[dict]:
         if db.get(Episode, episode_id) is None:
-            raise ValueError(f"Episode {episode_id!r} not found")
+            raise EpisodeNotFoundError(f"Episode {episode_id!r} not found")
         steps = (
             db.query(EpisodeStep)
             .filter(

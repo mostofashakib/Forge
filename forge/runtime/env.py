@@ -4,6 +4,7 @@ import gymnasium as gym
 from forge.runtime.action import ActionValidator
 from forge.runtime.context import RuntimeContext
 from forge.runtime.diff import compute_diff
+from forge.runtime.errors import ResetRequiredError
 from forge.runtime.interaction import BrowserUse, ComputerUse, ToolUse, ToolUseSchema
 from forge.runtime.reward import RewardEngine
 from forge.runtime.snapshot import EnvironmentSpec, InvalidActionError, StepSnapshot, ToolSpec
@@ -73,7 +74,7 @@ class ForgeEnv(gym.Env):
     def current_trajectory(self):
         """Full recorded trajectory of the in-progress episode."""
         if self._traj_store is None:
-            raise RuntimeError("Must call reset() before reading the trajectory")
+            raise ResetRequiredError("Must call reset() before reading the trajectory")
         return self._traj_store.to_trajectory()
 
     def tool_surface(self) -> list[ToolSpec]:
@@ -125,7 +126,7 @@ class ForgeEnv(gym.Env):
 
     def step(self, action: dict) -> tuple[dict, float, bool, bool, dict]:
         if self._ctx is None:
-            raise RuntimeError("Must call reset() before step()")
+            raise ResetRequiredError("Must call reset() before step()")
 
         state_before = self._state_store.get()
         hash_before = self._state_store.hash()
