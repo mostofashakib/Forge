@@ -9,6 +9,7 @@ from typing import Callable
 
 from forge.runtime.env import ForgeEnv, InitialStateFactory
 from forge.runtime.determinism import run_determinism_check
+from forge.runtime.errors import DeterminismViolation, EnvironmentBuildError
 from forge.runtime.interaction import (
     BrowserUse,
     BrowserUseSchema,
@@ -19,10 +20,6 @@ from forge.runtime.reward import RewardEngine
 from forge.runtime.snapshot import EnvironmentSpec, ToolParam, ToolSpec
 from forge.runtime.transition import TransitionEngine, TransitionResult
 from forge.runtime.verifier import VerifierEngine
-
-
-class DeterminismViolation(RuntimeError):
-    """Raised when environment code breaks a rule in its DeterminismConfig."""
 
 
 @dataclass(frozen=True)
@@ -231,9 +228,13 @@ class EnvBuilder:
 
     def build(self, verify: bool = True, verify_seed: int = 42) -> ForgeEnv:
         if self._factory is None:
-            raise ValueError("EnvBuilder requires an initial state factory (with_initial_state)")
+            raise EnvironmentBuildError(
+                "EnvBuilder requires an initial state factory (with_initial_state)"
+            )
         if not self._transitions:
-            raise ValueError("EnvBuilder requires at least one transition (with_transition)")
+            raise EnvironmentBuildError(
+                "EnvBuilder requires at least one transition (with_transition)"
+            )
 
         te = TransitionEngine()
         for action_type, handler in self._transitions.items():

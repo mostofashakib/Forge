@@ -1,15 +1,15 @@
 from __future__ import annotations
 from pydantic import BaseModel
 
+from forge.runtime.errors import InvalidActionError
 
-class InvalidActionError(Exception):
-    def __init__(self, detail: str, code: str = "INVALID_ACTION") -> None:
-        super().__init__(detail)
-        self.code = code
-        self.detail = detail
-
-    def to_dict(self) -> dict:
-        return {"error": "INVALID_ACTION", "code": self.code, "detail": self.detail}
+__all__ = [
+    "InvalidActionError",
+    "ToolParam",
+    "ToolSpec",
+    "EnvironmentSpec",
+    "StepSnapshot",
+]
 
 
 class ToolParam(BaseModel):

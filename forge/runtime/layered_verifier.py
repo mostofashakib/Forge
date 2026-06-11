@@ -2,6 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
+from forge.runtime.errors import VerifierConfigurationError
 from forge.runtime.verification import CheckResult, VerificationResult
 
 # A check callable takes (state, trajectory, task) and returns one of:
@@ -168,7 +169,7 @@ class LayeredVerifier:
         if not self._judges:
             return []
         if self._judge_client is None:
-            raise RuntimeError(
+            raise VerifierConfigurationError(
                 f"LayeredVerifier '{self.verifier_id}' has LLM judge checks but no judge_client"
             )
         results = []
