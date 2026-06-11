@@ -1,53 +1,32 @@
 from __future__ import annotations
 import base64
-import json
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from forge.envgen.episode_base import (
+    BaseEpisodeConfig,
+    BaseEpisodeResult,
+    TerminationMonitor,
+)
 from forge.envgen.objective import ObjectiveScorer
 from forge.runtime.interaction import BrowserUse, BrowserUseSchema
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class BrowserEpisodeConfig:
+@dataclass(kw_only=True)
+class BrowserEpisodeConfig(BaseEpisodeConfig):
     cdp_url: str       # e.g. "http://localhost:9222"
-    objective: str
     max_steps: int = 20
-    divergence_threshold: float = 0.2
-    consecutive_below_threshold: int = 3
-    dead_end_patience: int = 5
-    success_threshold: float = 0.9
     action_settle_s: float = 1.0   # seconds to wait after each action
 
 
-@dataclass
-class BrowserEpisodeResult:
-    steps: list[dict] = field(default_factory=list)
-    total_reward: float = 0.0
-    final_objective_score: float = 0.0
-    termination_reason: str = "unknown"
-    started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    completed_at: datetime | None = None
-
-    def write_jsonl(self, path: Path) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        lines = [json.dumps(s) for s in self.steps]
-        summary = {
-            "type": "episode_summary",
-            "total_steps": len(self.steps),
-            "total_reward": self.total_reward,
-            "final_objective_score": self.final_objective_score,
-            "termination_reason": self.termination_reason,
-            "started_at": self.started_at.isoformat(),
-            "completed_at": self.completed_at.isoformat() if self.completed_at else None,
-        }
-        lines.append(json.dumps(summary))
-        path.write_text("\n".join(lines), encoding="utf-8")
+@dataclass(kw_only=True)
+class BrowserEpisodeResult(BaseEpisodeResult):
+    pass
 
 
 class BrowserEpisodeRunner:
@@ -138,8 +117,7 @@ class BrowserEpisodeRunner:
                 result.write_jsonl(jsonl_path)
             return result
 
-        below_threshold_count = 0
-        score_window: list[float] = []
+        monitor = TerminationMonitor(self._cfg)
 
         try:
             with sync_playwright() as pw:
@@ -172,7 +150,6 @@ class BrowserEpisodeRunner:
                     ss_after = self._screenshot(page)
                     score = self._scorer.score_with_image(ss_after, page.url, self._cfg.objective)
                     result.total_reward += score
-                    score_window.append(score)
 
                     step_record = {
                         "step_index": step_idx,
@@ -193,22 +170,9 @@ class BrowserEpisodeRunner:
                         action.get("action_type"), score, page.url[:60],
                     )
 
-                    if score >= self._cfg.success_threshold:
-                        result.termination_reason = "success"
-                        break
-
-                    if len(score_window) >= self._cfg.dead_end_patience:
-                        recent = score_window[-self._cfg.dead_end_patience:]
-                        if len(set(round(s, 2) for s in recent)) == 1:
-                            result.termination_reason = "dead_end"
-                            break
-
-                    if score < self._cfg.divergence_threshold:
-                        below_threshold_count += 1
-                    else:
-                        below_threshold_count = 0
-                    if below_threshold_count >= self._cfg.consecutive_below_threshold:
-                        result.termination_reason = "diverged"
+                    reason = monitor.observe(score)
+                    if reason is not None:
+                        result.termination_reason = reason
                         break
                 else:
                     result.termination_reason = "max_steps"

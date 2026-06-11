@@ -1,5 +1,6 @@
 from forge.runtime.agents.random_agent import RandomAgent
 from forge.runtime.agents.scripted_agent import ScriptedAgent
+from forge.runtime.errors import AgentError
 
 
 def make_agent(agent_id: str, **kwargs):
@@ -20,4 +21,4 @@ def make_agent(agent_id: str, **kwargs):
         from forge.runtime.agents.vllm_agent import vLLMAgent
         model = agent_id[len("vllm:"):]
         return vLLMAgent(model=model, **kwargs)
-    raise ValueError(f"Unknown agent_id: {agent_id!r}")
+    raise AgentError(f"Unknown agent_id: {agent_id!r}")
