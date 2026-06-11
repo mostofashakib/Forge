@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from forge.envgen.objective import ObjectiveScorer
+from forge.runtime.interaction import ComputerUse, ComputerUseSchema
+from forge.runtime.snapshot import InvalidActionError
 from forge.envgen.tiered_reward import (
     EndStateSpec,
     LoopDetector,
@@ -77,6 +79,13 @@ class CliEpisodeRunner:
         self._reward_engine = reward_engine or TieredRewardEngine()
         self._history: list[dict] = []
 
+    def computer_use(self, schema: ComputerUseSchema | None = None) -> ComputerUse:
+        """The ComputerUse contract a CLI environment grants the agent."""
+        return ComputerUse(
+            schema=schema or ComputerUseSchema(os="linux"),
+            executor=lambda action: self._exec(action["command"]),
+        )
+
     def _exec(self, command: str) -> dict:
         try:
             proc = subprocess.run(
@@ -126,6 +135,7 @@ class CliEpisodeRunner:
         below_threshold_count = 0
         score_window: list[float] = []
         early_termination: str | None = None
+        computer_use = self.computer_use()
 
         for step_idx in range(self._cfg.max_steps):
             state = self._state(end_state_spec)
@@ -136,7 +146,10 @@ class CliEpisodeRunner:
                 logger.warning("[cli-ep] step %d: agent.act failed: %s", step_idx, exc)
                 command = "echo 'agent error'"
 
-            exec_result = self._exec(command)
+            try:
+                exec_result = computer_use.execute({"action_type": "exec", "command": command})
+            except InvalidActionError as exc:
+                exec_result = {"command": command, "stdout": "", "stderr": exc.detail, "exit_code": -1}
             self._history.append(exec_result)
 
             score_state = {

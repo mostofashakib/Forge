@@ -580,6 +580,14 @@
   /* ── Scrollbar global ── */
   * { scrollbar-width: thin; scrollbar-color: var(--gray-200) transparent; }
 </style>
+<!-- Forge: animations disabled for deterministic, flake-free UI environments -->
+<style id="forge-no-motion">
+  *, *::before, *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+</style>
 </head>
 <body>
 

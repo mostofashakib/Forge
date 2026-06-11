@@ -4,8 +4,9 @@ import gymnasium as gym
 from forge.runtime.action import ActionValidator
 from forge.runtime.context import RuntimeContext
 from forge.runtime.diff import compute_diff
+from forge.runtime.interaction import BrowserUse, ComputerUse, ToolUse, ToolUseSchema
 from forge.runtime.reward import RewardEngine
-from forge.runtime.snapshot import EnvironmentSpec, InvalidActionError, StepSnapshot
+from forge.runtime.snapshot import EnvironmentSpec, InvalidActionError, StepSnapshot, ToolSpec
 from forge.runtime.state import StateStore
 from forge.runtime.trajectory import TrajectoryStore
 from forge.runtime.transition import TransitionEngine
@@ -35,6 +36,9 @@ class ForgeEnv(gym.Env):
         telemetry: "TelemetryClient | None" = None,
         policy_engine: "PolicyEngine | None" = None,
         observation_filter: "ObservationFilter | None" = None,
+        tool_specs: list[ToolSpec] | None = None,
+        computer_use: ComputerUse | None = None,
+        browser_use: BrowserUse | None = None,
     ) -> None:
         super().__init__()
         self.env_spec = env_spec
@@ -46,6 +50,9 @@ class ForgeEnv(gym.Env):
         self._telemetry = telemetry
         self._policy_engine = policy_engine
         self._observation_filter = observation_filter
+        self._tool_specs = {spec.name: spec for spec in (tool_specs or [])}
+        self.computer_use = computer_use
+        self.browser_use = browser_use
 
         self.observation_space = gym.spaces.Dict({})
         self.action_space = gym.spaces.Dict({})
@@ -62,6 +69,33 @@ class ForgeEnv(gym.Env):
     @property
     def action_types(self) -> frozenset:
         return frozenset(self._action_validator._valid_types)
+
+    def current_trajectory(self):
+        """Full recorded trajectory of the in-progress episode."""
+        if self._traj_store is None:
+            raise RuntimeError("Must call reset() before reading the trajectory")
+        return self._traj_store.to_trajectory()
+
+    def tool_surface(self) -> list[ToolSpec]:
+        """Every tool the agent may call, with params — bare spec if undocumented."""
+        return [
+            self._tool_specs.get(name, ToolSpec(name=name))
+            for name in sorted(self.action_types)
+        ]
+
+    @property
+    def tool_use(self) -> ToolUse:
+        """Tool-calling contract for this env: validated calls dispatch to step()."""
+        return ToolUse(schema=ToolUseSchema(tools=self.tool_surface()), executor=self.step)
+
+    def capabilities(self) -> list[str]:
+        """Interaction modes the agent has access to in this environment."""
+        modes = ["tool_use"]
+        if self.computer_use is not None:
+            modes.append("computer_use")
+        if self.browser_use is not None:
+            modes.append("browser_use")
+        return modes
 
     def reset(
         self, seed: int | None = None, options: dict | None = None

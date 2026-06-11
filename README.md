@@ -72,6 +72,7 @@ Premade environments ship with realistic seed data that resembles real products.
 ### Agent Runs & Data Collection
 
 - **Five agent adapters** — `random`, `scripted:<path>`, `anthropic:<model>`, `openai:<model>`, `vllm:<model>`
+- **AgentContext** — per-episode agent memory with a compact deterministic digest for prompt injection, stuck-vs-context-limit diagnosis, and automatic pruning of error spam and revisited-state noise
 - **Trajectory recording** — every step's state, action, and reward persisted to JSONL and DB
 - **Cross-run episode selection** — pick episodes from multiple runs, export as a single merged dataset
 - **Parallel rollouts** — launch batched episode rollouts across any compiled environment from the global Rollouts page
@@ -108,6 +109,34 @@ Six built-in verifier types compose into a `RewardBreakdown` returned on every s
 | `NegativeVerifier` | Forbidden events did not occur |
 | `PolicyVerifier` | Python expressions against current state |
 | `SemanticVerifier` | LLM-based semantic correctness (with embedding cache) |
+
+**Layered verification** — `LayeredVerifier` composes five layers into one verdict: final-state checks, invariant milestone checks (none skipped, correct order), trajectory checks (necessary tool calls made, no unnecessary ones), LLM-as-judge rubrics for creative tasks, and negative checks for unintended side effects.
+
+**Reward-hacking audit** — `RewardHackingAuditor` is a separate audit agent that asks whether a passing verdict was *earned*: it flags passes with skipped milestones, suspiciously short episodes, redundant call patterns, and supports a pluggable LLM audit client. `RewardHackingAuditor.for_verifier(...)` inherits the milestone list straight from a `LayeredVerifier`.
+
+### Interaction Contracts
+
+Every environment declares which capabilities the agent has access to — `tool_use`, `computer_use`, `browser_use`, or any combination via `env.capabilities()`. Each capability validates actions against its schema *before* anything touches the environment, so a hallucinated tool or out-of-bounds click never executes:
+
+| Capability | Interacts with | Schema enforces |
+|---|---|---|
+| **ToolUse** | API endpoints / functions of the environment | tool exists, required params present, param types match |
+| **ComputerUse** | The VM / OS (Linux, macOS, Windows) | allowed primitives (`exec`, `screenshot`), non-empty commands |
+| **BrowserUse** | The browser | allowed primitives (`click`, `type`, `press`, `navigate`, `scroll`), viewport bounds |
+
+- Every `ForgeEnv` exposes ToolUse (`env.tool_use.execute(...)` is a schema-validated `step()`); attach the others with `EnvBuilder.with_computer_use(...)` / `.with_browser_use(...)`
+- CLI environments grant ComputerUse (`os="linux"`); browser environments route every agent action through BrowserUse
+
+### Determinism
+
+Environments are verified deterministic at creation and launch — same seed and same trajectory always produce the same observations *and* the same score:
+
+- **Launch-time determinism check** — two identically-seeded rollouts are hashed (observations + rewards + termination flags); a mismatch raises `DeterminismError` and aborts the launch. Runs in the backend env loader, `forge run` / `forge export`, and `EnvBuilder.build()` (skip with `FORGE_SKIP_DETERMINISM_CHECK=1`)
+- **EnvBuilder + DeterminismConfig** — virtual clock, seeded RNG and UUIDs, canonical sorted-key JSON, float rejection (integers only), serialized transitions, network and filesystem guards inside the env, and fresh-universe startup (factory caches dropped every reset)
+- **Replayable episodes** — every step records the tool call, emitted events, state diff, hashes, and reward; `replay_episode(env, seed, steps)` re-executes any recording and verifies every state hash and reward against it
+- **Flake-free UI** — premade UIs ship a CSS no-motion override and browser sessions force `prefers-reduced-motion` + injected no-animation styles
+- **SQLite as source of truth** — premade and generated apps persist state in SQLite; verification reads `/forge/state` (DB-backed), never the UI
+- **Enforced separation of concerns** — architecture tests keep environment, agents, verifiers, and training code from importing across boundaries
 
 ### Security & Policy
 

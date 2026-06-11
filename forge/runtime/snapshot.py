@@ -12,6 +12,21 @@ class InvalidActionError(Exception):
         return {"error": "INVALID_ACTION", "code": self.code, "detail": self.detail}
 
 
+class ToolParam(BaseModel):
+    name: str
+    type: str = "string"
+    description: str = ""
+    required: bool = True
+
+
+class ToolSpec(BaseModel):
+    """Schema describing one tool an agent may call — the env's tool use surface."""
+
+    name: str
+    description: str = ""
+    params: list[ToolParam] = []
+
+
 class EnvironmentSpec(BaseModel):
     name: str
     domain: str
