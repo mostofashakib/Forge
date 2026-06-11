@@ -67,9 +67,10 @@ def test_layers_are_populated():
 
 @pytest.mark.parametrize("rel_path", AGENTS)
 def test_agents_only_depend_on_the_agent_package(rel_path):
+    # forge.runtime.errors is the shared error vocabulary, importable from any layer.
     for module in imports_of(rel_path):
         if module.startswith(("forge.", "backend.")):
-            assert module.startswith("forge.runtime.agents"), (
+            assert module.startswith(("forge.runtime.agents", "forge.runtime.errors")), (
                 f"{rel_path} imports {module} — agents must interact with environments "
                 "only through observations and action types"
             )
