@@ -1,9 +1,69 @@
 # forge/runtime/replay.py
 from __future__ import annotations
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from sqlalchemy.orm import Session
 from backend.app.models import Episode, EpisodeStep
+
+
+@dataclass
+class ReplayMismatch:
+    step_index: int
+    field: str
+    expected: object
+    actual: object
+
+
+@dataclass
+class ReplayResult:
+    matched: bool
+    steps_replayed: int
+    total_reward: float
+    mismatches: list[ReplayMismatch] = field(default_factory=list)
+
+
+def _recorded_field(step, name: str):
+    if isinstance(step, dict):
+        return step[name]
+    return getattr(step, name)
+
+
+def replay_episode(env, seed: int, steps) -> ReplayResult:
+    """Re-execute a recorded episode and verify it reproduces exactly.
+
+    Resets `env` with the recorded seed, replays each recorded action, and
+    compares the resulting state hash and reward of every step against the
+    recording. Accepts StepSnapshot objects, DB rows, or JSONL dicts — anything
+    carrying `action`, `state_hash_after`, and `reward` per step.
+    """
+    env.reset(seed=seed)
+    mismatches: list[ReplayMismatch] = []
+    total_reward = 0.0
+    steps = list(steps)
+
+    for index, recorded in enumerate(steps):
+        action = _recorded_field(recorded, "action")
+        if isinstance(action, str):
+            action = json.loads(action)
+        _obs, reward, _terminated, _truncated, _info = env.step(action)
+        total_reward += reward
+
+        snapshot = env.current_trajectory().steps[-1]
+        expected_hash = _recorded_field(recorded, "state_hash_after")
+        if snapshot.state_hash_after != expected_hash:
+            mismatches.append(
+                ReplayMismatch(index, "state_hash_after", expected_hash, snapshot.state_hash_after)
+            )
+        expected_reward = _recorded_field(recorded, "reward")
+        if reward != expected_reward:
+            mismatches.append(ReplayMismatch(index, "reward", expected_reward, reward))
+
+    return ReplayResult(
+        matched=not mismatches,
+        steps_replayed=len(steps),
+        total_reward=total_reward,
+        mismatches=mismatches,
+    )
 
 
 @dataclass
