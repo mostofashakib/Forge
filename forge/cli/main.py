@@ -87,15 +87,14 @@ def validate(
 
 def _verify_determinism(env_instance, seed: int) -> None:
     """Abort launch if two identically-seeded rollouts produce different observations."""
-    if os.environ.get("FORGE_SKIP_DETERMINISM_CHECK") == "1":
-        return
     from forge.runtime.determinism import DeterminismError, run_determinism_check
     try:
         report = run_determinism_check(env_instance, seed=seed)
     except DeterminismError as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(1)
-    typer.echo(f"Determinism check passed (obs hash {report.observation_hash[:16]})")
+    if not report.skipped:
+        typer.echo(f"Determinism check passed (obs hash {report.observation_hash[:16]})")
 
 
 @app.command()
@@ -129,18 +128,17 @@ def run(
     obs, info = env_instance.reset(seed=seed, options={"task": task_dict} if task_dict else None)
     typer.echo(f"Episode: {info['episode_id']}  task={task or 'none'}  seed={seed}")
 
-    action_types = sorted(env_instance._transition_engine.action_types)
+    action_types = env_instance.action_types
     if not action_types:
         typer.echo("No actions registered.")
         return
 
-    import random
-    rng = random.Random(seed)
+    from forge.runtime.policy import seeded_random_policy
+    policy = seeded_random_policy(seed)
     for step_num in range(steps):
-        action_type = rng.choice(action_types)
-        action = {"type": action_type}
+        action = policy(obs, action_types)
         obs, step_reward, terminated, truncated, step_info = env_instance.step(action)
-        typer.echo(f"  step {step_num:02d}: {action_type:<30} reward={step_reward:+.3f}")
+        typer.echo(f"  step {step_num:02d}: {action['type']:<30} reward={step_reward:+.3f}")
         if terminated:
             typer.echo("  → Terminated (task succeeded)")
             break
@@ -177,14 +175,13 @@ def export(
     task_dict: dict | None = {"name": task, "verifier_id": task} if task else None
     env_instance.reset(seed=seed, options={"task": task_dict} if task_dict else None)
 
-    action_types = sorted(env_instance._transition_engine.action_types)
-    import random
-    rng = random.Random(seed)
+    from forge.runtime.policy import seeded_random_policy
+    action_types = env_instance.action_types
+    policy = seeded_random_policy(seed)
     for _ in range(steps):
         if not action_types:
             break
-        action = {"type": rng.choice(action_types)}
-        _, _, terminated, truncated, _ = env_instance.step(action)
+        _, _, terminated, truncated, _ = env_instance.step(policy(None, action_types))
         if terminated or truncated:
             break
 

@@ -65,8 +65,11 @@ class CliEpisodeRunner:
         """The ComputerUse contract a CLI environment grants the agent."""
         return ComputerUse(
             schema=schema or ComputerUseSchema(os="linux"),
-            executor=lambda action: self._exec(action["command"]),
+            executor=self._exec_action,
         )
+
+    def _exec_action(self, action: dict) -> dict:
+        return self._exec(action["command"])
 
     def _exec(self, command: str) -> dict:
         try:
