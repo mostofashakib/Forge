@@ -75,7 +75,7 @@ Premade environments ship with realistic seed data that resembles real products.
 - **AgentContext** — per-episode agent memory with a compact deterministic digest for prompt injection, stuck-vs-context-limit diagnosis, and automatic pruning of error spam and revisited-state noise
 - **Trajectory recording** — every step's state, action, and reward persisted to JSONL and DB
 - **Cross-run episode selection** — pick episodes from multiple runs, export as a single merged dataset
-- **Parallel rollouts** — launch batched episode rollouts across any compiled environment from the global Rollouts page
+- **Parallel rollouts** — launch batched episode rollouts across any compiled environment from the global Rollouts page; `ParallelRolloutRunner` runs the same task across many isolated env copies concurrently (one fresh instance per rollout, millisecond start/teardown) and classifies each outcome as success, failure, partial success, or edge case so a single batch yields diverse training scenarios
 - **Per-environment dashboard** — pass rate, average reward, step efficiency, termination-reason breakdown
 
 ### Observability & Replay

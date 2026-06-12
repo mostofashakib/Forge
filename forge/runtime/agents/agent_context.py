@@ -1,6 +1,6 @@
 from __future__ import annotations
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 def _canonical(obj) -> str:
@@ -79,6 +79,7 @@ class AgentContext:
         self.auto_prune = auto_prune
         self.entries: list[ContextEntry] = []
         self._step_counter = 0
+        self._digest_cache: str | None = None
 
     # ------------------------------------------------------------------
     # Recording & digest
@@ -94,16 +95,24 @@ class AgentContext:
             is_error=isinstance(observation, dict) and "error" in observation,
         ))
         self._step_counter += 1
+        self._digest_cache = None
         if self.auto_prune and self.token_estimate > self.max_tokens:
             self.prune()
 
     def digest(self) -> str:
-        """Compact, deterministic context block for prompt injection."""
+        """Compact, deterministic context block for prompt injection.
+
+        Cached between mutations — record/prune/clear invalidate it — so
+        repeated digest/token_estimate reads don't rebuild the block.
+        """
+        if self._digest_cache is not None:
+            return self._digest_cache
         if not self.entries:
             return ""
         lines = [entry.render() for entry in self.entries]
         lines.append(f"latest observation: {self.entries[-1].observation_digest}")
-        return "\n".join(lines)
+        self._digest_cache = "\n".join(lines)
+        return self._digest_cache
 
     @property
     def token_estimate(self) -> int:
@@ -112,6 +121,7 @@ class AgentContext:
     def clear(self) -> None:
         self.entries = []
         self._step_counter = 0
+        self._digest_cache = None
 
     # ------------------------------------------------------------------
     # Diagnosis: stuck vs context limit
@@ -166,10 +176,12 @@ class AgentContext:
             seen_hashes.add(entry.state_hash)
         self.entries = kept
 
+        self._digest_cache = None
         while (
             self.token_estimate > self.max_tokens
             and len(self.entries) > self.stuck_window
         ):
             self.entries.pop(0)
+            self._digest_cache = None
 
         return before - len(self.entries)

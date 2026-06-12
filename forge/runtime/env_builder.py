@@ -1,9 +1,8 @@
 from __future__ import annotations
 import builtins
-import json
 import socket
 import threading
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from typing import Callable
 
@@ -44,10 +43,6 @@ class DeterminismConfig:
     canonical_json: bool = True         # canonical serializer for cross-library stability
 
 
-def canonical_dumps(obj) -> str:
-    """Serialize with sorted keys and fixed separators so the same object
-    always produces the same bytes regardless of insertion order or library."""
-    return json.dumps(obj, sort_keys=True, separators=(",", ":"), default=str)
 
 
 def _assert_no_floats(value, path: str) -> None:
@@ -97,16 +92,11 @@ def _block_filesystem():
 
 @contextmanager
 def _guards(config: DeterminismConfig):
-    if config.mock_external_calls and config.mock_filesystem:
-        with _block_network(), _block_filesystem():
-            yield
-    elif config.mock_external_calls:
-        with _block_network():
-            yield
-    elif config.mock_filesystem:
-        with _block_filesystem():
-            yield
-    else:
+    with ExitStack() as stack:
+        if config.mock_external_calls:
+            stack.enter_context(_block_network())
+        if config.mock_filesystem:
+            stack.enter_context(_block_filesystem())
         yield
 
 
