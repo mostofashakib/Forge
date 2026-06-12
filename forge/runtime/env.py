@@ -13,7 +13,7 @@ from forge.runtime.trajectory import TrajectoryStore
 from forge.runtime.transition import TransitionEngine
 from forge.runtime.verifier import VerifierEngine
 
-from forge.runtime.policy_engine import PolicyEngine, PolicyViolationResult
+from forge.runtime.policy_engine import PolicyEngine
 from forge.runtime.observation_filter import ObservationFilter
 
 if TYPE_CHECKING:
@@ -52,6 +52,7 @@ class ForgeEnv(gym.Env):
         self._policy_engine = policy_engine
         self._observation_filter = observation_filter
         self._tool_specs = {spec.name: spec for spec in (tool_specs or [])}
+        self._tool_use: ToolUse | None = None
         self.computer_use = computer_use
         self.browser_use = browser_use
 
@@ -86,8 +87,15 @@ class ForgeEnv(gym.Env):
 
     @property
     def tool_use(self) -> ToolUse:
-        """Tool-calling contract for this env: validated calls dispatch to step()."""
-        return ToolUse(schema=ToolUseSchema(tools=self.tool_surface()), executor=self.step)
+        """Tool-calling contract for this env: validated calls dispatch to step().
+
+        Built once — the tool surface is fixed after construction.
+        """
+        if self._tool_use is None:
+            self._tool_use = ToolUse(
+                schema=ToolUseSchema(tools=self.tool_surface()), executor=self.step
+            )
+        return self._tool_use
 
     def capabilities(self) -> list[str]:
         """Interaction modes the agent has access to in this environment."""
