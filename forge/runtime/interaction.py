@@ -1,12 +1,13 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Callable, Literal
+from typing import Callable, ClassVar, Literal
 
 from pydantic import BaseModel
 
 from forge.runtime.errors import (
     BrowserContractViolation,
     ComputerContractViolation,
+    InvalidActionError,
     ToolContractViolation,
 )
 from forge.runtime.snapshot import ToolSpec
@@ -112,48 +113,47 @@ class BrowserUseSchema(BaseModel):
 
 
 @dataclass
-class ToolUse:
-    """Tool-calling capability handed to an agent: validated calls to the
-    environment's API endpoints / functions."""
+class Capability:
+    """A validated interaction surface handed to an agent: actions are checked
+    against the schema's contract before the executor ever runs."""
+
+    schema: object
+    executor: Callable[[dict], object]
+    name = "capability"
+    violation: ClassVar[type[InvalidActionError]] = InvalidActionError
+
+    def execute(self, action: dict):
+        error = self.schema.validate_action(action)
+        if error:
+            raise self.violation(error)
+        return self.executor(action)
+
+
+@dataclass
+class ToolUse(Capability):
+    """Tool-calling capability: validated calls to the environment's API
+    endpoints / functions."""
 
     schema: ToolUseSchema
-    executor: Callable[[dict], object]
     name = "tool_use"
-
-    def execute(self, action: dict):
-        error = self.schema.validate_action(action)
-        if error:
-            raise ToolContractViolation(error)
-        return self.executor(action)
+    violation = ToolContractViolation
 
 
 @dataclass
-class ComputerUse:
-    """OS capability handed to an agent: validated execution of VM/OS
-    primitives (linux/macOS/Windows)."""
+class ComputerUse(Capability):
+    """OS capability: validated execution of VM/OS primitives
+    (linux/macOS/Windows)."""
 
     schema: ComputerUseSchema
-    executor: Callable[[dict], object]
     name = "computer_use"
-
-    def execute(self, action: dict):
-        error = self.schema.validate_action(action)
-        if error:
-            raise ComputerContractViolation(error)
-        return self.executor(action)
+    violation = ComputerContractViolation
 
 
 @dataclass
-class BrowserUse:
-    """Browser capability handed to an agent: validated execution of page
-    primitives against a viewport."""
+class BrowserUse(Capability):
+    """Browser capability: validated execution of page primitives against
+    a viewport."""
 
     schema: BrowserUseSchema
-    executor: Callable[[dict], object]
     name = "browser_use"
-
-    def execute(self, action: dict):
-        error = self.schema.validate_action(action)
-        if error:
-            raise BrowserContractViolation(error)
-        return self.executor(action)
+    violation = BrowserContractViolation
