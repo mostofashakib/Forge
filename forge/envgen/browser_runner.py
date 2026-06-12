@@ -3,6 +3,7 @@ import base64
 import logging
 import time
 from dataclasses import dataclass
+from functools import partial
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -86,7 +87,7 @@ class BrowserEpisodeRunner:
         """The BrowserUse contract a browser environment grants the agent."""
         return BrowserUse(
             schema=schema or BrowserUseSchema(),
-            executor=lambda action: BrowserEpisodeRunner._apply_action(page, action),
+            executor=partial(BrowserEpisodeRunner._apply_action, page),
         )
 
     @staticmethod

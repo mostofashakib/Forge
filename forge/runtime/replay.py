@@ -39,25 +39,30 @@ def replay_episode(env, seed: int, steps) -> ReplayResult:
     """
     env.reset(seed=seed)
     mismatches: list[ReplayMismatch] = []
+    rewards: list[float] = []
     total_reward = 0.0
     steps = list(steps)
 
-    for index, recorded in enumerate(steps):
+    for recorded in steps:
         action = _recorded_field(recorded, "action")
         if isinstance(action, str):
             action = json.loads(action)
         _obs, reward, _terminated, _truncated, _info = env.step(action)
+        rewards.append(reward)
         total_reward += reward
 
-        snapshot = env.current_trajectory().steps[-1]
+    # One trajectory read after the loop — to_trajectory() copies the step
+    # list, so reading it per step would be quadratic.
+    snapshots = env.current_trajectory().steps
+    for index, recorded in enumerate(steps):
         expected_hash = _recorded_field(recorded, "state_hash_after")
-        if snapshot.state_hash_after != expected_hash:
+        if snapshots[index].state_hash_after != expected_hash:
             mismatches.append(
-                ReplayMismatch(index, "state_hash_after", expected_hash, snapshot.state_hash_after)
+                ReplayMismatch(index, "state_hash_after", expected_hash, snapshots[index].state_hash_after)
             )
         expected_reward = _recorded_field(recorded, "reward")
-        if reward != expected_reward:
-            mismatches.append(ReplayMismatch(index, "reward", expected_reward, reward))
+        if rewards[index] != expected_reward:
+            mismatches.append(ReplayMismatch(index, "reward", expected_reward, rewards[index]))
 
     return ReplayResult(
         matched=not mismatches,
