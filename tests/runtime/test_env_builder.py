@@ -4,11 +4,11 @@ import socket
 import pytest
 from forge.runtime.determinism import DeterminismError
 from forge.runtime.env import ForgeEnv
+from forge.runtime.canonical import canonical_dumps
 from forge.runtime.env_builder import (
     DeterminismConfig,
     DeterminismViolation,
     EnvBuilder,
-    canonical_dumps,
 )
 from forge.runtime.transition import TransitionResult
 

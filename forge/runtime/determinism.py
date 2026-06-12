@@ -1,12 +1,15 @@
 from __future__ import annotations
 import hashlib
-import json
-import random
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, field
 
+from forge.runtime.canonical import canonical_hash
 from forge.runtime.errors import DeterminismError
+from forge.runtime.policy import seeded_random_policy
 
 __all__ = ["DeterminismError", "DeterminismReport", "run_determinism_check"]
+
+SKIP_ENV_VAR = "FORGE_SKIP_DETERMINISM_CHECK"
 
 
 @dataclass
@@ -14,14 +17,9 @@ class DeterminismReport:
     passed: bool
     seed: int
     observation_hash: str
-    actions: list[dict]
-    total_reward: float
-
-
-def _canonical_hash(obs: dict) -> str:
-    return hashlib.sha256(
-        json.dumps(obs, sort_keys=True, default=str).encode()
-    ).hexdigest()
+    actions: list[dict] = field(default_factory=list)
+    total_reward: float = 0.0
+    skipped: bool = False
 
 
 def _rollout(
@@ -32,21 +30,19 @@ def _rollout(
 
     Each step's hash covers the observation, reward, and termination flags, so
     a divergent score fails the check just like a divergent observation. If
-    `actions` is None, actions are generated from a RNG seeded with `seed` over
-    the env's registered action types, so both rollouts can regenerate or
-    replay the identical sequence.
+    `actions` is None, actions come from the shared seeded-random policy, so
+    both rollouts can regenerate or replay the identical sequence.
     """
     obs, _info = env.reset(seed=seed)
-    step_hashes = [_canonical_hash(obs)]
+    step_hashes = [canonical_hash(obs)]
     taken: list[dict] = []
     total_reward = 0.0
 
     if actions is None:
-        action_types = sorted(env.action_types)
-        if not action_types:
+        if not env.action_types:
             return step_hashes, taken, total_reward
-        rng = random.Random(seed)
-        planned = [{"type": rng.choice(action_types)} for _ in range(num_steps)]
+        policy = seeded_random_policy(seed)
+        planned = [policy(obs, env.action_types) for _ in range(num_steps)]
     else:
         planned = actions[:num_steps]
 
@@ -56,11 +52,11 @@ def _rollout(
         except Exception as exc:
             # A transition rejecting a generated action is fine as long as it
             # rejects identically on replay — fold the error into the stream.
-            step_hashes.append(_canonical_hash({"__step_error__": repr(exc)}))
+            step_hashes.append(canonical_hash({"__step_error__": repr(exc)}))
             taken.append(action)
             continue
         total_reward += reward
-        step_hashes.append(_canonical_hash({
+        step_hashes.append(canonical_hash({
             "obs": obs,
             "reward": reward,
             "terminated": terminated,
@@ -84,7 +80,13 @@ def run_determinism_check(
     same actions with the same seed, hashes both observation streams, and
     raises DeterminismError if the hashes differ. Leaves the env in a stepped
     state — callers must reset() before normal use.
+
+    Setting FORGE_SKIP_DETERMINISM_CHECK=1 skips the check everywhere it is
+    wired (env loader, CLI, EnvBuilder) and returns a report with skipped=True.
     """
+    if os.environ.get(SKIP_ENV_VAR) == "1":
+        return DeterminismReport(passed=True, seed=seed, observation_hash="", skipped=True)
+
     first_hashes, taken, first_total = _rollout(env, seed, num_steps, actions)
     second_hashes, _, _second_total = _rollout(env, seed, num_steps, taken if actions is None else actions)
 
