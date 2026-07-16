@@ -3,7 +3,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 from backend.app.models import Episode, EpisodeStep
-from backend.app.services.episode_stats import get_stats  # noqa: F401 — re-exported
+from backend.app.services.episode_stats import get_stats as get_stats
+
+__all__ = ["get_stats"]
 
 
 def create_episode(
@@ -54,5 +56,4 @@ def list_episodes(env_name: str, db: Session, limit: int = 20) -> list[Episode]:
         .limit(limit)
         .all()
     )
-
 

@@ -475,6 +475,8 @@ def test_run_cli_container_uses_tail_command():
     assert kwargs["command"] == ["tail", "-f", "/dev/null"]
     assert kwargs["detach"] is True
     assert kwargs["labels"]["forge.type"] == "cli"
+    assert kwargs["pids_limit"] == 256
+    assert kwargs["init"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -532,6 +534,10 @@ def test_run_returns_container_id_and_port():
     assert container_id == "abc123"
     assert port == 54321
     mock_docker.containers.run.assert_called_once()
+    kwargs = mock_docker.containers.run.call_args.kwargs
+    assert kwargs["ports"]["8000/tcp"] == ("127.0.0.1", None)
+    assert kwargs["cap_drop"] == ["ALL"]
+    assert kwargs["security_opt"] == ["no-new-privileges:true"]
 
 
 # ---------------------------------------------------------------------------
@@ -592,6 +598,13 @@ def test_reattach_all_skips_containers_without_port():
 # ---------------------------------------------------------------------------
 # _normalise_dockerfile_base — rewrites LLM-chosen python tags to canonical base
 # ---------------------------------------------------------------------------
+
+def test_build_rejects_generated_network_import_before_docker(tmp_path: Path):
+    (tmp_path / "main.py").write_text("import requests\n")
+    (tmp_path / "Dockerfile").write_text(f"FROM {FORGE_PYTHON_BASE}\n")
+    with pytest.raises(RuntimeError, match="violates network policy"):
+        ContainerRuntime().build("unsafe_env", tmp_path)
+
 
 def test_normalise_rewrites_python_311_to_canonical(tmp_path: Path):
     df = tmp_path / "Dockerfile"

@@ -19,10 +19,13 @@ def seeded_random_policy(seed: int) -> Callable[[dict, frozenset], dict]:
 
 
 class RandomPolicy:
-    def __init__(self, action_types: frozenset[str] | set[str]) -> None:
+    def __init__(
+        self, action_types: frozenset[str] | set[str], seed: int | None = None
+    ) -> None:
         if not action_types:
             raise ValueError("action_types must not be empty")
         self._action_types = sorted(action_types)
+        self._rng = random.Random(seed)
 
     def act(self, obs: dict) -> dict:
-        return {"type": random.choice(self._action_types)}
+        return {"type": self._rng.choice(self._action_types)}

@@ -7,11 +7,15 @@ import { API_BASE, wsBase } from "@/lib/api";
 type EnvType = "general" | "cli" | "browser";
 
 const AGENTS = [
-  { id: "app_code",          label: "App Generator",             logPrefix: "[app-gen]" },
+  { id: "generation_plan",   label: "Prompt Planner",             logPrefix: null },
+  { id: "backend_code",      label: "Backend Builder",            logPrefix: "[backend-builder]" },
+  { id: "ui_code",           label: "UI Builder",                 logPrefix: "[ui-builder]" },
+  { id: "app_code",          label: "App Assembly",               logPrefix: null },
   { id: "instrumented_code", label: "Telemetry Instrumentation", logPrefix: null },
   { id: "state_bridge_code", label: "State Bridge",              logPrefix: null },
   { id: "policy_dsl",        label: "Policy Rules",              logPrefix: null },
   { id: "reward_fn_code",    label: "Reward Function",           logPrefix: null },
+  { id: "review_report",     label: "Quality Reviewer",          logPrefix: null },
 ];
 
 const STEP_PCT = Math.floor(100 / AGENTS.length);

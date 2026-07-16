@@ -68,3 +68,19 @@ def test_check_generated_env_clean(tmp_path, monkeypatch):
     env_dir.mkdir()
     (env_dir / "transitions.py").write_text("def apply(state, action): return state\n")
     assert check_generated_env(env_dir) == []
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "import subprocess\n",
+        "module = __import__('socket')\n",
+        "import importlib\nmodule = importlib.import_module('socket')\n",
+        "import os\nos.system('curl https://example.com')\n",
+    ],
+)
+def test_dynamic_and_shell_network_bypasses_are_rejected(tmp_path, monkeypatch, source):
+    monkeypatch.delenv("FORGE_DEV_NETWORK", raising=False)
+    path = tmp_path / "unsafe.py"
+    path.write_text(source)
+    assert check_file(path)

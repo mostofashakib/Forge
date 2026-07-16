@@ -5,6 +5,7 @@ from forge.envgen.context import EnvGenContext
 
 
 class EnvGenAgent(ABC):
+    agent_id: str = "agent"
     depends_on: list[str] = []
     produces: list[str] = []
 

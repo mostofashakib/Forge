@@ -10,6 +10,7 @@ from forge.compiler.generators.gym_wrapper import GymWrapperGenerator
 from forge.compiler.generators.test_suite import TestSuiteGenerator
 from forge.compiler.generators.adversarial_test import AdversarialTestGenerator
 from forge.extraction.schemas import CompilerInput
+from forge.paths import confined_path, validate_identifier
 
 _CUSTOM_STUBS = {
     "transitions.py": (
@@ -88,7 +89,8 @@ class PackageBuilder:
         self._output_root = output_root
 
     def build(self, compiler_input: CompilerInput) -> Path:
-        pkg = self._output_root / compiler_input.project_name
+        project_name = validate_identifier(compiler_input.project_name, label="project_name")
+        pkg = confined_path(self._output_root, project_name)
         pkg.mkdir(parents=True, exist_ok=True)
 
         _write(pkg / "__init__.py", "")
@@ -102,11 +104,11 @@ class PackageBuilder:
             _write(pkg / subdir / "__init__.py", "")
 
         for name, code in TransitionGenerator().generate(compiler_input).items():
-            _write(pkg / "transitions" / f"{name}.py", code)
+            _write(pkg / "transitions" / f"{validate_identifier(name, label='action name')}.py", code)
         for name, code in VerifierGenerator().generate(compiler_input).items():
-            _write(pkg / "verifiers" / f"{name}.py", code)
+            _write(pkg / "verifiers" / f"{validate_identifier(name, label='task name')}.py", code)
         for name, code in RewardGenerator().generate(compiler_input).items():
-            _write(pkg / "rewards" / f"{name}.py", code)
+            _write(pkg / "rewards" / f"{validate_identifier(name, label='task name')}.py", code)
 
         tests_dir = pkg / "tests"
         tests_dir.mkdir(exist_ok=True)

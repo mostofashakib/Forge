@@ -1,5 +1,6 @@
 from __future__ import annotations
 from forge.runtime.verification import CheckResult
+from forge.runtime.safe_expression import evaluate_expression
 
 
 class ExactStateVerifier:
@@ -8,8 +9,7 @@ class ExactStateVerifier:
 
     def check(self, state: dict, trajectory, task: dict) -> CheckResult:
         try:
-            # Expressions come from trusted compiler output, not user input
-            result = eval(self._expression, {"__builtins__": {}}, state)
+            result = evaluate_expression(self._expression, state)
             passed = bool(result)
         except Exception as exc:
             return CheckResult(

@@ -1,9 +1,9 @@
 # backend/app/services/runner_service.py
 from __future__ import annotations
 import asyncio
-import os
 import secrets
 from pathlib import Path
+from forge.settings import generated_envs_root
 from forge.runtime.policy import RandomPolicy
 from forge.runtime.telemetry import TelemetryClient
 from backend.app.services import episode_service
@@ -23,11 +23,32 @@ async def start_episode(
     seed: int,
     agent_id: str,
 ) -> str:
+    return await _start_episode(env_name, task_name, seed, agent_id, [])
+
+
+async def start_branched_episode(
+    env_name: str,
+    task_name: str,
+    seed: int,
+    agent_id: str,
+    prefix_actions: list[dict],
+) -> str:
+    """Start a new episode from a deterministic replay prefix."""
+    return await _start_episode(env_name, task_name, seed, agent_id, prefix_actions)
+
+
+async def _start_episode(
+    env_name: str,
+    task_name: str,
+    seed: int,
+    agent_id: str,
+    prefix_actions: list[dict],
+) -> str:
     """Create Episode row, initialise queue, spawn background task, return episode_id."""
     episode_id = f"ep_{seed:08x}_{secrets.token_hex(4)}"
 
     # Compute jsonl_path here so it can be stored in the Episode row
-    envs_root = Path(os.environ.get("FORGE_GENERATED_ENVS_DIR", "generated_envs"))
+    envs_root = generated_envs_root()
     jsonl_path = envs_root / env_name / "episodes" / f"{episode_id}.jsonl"
 
     # Create Episode row synchronously so it's immediately queryable
@@ -48,7 +69,15 @@ async def start_episode(
 
     episode_queues[episode_id] = asyncio.Queue()
     task = asyncio.create_task(
-        _run_episode(episode_id, env_name, task_name, seed, agent_id, jsonl_path)
+        _run_episode(
+            episode_id,
+            env_name,
+            task_name,
+            seed,
+            agent_id,
+            jsonl_path,
+            prefix_actions,
+        )
     )
     episode_tasks[episode_id] = task
     return episode_id
@@ -61,6 +90,7 @@ async def _run_episode(
     seed: int,
     agent_id: str,
     jsonl_path: Path,
+    prefix_actions: list[dict],
 ) -> None:
     queue = episode_queues.get(episode_id)
     SessionFactory = get_session_factory()
@@ -74,10 +104,18 @@ async def _run_episode(
             jsonl_path=jsonl_path,
         )
         env = load_forge_env(env_name, telemetry)
-        policy = RandomPolicy(env.action_types)
+        policy = RandomPolicy(env.action_types, seed=seed)
 
         obs, info = env.reset(seed=seed)
         terminated = truncated = False
+
+        for action in prefix_actions:
+            # Consume the deterministic policy choice that the original run
+            # made at this step, then replay the recorded action exactly.
+            policy.act(obs)
+            obs, _reward, terminated, truncated, _step_info = env.step(action)
+            if terminated or truncated:
+                break
 
         while not (terminated or truncated):
             action = policy.act(obs)

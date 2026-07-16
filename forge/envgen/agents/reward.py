@@ -37,6 +37,7 @@ _SYSTEM = (
 
 
 class RewardAgent(EnvGenAgent):
+    agent_id = "reward"
     depends_on: list[str] = []
     produces: list[str] = ["reward_fn_code"]
 

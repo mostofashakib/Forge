@@ -190,15 +190,19 @@ async def stream_episode(
                 try:
                     msg = get_msg.result()
                     if isinstance(msg, dict) and msg.get("type") == "fork":
-                        step_n = msg["step"]
+                        step_n = int(msg["step"])
+                        prefix_actions = ReplayService().branch_from(
+                            episode_id, step_n, db
+                        )
                         old_task = runner_service.episode_tasks.get(episode_id)
                         if old_task and not old_task.done():
                             old_task.cancel()
-                        new_episode_id = await runner_service.start_episode(
+                        new_episode_id = await runner_service.start_branched_episode(
                             env_name=ep.env_name,
                             task_name=ep.task_name,
                             seed=ep.seed,
                             agent_id=ep.agent_id,
+                            prefix_actions=prefix_actions,
                         )
                         queue = runner_service.episode_queues[new_episode_id]
                         episode_id = new_episode_id

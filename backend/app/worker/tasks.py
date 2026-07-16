@@ -1,17 +1,16 @@
 from __future__ import annotations
 import logging
-import os
 import secrets
 from datetime import datetime, timezone
 from pathlib import Path
 
 from celery import group
 from sqlalchemy import update
-from sqlalchemy.orm import Session
 
 from backend.app.worker.celery_app import celery
 from backend.app.models import RolloutJob, Episode, AgentRun, AgentEpisode
 from backend.app.utils.env_loader import load_forge_env
+from forge.settings import generated_envs_root, redis_url
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +35,7 @@ def run_episode_task(self, rollout_job_id: str, episode_index: int, seed: int) -
         task_name = job.task_name
         agent_id = job.agent_id
 
-    envs_root = Path(os.environ.get("FORGE_GENERATED_ENVS_DIR", "generated_envs"))
+    envs_root = generated_envs_root()
     jsonl_dir = envs_root / env_name / "episodes"
     jsonl_dir.mkdir(parents=True, exist_ok=True)
     jsonl_path = jsonl_dir / f"{episode_id}.jsonl"
@@ -125,8 +124,8 @@ def build_sandbox_task(
 
     logger.info("[task:build_sandbox] STARTED — env_name=%s env_type=%s job_id=%s", env_name, env_type, job_id)
 
-    redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
-    r = _redis.from_url(redis_url)
+    redis_connection_url = redis_url()
+    r = _redis.from_url(redis_connection_url)
     channel = f"forge:progress:{env_name}"
 
     def publish(msg: dict) -> None:
@@ -200,11 +199,15 @@ def build_sandbox_task(
 
         async def on_progress(artifact_name: str, _value) -> None:
             label = {
-                "app_code":          "App Generator",
+                "generation_plan":   "Prompt Planner",
+                "backend_code":      "Backend Builder",
+                "ui_code":           "UI Builder",
+                "app_code":          "App Assembly",
                 "instrumented_code": "Telemetry Instrumentation",
                 "state_bridge_code": "State Bridge",
                 "policy_dsl":        "Policy Rules",
                 "reward_fn_code":    "Reward Function",
+                "review_report":     "Quality Reviewer",
             }.get(artifact_name, artifact_name)
             publish({"log": f"[agent] {label} — done ✓"})
             publish({"artifact": artifact_name, "status": "done"})
@@ -234,7 +237,7 @@ def build_sandbox_task(
         )
         publish({"log": "[forge] all agents finished — building Docker image…"})
 
-        envs_root = Path(os.environ.get("FORGE_GENERATED_ENVS_DIR", "generated_envs"))
+        envs_root = generated_envs_root()
         app_dir = envs_root / env_name / "app"
         runtime = ContainerRuntime()
 
@@ -414,7 +417,7 @@ def run_container_episode_task(self, run_id: str, episode_index: int, seed: int)
         dead_end_patience = run.dead_end_patience
         success_threshold = run.success_threshold
 
-    envs_root = Path(os.environ.get("FORGE_GENERATED_ENVS_DIR", "generated_envs"))
+    envs_root = generated_envs_root()
     jsonl_dir = envs_root / env_name / "agent_episodes"
     jsonl_dir.mkdir(parents=True, exist_ok=True)
     jsonl_path = jsonl_dir / f"{episode_id}.jsonl"
@@ -667,14 +670,12 @@ def run_benchmark_task(
     import redis as _redis
     from pathlib import Path as _Path
     from forge.schema.state_schema import StateSchemaManifest as _StateSchemaManifest
-    from backend.app.database import get_session_factory
-    from backend.app.models import BenchmarkRun
 
-    redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+    redis_connection_url = redis_url()
     channel = f"forge:benchmark:{run_id}"
 
     try:
-        r = _redis.from_url(redis_url, socket_connect_timeout=3, socket_timeout=3)
+        r = _redis.from_url(redis_connection_url, socket_connect_timeout=3, socket_timeout=3)
         r.ping()
     except Exception as exc:
         logger.error("[task:benchmark] Redis unavailable — %s", exc)
@@ -698,7 +699,7 @@ def run_benchmark_task(
         output_path = _Path(output_dir)
         cfg = CollectionConfig(domains=domains, depth=depth, seeds=seeds, output_dir=output_path / "data")
         collector = DataCollector(cfg)
-        envs_root = _Path(os.environ.get("FORGE_GENERATED_ENVS_DIR", "generated_envs"))
+        envs_root = generated_envs_root()
 
         checkpoint = CollectionCheckpoint(output_dir=output_path / "data")
         pending = collector._pending_runs(checkpoint)

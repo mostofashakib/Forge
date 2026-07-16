@@ -35,7 +35,6 @@ This module owns the LLM calls and the assertion-running logic. The
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 import subprocess
 from collections import deque
