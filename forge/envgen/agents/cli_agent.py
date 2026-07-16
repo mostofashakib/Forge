@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 from forge.extraction.llm_client import LLMClient, get_client
 from forge.runtime.errors import AgentError
+from forge.envgen.config import envgen_config
 
 
 _CLI_SYSTEM = (
@@ -21,6 +22,10 @@ _CLI_SYSTEM = (
 )
 
 
+class CliAgentPrompts:
+    SYSTEM = _CLI_SYSTEM
+
+
 class _CommandSchema(BaseModel):
     command: str
     reasoning: str
@@ -28,7 +33,7 @@ class _CommandSchema(BaseModel):
 
 class LLMCliAgent:
     def __init__(self, client: LLMClient | None = None) -> None:
-        self._client = client or get_client(max_tokens=256)
+        self._client = client or get_client(max_tokens=envgen_config().cli_llm_tokens)
 
     def act(self, state: dict, objective: str) -> str:
         history_text = json.dumps(state.get("recent_history", []), indent=2)
@@ -36,7 +41,9 @@ class LLMCliAgent:
             f"Objective: {objective}\n\n"
             f"Recent command history:\n{history_text}"
         )
-        result = self._client.extract(system=_CLI_SYSTEM, user=user, schema=_CommandSchema)
+        result = self._client.extract(
+            system=CliAgentPrompts.SYSTEM, user=user, schema=_CommandSchema
+        )
         return result.command
 
 
@@ -73,5 +80,5 @@ def make_cli_agent(agent_id: str, seed: int | None = None):
         return RandomCliAgent(seed=seed)
     if agent_id == "llm" or agent_id.startswith("llm:"):
         model = agent_id[4:] if agent_id.startswith("llm:") else None
-        return LLMCliAgent(get_client(max_tokens=256, model=model))
+        return LLMCliAgent(get_client(max_tokens=envgen_config().cli_llm_tokens, model=model))
     raise AgentError(f"Unknown CLI agent id: {agent_id!r}. Use 'random', 'llm', or 'llm:<model>'.")

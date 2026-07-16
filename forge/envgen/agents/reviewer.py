@@ -10,6 +10,7 @@ from forge.envgen.agents.base import EnvGenAgent
 from forge.envgen.artifact_bus import ArtifactBus
 from forge.envgen.context import EnvGenContext
 from forge.extraction.llm_client import LLMClient, get_client
+from forge.envgen.config import envgen_config
 
 
 class ReviewSeverity(StrEnum):
@@ -51,6 +52,10 @@ _REVIEW_SYSTEM = (
 )
 
 
+class ReviewerPrompts:
+    SYSTEM = _REVIEW_SYSTEM
+
+
 class ReviewerAgent(EnvGenAgent):
     """Static and semantic quality gate for generated code and requirements."""
 
@@ -62,6 +67,7 @@ class ReviewerAgent(EnvGenAgent):
         "state_schema_manifest",
         "policy_dsl",
         "reward_fn_code",
+        "reviewer_research",
     ]
     produces = ["review_report"]
 
@@ -72,7 +78,10 @@ class ReviewerAgent(EnvGenAgent):
         semantic_review: bool = True,
     ) -> None:
         self._semantic_review = semantic_review
-        self._client = client or (get_client(max_tokens=4096, capable=True) if semantic_review else None)
+        self._client = client or (
+            get_client(max_tokens=envgen_config().standard_llm_tokens, capable=True)
+            if semantic_review else None
+        )
 
     async def run(self, ctx: EnvGenContext, bus: ArtifactBus) -> None:
         artifacts = {name: await bus.wait_for(name) for name in self.depends_on}
@@ -169,8 +178,10 @@ class ReviewerAgent(EnvGenAgent):
             f"Reward requirements: {ctx.reward_requirements or 'default task reward'}",
         ]
         if self._semantic_review and self._client is not None:
+            review_chars = envgen_config().generated_file_review_chars
             artifact_excerpt = "\n\n".join(
-                f"=== {path} ===\n{content[:16000]}" for path, content in app_code.items()
+                f"=== {path} ===\n{content[:review_chars]}"
+                for path, content in app_code.items()
             )
             semantic_input = (
                 f"User request: {ctx.description}\n"
@@ -179,6 +190,7 @@ class ReviewerAgent(EnvGenAgent):
                 f"Actions: {[action.model_dump() for action in ctx.compiler_input.actions]}\n"
                 f"Policy requirements: {ctx.policy_requirements or 'default'}\n"
                 f"Reward requirements: {ctx.reward_requirements or 'default'}\n\n"
+                f"Researched product context:\n{artifacts['reviewer_research'].as_prompt()}\n\n"
                 f"Generated application:\n{artifact_excerpt}\n\n"
                 f"State bridge:\n{str(artifacts['state_bridge_code'])[:8000]}\n\n"
                 f"Policy:\n{str(artifacts['policy_dsl'])[:4000]}\n\n"
@@ -188,7 +200,7 @@ class ReviewerAgent(EnvGenAgent):
             assessment: RequirementAssessment = await loop.run_in_executor(
                 None,
                 lambda: self._client.extract(
-                    system=_REVIEW_SYSTEM,
+                    system=ReviewerPrompts.SYSTEM,
                     user=semantic_input,
                     schema=RequirementAssessment,
                 ),

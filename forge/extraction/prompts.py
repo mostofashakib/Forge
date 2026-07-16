@@ -95,3 +95,12 @@ TASK_PROMPT: ExtractionPrompt[TaskExtractionResult] = ExtractionPrompt(
     user_template="Actions: {action_names}\n\nDescription:\n{prompt}",
     output_type=TaskExtractionResult,
 )
+
+
+class ExtractionPrompts:
+    """Central prompt catalog for the compiler extraction pipeline."""
+
+    ENTITIES = ENTITY_PROMPT
+    ACTIONS = ACTION_PROMPT
+    POLICIES = POLICY_PROMPT
+    TASKS = TASK_PROMPT
