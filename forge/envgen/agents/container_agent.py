@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from forge.extraction.llm_client import LLMClient, get_client
 from forge.runtime.errors import AgentError
+from forge.envgen.config import envgen_config
 
 
 @runtime_checkable
@@ -45,9 +46,13 @@ _AGENT_SYSTEM = (
 )
 
 
+class ContainerAgentPrompts:
+    SYSTEM = _AGENT_SYSTEM
+
+
 class LLMContainerAgent:
     def __init__(self, client: LLMClient | None = None) -> None:
-        self._client = client or get_client(max_tokens=512)
+        self._client = client or get_client(max_tokens=envgen_config().action_llm_tokens)
 
     def act(
         self,
@@ -75,7 +80,7 @@ class LLMContainerAgent:
             f"Available actions:\n{json.dumps(trimmed, indent=2)}"
         )
         result = self._client.extract(
-            system=_AGENT_SYSTEM, user=user, schema=_ActionSchema
+            system=ContainerAgentPrompts.SYSTEM, user=user, schema=_ActionSchema
         )
         # Include reasoning so it's stored in the trajectory JSONL and visible
         # in the trajectory viewer for post-hoc analysis and debugging.
@@ -132,5 +137,7 @@ def make_container_agent(agent_id: str, seed: int | None = None) -> ContainerAge
         return RandomContainerAgent(seed=seed)
     if agent_id == "llm" or agent_id.startswith("llm:"):
         model = agent_id[4:] if agent_id.startswith("llm:") else "claude-haiku-4-5-20251001"
-        return LLMContainerAgent(get_client(max_tokens=512, model=model))
+        return LLMContainerAgent(
+            get_client(max_tokens=envgen_config().action_llm_tokens, model=model)
+        )
     raise AgentError(f"Unknown container agent id: {agent_id!r}. Use 'random', 'llm', or 'llm:<model>'.")

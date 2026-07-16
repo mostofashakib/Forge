@@ -7,10 +7,14 @@ from forge.envgen.agents.base import EnvGenAgent
 from forge.envgen.artifact_bus import ArtifactBus
 from forge.envgen.context import EnvGenContext
 from forge.envgen.planning import GenerationPlan
+from forge.envgen.error_handling import GenerationErrorHandler
 
 
 class TaskExecutor:
     """Executes a generation plan while enforcing task dependencies and scopes."""
+
+    def __init__(self, error_handler: GenerationErrorHandler | None = None) -> None:
+        self.error_handler = error_handler or GenerationErrorHandler()
 
     async def execute(
         self,
@@ -49,14 +53,19 @@ class TaskExecutor:
             try:
                 await agent.run(ctx, channel)  # type: ignore[arg-type]
             except Exception as exc:
+                handled = self.error_handler.capture(
+                    task_id=task.id,
+                    agent_id=task.agent_id,
+                    error=exc,
+                )
                 bus.protocol.send(AgentMessage(
                     sender=task.agent_id,
                     recipient="orchestrator",
                     kind=MessageKind.TASK_FAILED,
                     task_id=task.id,
-                    payload={"error": str(exc)},
+                    payload={"error": str(handled), "error_type": type(exc).__name__},
                 ))
-                raise
+                raise handled from exc
             bus.protocol.send(AgentMessage(
                 sender=task.agent_id,
                 recipient="orchestrator",

@@ -15,6 +15,7 @@ interface FormState {
   domain: string;
   policy_requirements: string;
   reward_requirements: string;
+  reference_urls: string;
   ttl_days: number;
 }
 
@@ -30,6 +31,7 @@ export default function CustomEnvironmentPage() {
     domain: "",
     policy_requirements: "",
     reward_requirements: "",
+    reference_urls: "",
     ttl_days: 30,
   });
 
@@ -54,7 +56,14 @@ export default function CustomEnvironmentPage() {
       const res = await fetch(`${API_BASE}/api/sandbox/`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...form, env_type: "general" }),
+        body: JSON.stringify({
+          ...form,
+          reference_urls: form.reference_urls
+            .split("\n")
+            .map((url) => url.trim())
+            .filter(Boolean),
+          env_type: "general",
+        }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -207,6 +216,20 @@ export default function CustomEnvironmentPage() {
                 placeholder="e.g. support, email, crm — defaults to localhost"
                 value={form.domain}
                 onChange={(e) => update("domain", e.target.value)}
+                disabled={atLimit}
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-muted-foreground mb-1.5">
+                Reference URLs <span className="font-normal">(optional, one per line)</span>
+              </label>
+              <textarea
+                className="w-full border rounded-lg px-3 py-2.5 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-foreground/20 disabled:opacity-50"
+                rows={3}
+                placeholder={"https://docs.example.com/product\nhttps://example.com/help/workflows"}
+                value={form.reference_urls}
+                onChange={(e) => update("reference_urls", e.target.value)}
                 disabled={atLimit}
               />
             </div>

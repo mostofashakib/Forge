@@ -10,6 +10,23 @@ class LLMClient(Protocol):
     def extract(self, system: str, user: str, schema: type[BaseModel]) -> BaseModel: ...
 
 
+class LLMPromptFormatter:
+    """Adds one consistent, explicit structured-output contract to every LLM prompt."""
+
+    @staticmethod
+    def structured(system: str, schema: type[BaseModel]) -> str:
+        if not system.strip():
+            raise ValueError("LLM system instruction cannot be empty")
+        fields = ", ".join(schema.model_fields) or "no fields"
+        return (
+            f"{system.rstrip()}\n\n"
+            "OUTPUT FORMAT (required): Return exactly one structured result through "
+            "the configured extraction mechanism; do not return markdown or free-form text. "
+            f"The result must validate as {schema.__name__} with these top-level fields: "
+            f"{fields}. Populate every required field and use the schema's declared types."
+        )
+
+
 # ---------------------------------------------------------------------------
 # Schema helpers
 # ---------------------------------------------------------------------------
@@ -53,6 +70,7 @@ class AnthropicClient:
         self._max_tokens = max_tokens
 
     def _stream_extract(self, system: str, messages: list, schema: type[BaseModel]) -> BaseModel:
+        system = LLMPromptFormatter.structured(system, schema)
         input_schema = _flat_schema(schema)
         last_error: Exception | None = None
         budget = self._max_tokens
@@ -167,6 +185,7 @@ class OllamaClient:
         import ollama  # lazy import — only required when Ollama is the active provider
 
         json_schema = _flat_schema(schema)
+        system = LLMPromptFormatter.structured(system, schema)
         last_error: Exception | None = None
         client = ollama.Client(host=self._base_url)
 

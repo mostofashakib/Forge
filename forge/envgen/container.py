@@ -7,6 +7,8 @@ from pathlib import Path
 import docker
 import docker.errors
 
+from forge.logging_utils import redact_sensitive_text
+
 from forge.runtime.network_isolation import check_generated_env
 from forge.settings import redis_url
 
@@ -341,7 +343,9 @@ def _pull_with_retry(image: str, max_attempts: int = 5, pull_timeout: int = 120)
             last_output = f"pull timed out after {pull_timeout}s"
         except subprocess.CalledProcessError as exc:
             last_exc = exc
-            last_output = ((exc.stderr or "") + (exc.stdout or "")).strip()
+            last_output = redact_sensitive_text(
+                ((exc.stderr or "") + (exc.stdout or "")).strip()
+            )
             if any(p in last_output.lower() for p in _PERMANENT_PULL_ERRORS):
                 break  # retrying won't help
         if attempt < max_attempts - 1:
@@ -393,7 +397,7 @@ def pull_image(image: str) -> None:
         _pull_with_retry(image)
         return
     except RuntimeError as exc:
-        errors.append(f"docker.io → {exc}")
+        errors.append(f"docker.io → {redact_sensitive_text(exc)}")
         log.warning("[pull] docker.io failed for %s, trying mirrors", image)
 
     # 2) Hub mirrors (AWS ECR, Google GCR mirror)
@@ -405,7 +409,7 @@ def pull_image(image: str) -> None:
             log.info("[pull] %s served by %s", image, mirror)
             return
         except (RuntimeError, subprocess.CalledProcessError) as exc:
-            errors.append(f"{mirror} → {exc}")
+            errors.append(f"{mirror} → {redact_sensitive_text(exc)}")
             log.warning("[pull] %s failed for %s", mirror, image)
 
     # 3) Direct HTTPS via httpx — independent transport, independent of
@@ -420,8 +424,9 @@ def pull_image(image: str) -> None:
         log.info("[pull] %s served by direct HTTPS (bypassed dockerd)", image)
         return
     except Exception as exc:  # noqa: BLE001 — last-resort fallback, surface whatever broke
-        errors.append(f"direct-https → {exc}")
-        log.warning("[pull] direct HTTPS also failed for %s: %s", image, exc)
+        safe_error = redact_sensitive_text(exc)
+        errors.append(f"direct-https → {safe_error}")
+        log.warning("[pull] direct HTTPS also failed for %s: %s", image, safe_error)
 
     raise RuntimeError(
         f"Failed to pull {image} from docker.io, any mirror, or direct HTTPS:\n"

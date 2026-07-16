@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 from forge.extraction.llm_client import LLMClient, get_client
 from forge.runtime.errors import AgentError
+from forge.envgen.config import envgen_config
 
 
 _BROWSER_SYSTEM = (
@@ -26,6 +27,10 @@ _BROWSER_SYSTEM = (
 )
 
 
+class BrowserAgentPrompts:
+    SYSTEM = _BROWSER_SYSTEM
+
+
 class _BrowserActionSchema(BaseModel):
     action_type: str
     x: int | None = None
@@ -40,7 +45,7 @@ class _BrowserActionSchema(BaseModel):
 
 class LLMBrowserAgent:
     def __init__(self, client: LLMClient | None = None) -> None:
-        self._client = client or get_client(max_tokens=512)
+        self._client = client or get_client(max_tokens=envgen_config().action_llm_tokens)
 
     def act(
         self,
@@ -54,7 +59,7 @@ class LLMBrowserAgent:
             "The screenshot shows the current browser state."
         )
         result = self._client.extract_with_image(
-            system=_BROWSER_SYSTEM,
+            system=BrowserAgentPrompts.SYSTEM,
             user=user,
             image_b64=screenshot_b64,
             schema=_BrowserActionSchema,
@@ -94,5 +99,7 @@ def make_browser_agent(agent_id: str, seed: int | None = None):
         return RandomBrowserAgent(seed=seed)
     if agent_id == "llm" or agent_id.startswith("llm:"):
         model = agent_id[4:] if agent_id.startswith("llm:") else None
-        return LLMBrowserAgent(get_client(max_tokens=512, model=model))
+        return LLMBrowserAgent(
+            get_client(max_tokens=envgen_config().action_llm_tokens, model=model)
+        )
     raise AgentError(f"Unknown browser agent id: {agent_id!r}. Use 'random', 'llm', or 'llm:<model>'.")

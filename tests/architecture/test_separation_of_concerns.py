@@ -24,6 +24,7 @@ ENV_CORE = [
     "forge/runtime/snapshot.py",
     "forge/runtime/env_builder.py",
     "forge/runtime/interaction.py",
+    "forge/runtime/telemetry.py",
 ]
 AGENTS = sorted(
     str(p.relative_to(ROOT)) for p in (ROOT / "forge/runtime/agents").glob("*.py")
@@ -81,6 +82,41 @@ def test_environment_core_does_not_know_agents_or_training():
         ENV_CORE,
         ("forge.runtime.agents", "forge.benchmark", "backend."),
         "environment core must not depend on agents or training",
+    )
+
+
+def test_runtime_telemetry_is_a_sink_contract_not_a_data_collector():
+    modules = imports_of("forge/runtime/telemetry.py")
+    assert not any(module.startswith(("backend.", "sqlalchemy")) for module in modules)
+    collector_modules = imports_of("backend/app/services/episode_collector.py")
+    assert "backend.app.models" in collector_modules
+
+
+def test_structured_llm_calls_declare_instruction_input_and_output_schema():
+    violations: list[str] = []
+    for package in (ROOT / "forge", ROOT / "backend"):
+        for path in package.rglob("*.py"):
+            tree = ast.parse(path.read_text())
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                    continue
+                if node.func.attr != "extract":
+                    continue
+                receiver = node.func.value
+                is_llm_client = (
+                    isinstance(receiver, ast.Name) and receiver.id == "client"
+                ) or (
+                    isinstance(receiver, ast.Attribute) and receiver.attr == "_client"
+                )
+                if not is_llm_client:
+                    continue
+                keywords = {keyword.arg for keyword in node.keywords}
+                if not {"system", "user", "schema"}.issubset(keywords):
+                    relative = path.relative_to(ROOT)
+                    violations.append(f"{relative}:{node.lineno}")
+    assert not violations, (
+        "Structured LLM calls must name system, user, and schema: "
+        + ", ".join(violations)
     )
 
 

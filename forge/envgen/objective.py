@@ -4,6 +4,7 @@ import json
 from pydantic import BaseModel
 
 from forge.extraction.llm_client import LLMClient, get_client
+from forge.envgen.config import envgen_config
 
 
 class _ScoreSchema(BaseModel):
@@ -24,11 +25,15 @@ _SCORER_SYSTEM = (
 )
 
 
+class ObjectivePrompts:
+    SYSTEM = _SCORER_SYSTEM
+
+
 class ObjectiveScorer:
     """LLM-based scorer that evaluates how well a state achieves an objective."""
 
     def __init__(self, client: LLMClient | None = None) -> None:
-        self._client = client or get_client(max_tokens=256)
+        self._client = client or get_client(max_tokens=envgen_config().cli_llm_tokens)
 
     def score(
         self,
@@ -52,7 +57,7 @@ class ObjectiveScorer:
             if action_taken:
                 user += f"\n\nAction taken: {json.dumps(action_taken)}"
             result = self._client.extract(
-                system=_SCORER_SYSTEM, user=user, schema=_ScoreSchema
+                system=ObjectivePrompts.SYSTEM, user=user, schema=_ScoreSchema
             )
             return max(0.0, min(1.0, float(result.score)))
         except Exception:
@@ -61,13 +66,12 @@ class ObjectiveScorer:
     def score_with_image(self, screenshot_b64: str, url: str, objective: str) -> float:
         """Score a browser state using a screenshot. Falls back to 0.5 on error."""
         try:
-            client = get_client(max_tokens=256)
+            client = get_client(max_tokens=envgen_config().cli_llm_tokens)
             user = f"Objective: {objective}\n\nCurrent URL: {url}\n\nSee the screenshot for the current browser state."
             result = client.extract_with_image(
-                system=_SCORER_SYSTEM, user=user,
+                system=ObjectivePrompts.SYSTEM, user=user,
                 image_b64=screenshot_b64, schema=_ScoreSchema,
             )
             return max(0.0, min(1.0, float(result.score)))
         except Exception:
             return 0.5
-

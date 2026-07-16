@@ -76,8 +76,11 @@ Premade environments ship with realistic seed data that resembles real products.
 Custom environment generation separates planning, implementation, assembly, and review:
 
 ```text
-User prompt + compiler input
+User prompt + compiler input + optional reference URLs
           │
+          ▼
+   UserResearchAgent ──→ backend / UI / RL / review briefs
+          │                 (role-pruned + size-bounded)
           ▼
    PromptPlannerAgent ──→ typed todo DAG + acceptance criteria
           │
@@ -93,7 +96,13 @@ User prompt + compiler input
              approved artifacts
 ```
 
-`TaskExecutor` runs independent tasks concurrently and waits on declared dependencies. Each task receives a scoped artifact channel. The A2A protocol records assignment, completion, failure, review, and artifact-availability messages with correlation IDs, without copying large generated files into message payloads. The reviewer blocks artifact writes when generated code or requirement coverage fails.
+`UserResearchAgent` reads the extracted application spec, explicit reference URLs, and a small web search when references are not provided. It synthesizes the target product's workflows, functionality, UI states, data, rules, RL observations, and edge cases. Raw pages are discarded inside the research task; backend, UI, RL, and review specialists receive only their relevant sections under a hard character budget.
+
+`TaskExecutor` runs independent tasks concurrently and waits on declared dependencies. Each task receives a scoped artifact channel. The A2A protocol records assignment, completion, failure, review, and artifact-availability messages with correlation IDs, without copying large generated files into message payloads. The reviewer blocks artifact writes when generated code or requirement coverage fails. Local follow-up work, including reviewer-driven automatic repairs, is tracked in the git-ignored `TASKS.md`.
+
+Generation prompts are grouped behind prompt catalog classes, and the shared LLM client appends an explicit Pydantic output contract to every structured call. `EnvGenConfig` centralizes model token budgets, research limits, context budgets, and reviewer excerpt sizes; each value can be changed through its `FORGE_ENVGEN_*`, `FORGE_RESEARCH_*`, `FORGE_SPECIALIST_*`, or `FORGE_REVIEW_*` environment variable. `GenerationErrorHandler` normalizes specialist failures and retains task/agent error records for orchestration and A2A diagnostics.
+
+Agent execution and data collection are separate layers. Runtime agents choose actions, and `ForgeEnv` emits immutable snapshots through the storage-agnostic `TelemetrySink` protocol. Backend `EpisodeDataCollector` owns SQLite and JSONL persistence; runtime code does not import backend models or database libraries.
 
 ### Agent Runs & Data Collection
 
@@ -169,6 +178,7 @@ Environments are verified deterministic at creation and launch — same seed and
 - **PolicyEngine DSL** — policy and verifier expressions use a restricted AST evaluator instead of `eval`; violations block transitions and return 0.0 reward
 - **Network and process isolation** — AST-based scanning blocks network modules, subprocess access, shell execution, and dynamic imports in generated envs (bypass with `FORGE_DEV_NETWORK=true`)
 - **Generated-code validation** — compiler checks run in an isolated subprocess with time and output limits; generated paths are confined to the configured environment root
+- **Credential-safe logging** — bearer values and URL query strings are redacted before HTTP, Docker pull, or worker errors reach logs; signed CDN URLs are never emitted intact
 - **Local-only default** — `run.sh` binds the backend to `127.0.0.1` unless `FORGE_HOST` is explicitly changed
 - **PII redaction** — strips emails, phone numbers, and SSNs from LLM input before code generation
 - **RBAC observation filtering** — removes or restricts state fields per role, applied in `reset()` and `step()`

@@ -44,6 +44,7 @@ from typing import Sequence
 from pydantic import BaseModel, Field
 
 from forge.extraction.llm_client import LLMClient, get_client
+from forge.envgen.config import envgen_config
 
 logger = logging.getLogger(__name__)
 
@@ -243,6 +244,11 @@ _PARTIAL_CREDIT_SYSTEM = (
 )
 
 
+class TieredRewardPrompts:
+    PLANNER = _PLANNER_SYSTEM
+    PARTIAL_CREDIT = _PARTIAL_CREDIT_SYSTEM
+
+
 # ---------------------------------------------------------------------------
 # Engine
 # ---------------------------------------------------------------------------
@@ -276,7 +282,9 @@ class TieredRewardEngine:
         client: LLMClient | None = None,
         config: TieredRewardConfig | None = None,
     ) -> None:
-        self._client = client or get_client(max_tokens=1024)
+        self._client = client or get_client(
+            max_tokens=envgen_config().grading_llm_tokens
+        )
         self._cfg = config or TieredRewardConfig()
 
     # -- Tier 1: planning ---------------------------------------------------
@@ -290,7 +298,7 @@ class TieredRewardEngine:
         """
         try:
             result: _EndStateSpecLLM = self._client.extract(
-                system=_PLANNER_SYSTEM,
+                system=TieredRewardPrompts.PLANNER,
                 user=f"Objective:\n{objective}",
                 schema=_EndStateSpecLLM,
             )
@@ -499,7 +507,9 @@ class TieredRewardEngine:
                 + "\n".join(trajectory_summary)
             )
             result: _PartialCreditLLM = self._client.extract(
-                system=_PARTIAL_CREDIT_SYSTEM, user=user, schema=_PartialCreditLLM,
+                system=TieredRewardPrompts.PARTIAL_CREDIT,
+                user=user,
+                schema=_PartialCreditLLM,
             )
             return max(0.0, min(0.4, float(result.score)))
         except Exception as exc:

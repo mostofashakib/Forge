@@ -10,7 +10,9 @@ from forge.envgen.agents.reviewer import ReviewerAgent
 from forge.envgen.artifact_bus import ArtifactBus
 from forge.envgen.context import EnvGenContext
 from forge.envgen.executor import TaskExecutor
+from forge.envgen.error_handling import AgentExecutionError, GenerationErrorHandler
 from forge.envgen.planning import AgentTask, GenerationPlan, PromptPlannerAgent
+from forge.envgen.research import SpecialistResearchContext
 from forge.extraction.schemas import ActionDef, CompilerInput
 
 
@@ -48,6 +50,14 @@ class _Consumer(EnvGenAgent):
         await bus.publish("result", (await bus.wait_for("source")).upper())
 
 
+class _FailingAgent(EnvGenAgent):
+    agent_id = "failing"
+    produces = ["never"]
+
+    async def run(self, ctx, bus) -> None:
+        raise ValueError("bad specialist output")
+
+
 def test_prompt_planner_creates_dependency_aware_todos():
     plan = PromptPlannerAgent().create_plan(_ctx(), [_Producer(), _Consumer()])
     consumer = next(task for task in plan.tasks if task.id == "consumer")
@@ -70,6 +80,20 @@ async def test_executor_uses_scoped_a2a_context_and_records_messages():
     assert MessageKind.TASK_ASSIGNED in kinds
     assert MessageKind.ARTIFACT_AVAILABLE in kinds
     assert MessageKind.TASK_COMPLETED in kinds
+
+
+@pytest.mark.asyncio
+async def test_executor_tracks_and_normalizes_agent_failures():
+    handler = GenerationErrorHandler()
+    agents = [_FailingAgent()]
+    plan = PromptPlannerAgent().create_plan(_ctx(), agents)
+
+    with pytest.raises(AgentExecutionError, match="bad specialist output"):
+        await TaskExecutor(error_handler=handler).execute(plan, agents, _ctx(), ArtifactBus())
+
+    assert len(handler.records) == 1
+    assert handler.records[0].agent_id == "failing"
+    assert handler.records[0].error_type == "ValueError"
 
 
 def test_generation_plan_rejects_dependency_cycles():
@@ -109,6 +133,10 @@ async def _review_bus(main_py: str) -> ArtifactBus:
     await bus.publish("state_schema_manifest", {"fields": {}})
     await bus.publish("policy_dsl", "policies: []\n")
     await bus.publish("reward_fn_code", "def compute_reward(*args):\n    return 0.0\n")
+    await bus.publish("reviewer_research", SpecialistResearchContext(
+        role="reviewer",
+        product_summary="A task tracker",
+    ))
     return bus
 
 

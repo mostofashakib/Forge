@@ -30,7 +30,7 @@ class AnthropicAgent:
         response = self._client.messages.create(
             model=self._model,
             max_tokens=1024,
-            system=FORGE_AGENT_PROMPT.system,
+            system=f"{FORGE_AGENT_PROMPT.system}\n\nOUTPUT FORMAT: {FORGE_AGENT_PROMPT.output_contract}",
             tools=tools,
             messages=[{
                 "role": "user",

@@ -29,7 +29,10 @@ from pathlib import Path
 
 import httpx
 
+from forge.logging_utils import install_sensitive_log_filter, redact_sensitive_text
+
 log = logging.getLogger(__name__)
+install_sensitive_log_filter("httpx", "httpcore", __name__)
 
 _DOCKER_HUB_REGISTRY = "registry-1.docker.io"
 _DOCKER_HUB_AUTH_URL = "https://auth.docker.io/token"
@@ -122,7 +125,7 @@ def _download_blob(
                 f.write(chunk)
 
 
-def pull_via_http(image: str) -> None:
+def _pull_via_http(image: str) -> None:
     """Pull a Docker Hub image via direct HTTPS, then `docker load` it locally.
 
     Raises RuntimeError on any failure (caller is expected to fall through
@@ -215,3 +218,12 @@ def pull_via_http(image: str) -> None:
                 ["docker", "load", "-i", str(out_tar)],
                 check=True, capture_output=True, text=True,
             )
+
+
+def pull_via_http(image: str) -> None:
+    """Run the HTTP pull without ever propagating signed URLs or credentials."""
+
+    try:
+        _pull_via_http(image)
+    except Exception as exc:
+        raise RuntimeError(redact_sensitive_text(exc)) from None
