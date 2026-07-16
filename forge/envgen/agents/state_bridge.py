@@ -6,6 +6,7 @@ from forge.envgen.artifact_bus import ArtifactBus
 from forge.envgen.context import EnvGenContext
 from forge.schema.state_schema import StateSchemaManifest
 from forge.extraction.llm_client import LLMClient, get_client
+from forge.envgen.config import envgen_config
 
 
 class StateBridgeOutput(BaseModel):
@@ -51,9 +52,13 @@ _SYSTEM = (
 )
 
 
+class StateBridgePrompts:
+    SYSTEM = _SYSTEM
+
+
 class StateBridgeAgent(EnvGenAgent):
     agent_id = "state_bridge"
-    depends_on: list[str] = ["instrumented_code"]
+    depends_on: list[str] = ["instrumented_code", "rl_research"]
     produces: list[str] = ["state_bridge_code", "state_schema_manifest"]
 
     def __init__(
@@ -61,14 +66,20 @@ class StateBridgeAgent(EnvGenAgent):
         client: LLMClient | None = None,
         missing_fields_feedback: list[str] | None = None,
     ) -> None:
-        self._client = client or get_client(max_tokens=4096)
+        self._client = client or get_client(
+            max_tokens=envgen_config().standard_llm_tokens
+        )
         self._missing_fields_feedback = missing_fields_feedback or []
 
     async def run(self, ctx: EnvGenContext, bus: ArtifactBus) -> None:
         instrumented: dict[str, str] = await bus.wait_for("instrumented_code")
         action_names = [a.name for a in ctx.compiler_input.actions]
         first_file = next(iter(instrumented.values()), "")
-        user = f"Action endpoint names: {action_names}\n\nApp code (first file):\n{first_file[:2000]}"
+        input_chars = envgen_config().state_bridge_input_chars
+        user = f"Action endpoint names: {action_names}\n\nApp code (first file):\n{first_file[:input_chars]}"
+        research = bus.get("rl_research")
+        if research is not None:
+            user += f"\n\nRESEARCHED RL CONTEXT:\n{research.as_prompt()}"
         if self._missing_fields_feedback:
             user += (
                 f"\n\nPREVIOUS VALIDATION FAILED. These declared fields were not found in the "
@@ -79,7 +90,11 @@ class StateBridgeAgent(EnvGenAgent):
         loop = asyncio.get_event_loop()
         result: StateBridgeOutput = await loop.run_in_executor(
             None,
-            lambda: self._client.extract(system=_SYSTEM, user=user, schema=StateBridgeOutput),
+            lambda: self._client.extract(
+                system=StateBridgePrompts.SYSTEM,
+                user=user,
+                schema=StateBridgeOutput,
+            ),
         )
         # Validate the manifest blob immediately — raises ValidationError on bad schema
         manifest = StateSchemaManifest.model_validate(result.state_schema_manifest)

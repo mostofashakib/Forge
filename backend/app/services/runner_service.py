@@ -5,7 +5,7 @@ import secrets
 from pathlib import Path
 from forge.settings import generated_envs_root
 from forge.runtime.policy import RandomPolicy
-from forge.runtime.telemetry import TelemetryClient
+from backend.app.services.episode_collector import EpisodeDataCollector
 from backend.app.services import episode_service
 from backend.app.database import get_session_factory
 from backend.app.utils.env_loader import load_forge_env
@@ -98,7 +98,7 @@ async def _run_episode(
     try:
         jsonl_path.parent.mkdir(parents=True, exist_ok=True)
 
-        telemetry = TelemetryClient(
+        telemetry = EpisodeDataCollector(
             episode_id=episode_id,
             db_session=db,
             jsonl_path=jsonl_path,

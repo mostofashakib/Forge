@@ -26,6 +26,7 @@ class CreateSandboxRequest(BaseModel):
     domain: str = "localhost"
     policy_requirements: str = Field(default="", max_length=20_000)
     reward_requirements: str = Field(default="", max_length=20_000)
+    reference_urls: list[str] = Field(default_factory=list, max_length=5)
     ttl_days: int = Field(default=30, ge=1, le=365)
 
     @field_validator("env_name")
@@ -136,6 +137,7 @@ async def create_sandbox(request: CreateSandboxRequest, db: Session = Depends(ge
                     domain=request.domain,
                     policy_requirements=request.policy_requirements,
                     reward_requirements=request.reward_requirements,
+                    reference_urls=request.reference_urls,
                 ),
             ),
             timeout=15.0,

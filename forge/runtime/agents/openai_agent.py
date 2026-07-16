@@ -37,7 +37,13 @@ class OpenAIAgent:
             model=self._model,
             tools=tools,
             messages=[
-                {"role": "system", "content": FORGE_AGENT_PROMPT.system},
+                {
+                    "role": "system",
+                    "content": (
+                        f"{FORGE_AGENT_PROMPT.system}\n\n"
+                        f"OUTPUT FORMAT: {FORGE_AGENT_PROMPT.output_contract}"
+                    ),
+                },
                 {
                     "role": "user",
                     "content": FORGE_AGENT_PROMPT.observation_template.format(

@@ -5,6 +5,7 @@ from forge.envgen.agents.base import EnvGenAgent
 from forge.envgen.artifact_bus import ArtifactBus
 from forge.envgen.context import EnvGenContext
 from forge.envgen.schemas import AppPlan, GeneratedFile
+from forge.envgen.config import envgen_config
 from forge.extraction.llm_client import LLMClient, get_client
 
 # ---------------------------------------------------------------------------
@@ -223,6 +224,18 @@ _DOCKERFILE_SYSTEM = (
 _FAST_FILES = {"requirements.txt", "dockerfile"}
 
 
+class AppGeneratorPrompts:
+    """Prompt catalog for backend and UI generation."""
+
+    PLAN = _PLAN_SYSTEM
+    BACKEND_PLAN = _BACKEND_PLAN_SYSTEM
+    BACKEND = _BACKEND_SYSTEM
+    HTML_CSS = _HTML_CSS_SYSTEM
+    JAVASCRIPT = _JS_SYSTEM
+    GENERIC_FILE = _GENERIC_SYSTEM
+    DOCKERFILE = _DOCKERFILE_SYSTEM
+
+
 def _fmt(seconds: float) -> str:
     """Format elapsed seconds as '4.2s' or '1m 23s'."""
     if seconds < 60:
@@ -233,14 +246,17 @@ def _fmt(seconds: float) -> str:
 
 class BackendBuilderAgent(EnvGenAgent):
     agent_id = "backend_builder"
-    depends_on: list[str] = []
+    depends_on: list[str] = ["backend_research"]
     produces: list[str] = ["backend_code"]
 
     def __init__(self, client: LLMClient | None = None) -> None:
+        config = envgen_config()
         # Capable tier for complex backend files such as main.py.
-        self._client = client or get_client(max_tokens=8192, capable=True)
+        self._client = client or get_client(
+            max_tokens=config.capable_llm_tokens, capable=True
+        )
         # Fast tier for simple template-like files (requirements.txt, Dockerfile, etc.)
-        self._fast_client = client or get_client(max_tokens=2048)
+        self._fast_client = client or get_client(max_tokens=config.fast_llm_tokens)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -276,6 +292,9 @@ class BackendBuilderAgent(EnvGenAgent):
             f"Entities:\n{entity_summary}\n\n"
             f"Actions:\n{action_summary}"
         )
+        research = bus.get("backend_research")
+        if research is not None:
+            app_context += f"\n\nRESEARCHED PRODUCT CONTEXT:\n{research.as_prompt()}"
 
         await bus.log(
             f"[backend-builder] Starting — "
@@ -291,7 +310,7 @@ class BackendBuilderAgent(EnvGenAgent):
         plan: AppPlan = await loop.run_in_executor(
             None,
             lambda: self._client.extract(
-                system=_BACKEND_PLAN_SYSTEM,
+                system=AppGeneratorPrompts.BACKEND_PLAN,
                 user=app_context,
                 schema=AppPlan,
             ),
@@ -329,7 +348,7 @@ class BackendBuilderAgent(EnvGenAgent):
                     f"Generate file: main.py\n"
                     f"Responsibility: {file_plan.description}"
                 )
-                content = await self._call(system=_BACKEND_SYSTEM, user=user)
+                content = await self._call(system=AppGeneratorPrompts.BACKEND, user=user)
 
             elif file_plan.path.lower() == "dockerfile":
                 # Dockerfile uses a dedicated prompt that pins port 8000;
@@ -342,7 +361,7 @@ class BackendBuilderAgent(EnvGenAgent):
                     f"Responsibility: {file_plan.description}"
                 )
                 content = await self._call(
-                    system=_DOCKERFILE_SYSTEM, user=user, fast=True
+                    system=AppGeneratorPrompts.DOCKERFILE, user=user, fast=True
                 )
 
             else:
@@ -353,7 +372,7 @@ class BackendBuilderAgent(EnvGenAgent):
                     f"Responsibility: {file_plan.description}"
                 )
                 content = await self._call(
-                    system=_GENERIC_SYSTEM, user=user, fast=is_simple
+                    system=AppGeneratorPrompts.GENERIC_FILE, user=user, fast=is_simple
                 )
 
             elapsed = _fmt(time.monotonic() - t_file)
@@ -385,11 +404,13 @@ class UIBuilderAgent(EnvGenAgent):
     """Builds only the user-facing HTML, CSS, and JavaScript."""
 
     agent_id = "ui_builder"
-    depends_on: list[str] = []
+    depends_on: list[str] = ["ui_research"]
     produces: list[str] = ["ui_code"]
 
     def __init__(self, client: LLMClient | None = None) -> None:
-        self._client = client or get_client(max_tokens=8192, capable=True)
+        self._client = client or get_client(
+            max_tokens=envgen_config().capable_llm_tokens, capable=True
+        )
 
     async def _call(self, system: str, user: str) -> str:
         loop = asyncio.get_running_loop()
@@ -413,12 +434,15 @@ class UIBuilderAgent(EnvGenAgent):
             f"Domain: {ctx.compiler_input.domain}\n\n"
             f"Entities:\n{entity_summary}\n\nActions:\n{action_summary}"
         )
+        research = bus.get("ui_research")
+        if research is not None:
+            app_context += f"\n\nRESEARCHED PRODUCT CONTEXT:\n{research.as_prompt()}"
 
         await bus.log("[ui-builder] Pass 1/2: HTML structure and CSS…")
-        html_css = await self._call(_HTML_CSS_SYSTEM, app_context)
+        html_css = await self._call(AppGeneratorPrompts.HTML_CSS, app_context)
         await bus.log("[ui-builder] Pass 2/2: client behavior…")
         javascript = await self._call(
-            _JS_SYSTEM,
+            AppGeneratorPrompts.JAVASCRIPT,
             f"{app_context}\n\nHTML structure:\n---\n{html_css}\n---",
         )
         marker = '<script id="app-js"></script>'

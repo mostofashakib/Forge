@@ -1,5 +1,5 @@
 from __future__ import annotations
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from forge.extraction.schemas import CompilerInput
 
 
@@ -10,3 +10,4 @@ class EnvGenContext:
     compiler_input: CompilerInput
     policy_requirements: str = ""
     reward_requirements: str = ""
+    reference_urls: list[str] = field(default_factory=list)

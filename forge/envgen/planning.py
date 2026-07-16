@@ -100,6 +100,7 @@ class PromptPlannerAgent:
     @staticmethod
     def _description(agent_id: str, ctx: EnvGenContext) -> str:
         descriptions = {
+            "user_researcher": "Research how the target application works and publish pruned specialist context.",
             "backend_builder": "Build the environment API, persistence, and container files.",
             "ui_builder": "Build the domain-specific user interface and client interactions.",
             "app_assembler": "Combine backend and UI outputs without changing either concern.",

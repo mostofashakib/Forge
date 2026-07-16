@@ -49,8 +49,8 @@ def make_snapshot(step_index: int = 0, terminated: bool = False) -> StepSnapshot
 
 
 def make_client(db, jsonl_path=None):
-    from forge.runtime.telemetry import TelemetryClient
-    return TelemetryClient(
+    from backend.app.services.episode_collector import EpisodeDataCollector
+    return EpisodeDataCollector(
         episode_id="ep_00000001",
         db_session=db,
         jsonl_path=jsonl_path,
@@ -119,9 +119,9 @@ def test_complete_episode_failed_sets_passed_false():
 
 
 def test_complete_episode_noop_for_missing_row():
-    from forge.runtime.telemetry import TelemetryClient
+    from backend.app.services.episode_collector import EpisodeDataCollector
     db = make_db()
     # Use a non-existent episode_id
-    client = TelemetryClient(episode_id="nonexistent", db_session=db)
+    client = EpisodeDataCollector(episode_id="nonexistent", db_session=db)
     # Should not raise
     client.complete_episode(total_reward=0.0, passed=False, total_steps=0)

@@ -14,6 +14,7 @@ from forge.envgen.agents.telemetry import TelemetryAgent
 from forge.envgen.agents.state_bridge import StateBridgeAgent
 from forge.envgen.agents.policy import PolicyAgent
 from forge.envgen.agents.reward import RewardAgent
+from forge.envgen.research import UserResearchAgent
 from forge.extraction.schemas import CompilerInput
 from forge.paths import confined_path, confined_relative_path, validate_path_segment
 from forge.settings import generated_envs_root
@@ -39,6 +40,7 @@ class EnvironmentOrchestrator:
         compiler_input: CompilerInput,
         policy_requirements: str = "",
         reward_requirements: str = "",
+        reference_urls: list[str] | None = None,
     ) -> None:
         ctx = EnvGenContext(
             env_name=env_name,
@@ -46,6 +48,7 @@ class EnvironmentOrchestrator:
             compiler_input=compiler_input,
             policy_requirements=policy_requirements,
             reward_requirements=reward_requirements,
+            reference_urls=reference_urls or [],
         )
         bus = ArtifactBus()
         if self._on_progress:
@@ -54,6 +57,7 @@ class EnvironmentOrchestrator:
             bus.on_log(self._on_log)
 
         agents = self._agents or [
+            UserResearchAgent(),
             BackendBuilderAgent(),
             UIBuilderAgent(),
             AppAssemblyAgent(),
