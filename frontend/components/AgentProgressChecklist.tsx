@@ -3,11 +3,15 @@ import { useEffect, useState } from "react";
 import { wsBase } from "@/lib/api";
 
 const AGENTS = [
-  { id: "app_code",        label: "App Generator" },
+  { id: "generation_plan", label: "Prompt Planner" },
+  { id: "backend_code",    label: "Backend Builder" },
+  { id: "ui_code",         label: "UI Builder" },
+  { id: "app_code",        label: "App Assembly" },
   { id: "instrumented_code", label: "Telemetry Instrumentation" },
   { id: "state_bridge_code", label: "State Bridge (ContainerForgeEnv)" },
   { id: "policy_dsl",      label: "Policy Rules" },
   { id: "reward_fn_code",  label: "Reward Function" },
+  { id: "review_report",   label: "Quality Reviewer" },
 ];
 
 interface Props {

@@ -3,6 +3,7 @@ import logging
 from dataclasses import dataclass
 
 from forge.extraction.schemas import PolicyRule
+from forge.runtime.safe_expression import evaluate_expression
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +37,7 @@ class PolicyEngine:
             if action_type not in rule.forbidden_actions:
                 continue
             try:
-                triggered = eval(rule.condition, {"__builtins__": {}}, {"state": state})
+                triggered = evaluate_expression(rule.condition, {"state": state})
             except Exception as exc:
                 logger.warning("Policy rule %r condition eval failed: %s", rule.id, exc)
                 continue

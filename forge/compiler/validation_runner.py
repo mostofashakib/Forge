@@ -1,6 +1,9 @@
 from __future__ import annotations
 import subprocess
 import sys
+import json
+import tempfile
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -22,16 +25,42 @@ class ValidationRunner:
         if not tests_dir.exists():
             return ValidationResult(passed=False, output="No tests directory found", total_tests=0, failed_tests=0)
 
-        env_copy = {
-            **_current_env(),
-            "PYTHONPATH": f"{self._root.parent}:{self._root}{_sep()}{_current_pythonpath()}",
-        }
-        result = subprocess.run(
-            [sys.executable, "-m", "pytest", str(tests_dir), "-v", "--tb=short", "--no-header"],
-            capture_output=True,
-            text=True,
-            env=env_copy,
-        )
+        forge_root = Path(__file__).resolve().parents[2]
+        system_roots = {Path(sys.prefix).resolve(), Path(sys.base_prefix).resolve()}
+        read_roots = system_roots | {pkg_dir.resolve(), forge_root / "forge"}
+        with tempfile.TemporaryDirectory(prefix="forge-validation-") as tmpdir:
+            env_copy = {
+                "PATH": os.environ.get("PATH", ""),
+                "PYTHONPATH": f"{self._root.parent}:{self._root}",
+                "PYTHONDONTWRITEBYTECODE": "1",
+                "PYTHONHASHSEED": "0",
+                "FORGE_ENV": "test",
+                "TMPDIR": tmpdir,
+                "FORGE_VALIDATION_READ_ROOTS": json.dumps(
+                    [str(path) for path in sorted(read_roots, key=str)] + [tmpdir]
+                ),
+                "FORGE_VALIDATION_WRITE_ROOTS": json.dumps(
+                    [str(pkg_dir.resolve()), tmpdir]
+                ),
+            }
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "forge.compiler.sandbox_runner",
+                    str(tests_dir),
+                    "-v",
+                    "--tb=short",
+                    "--no-header",
+                    "-p",
+                    "no:cacheprovider",
+                ],
+                capture_output=True,
+                text=True,
+                env=env_copy,
+                cwd=pkg_dir,
+                timeout=60,
+            )
         output = result.stdout + result.stderr
         total, failed = _parse_counts(output)
         return ValidationResult(
@@ -40,21 +69,6 @@ class ValidationRunner:
             total_tests=total,
             failed_tests=failed,
         )
-
-
-def _current_env() -> dict:
-    import os
-    return dict(os.environ)
-
-
-def _current_pythonpath() -> str:
-    import os
-    return os.environ.get("PYTHONPATH", "")
-
-
-def _sep() -> str:
-    import os
-    return os.pathsep
 
 
 def _parse_counts(output: str) -> tuple[int, int]:

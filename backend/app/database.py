@@ -1,7 +1,7 @@
 from __future__ import annotations
-import os
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
+from forge.settings import database_url
 
 _engine = None
 _SessionLocal = None
@@ -14,7 +14,7 @@ class Base(DeclarativeBase):
 def get_engine():
     global _engine
     if _engine is None:
-        url = os.environ.get("FORGE_DB_URL", "sqlite:///./forge.db")
+        url = database_url()
         _engine = create_engine(url, connect_args={"check_same_thread": False})
     return _engine
 
@@ -26,22 +26,28 @@ def get_session_factory():
     return _SessionLocal
 
 
-def _try_alter(conn, sql: str) -> None:
-    try:
-        conn.execute(__import__("sqlalchemy").text(sql))
-        conn.commit()
-    except Exception:
-        pass  # column already exists — safe to ignore
-
-
 def init_db() -> None:
-    from backend.app import models  # noqa: F401
+    from backend.app import models
+    _ = models
     engine = get_engine()
     Base.metadata.create_all(bind=engine)
     with engine.connect() as conn:
-        _try_alter(conn, "ALTER TABLE sandbox_environments ADD COLUMN env_type TEXT DEFAULT 'general'")
-        _try_alter(conn, "ALTER TABLE sandbox_environments ADD COLUMN state_schema TEXT")
-        _try_alter(conn, "ALTER TABLE sandbox_environments ADD COLUMN validation_missing_fields TEXT")
+        existing_columns = {
+            column["name"]
+            for column in inspect(conn).get_columns("sandbox_environments")
+        }
+        migrations = {
+            "env_type": "ALTER TABLE sandbox_environments ADD COLUMN env_type TEXT DEFAULT 'general'",
+            "state_schema": "ALTER TABLE sandbox_environments ADD COLUMN state_schema TEXT",
+            "validation_missing_fields": (
+                "ALTER TABLE sandbox_environments "
+                "ADD COLUMN validation_missing_fields TEXT"
+            ),
+        }
+        for column_name, statement in migrations.items():
+            if column_name not in existing_columns:
+                conn.execute(text(statement))
+        conn.commit()
 
 
 def get_db():

@@ -41,3 +41,9 @@ def test_no_builtins_in_eval():
     v = ExactStateVerifier("__import__('os')")
     result = v.check({}, _FakeTraj(), {})
     assert not result.passed
+
+
+def test_private_attribute_traversal_is_rejected():
+    v = ExactStateVerifier("x.__class__.__base__.__subclasses__()")
+    result = v.check({"x": 1}, _FakeTraj(), {})
+    assert not result.passed
