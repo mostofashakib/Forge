@@ -1,4 +1,5 @@
 import tempfile
+import pytest
 from pathlib import Path
 from forge.compiler.package_builder import PackageBuilder
 from forge.extraction.schemas import (
@@ -77,3 +78,17 @@ def test_package_builder_returns_correct_path():
         builder = PackageBuilder(output_root=output_dir)
         pkg_dir = builder.build(_counter_input())
         assert pkg_dir.name == "counter_env"
+
+
+def test_compiler_input_rejects_path_traversal_project_name():
+    data = _counter_input().model_dump()
+    data["project_name"] = "../../outside"
+    with pytest.raises(ValueError):
+        CompilerInput.model_validate(data)
+
+
+def test_compiler_input_rejects_path_traversal_action_name():
+    data = _counter_input().model_dump()
+    data["actions"][0]["name"] = "../escape"
+    with pytest.raises(ValueError):
+        CompilerInput.model_validate(data)

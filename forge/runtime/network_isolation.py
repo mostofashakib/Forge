@@ -6,6 +6,7 @@ from pathlib import Path
 
 FORBIDDEN_MODULES = frozenset([
     "requests", "httpx", "urllib", "socket", "http", "aiohttp",
+    "ftplib", "subprocess",
 ])
 
 
@@ -48,6 +49,41 @@ def check_file(path: Path) -> list[NetworkIsolationViolation]:
                     NetworkIsolationViolation(
                         module=module.split(".")[0],
                         import_line=f"from {module} import ...",
+                        filename=str(path),
+                    )
+                )
+        elif isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name) and node.func.id == "__import__":
+                violations.append(
+                    NetworkIsolationViolation(
+                        module="dynamic-import",
+                        import_line="__import__(...)",
+                        filename=str(path),
+                    )
+                )
+            elif (
+                isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "importlib"
+                and node.func.attr == "import_module"
+            ):
+                violations.append(
+                    NetworkIsolationViolation(
+                        module="dynamic-import",
+                        import_line="importlib.import_module(...)",
+                        filename=str(path),
+                    )
+                )
+            elif (
+                isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "os"
+                and node.func.attr in {"system", "popen"}
+            ):
+                violations.append(
+                    NetworkIsolationViolation(
+                        module="shell",
+                        import_line=f"os.{node.func.attr}(...)",
                         filename=str(path),
                     )
                 )

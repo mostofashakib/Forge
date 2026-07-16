@@ -7,20 +7,27 @@ from pathlib import Path
 import docker
 import docker.errors
 
+from forge.runtime.network_isolation import check_generated_env
+from forge.settings import redis_url
+
 
 # Single canonical base image for every generated env. The LLM-generated
 # Dockerfile gets its FROM line normalised to this, so all builds depend
 # on exactly one image. We pre-warm it at worker startup, which means the
 # user-triggered build path always finds it cached and never contacts
 # Docker Hub — making the system immune to transient Hub EOF outages.
-FORGE_PYTHON_BASE = "python:3.12-slim"
+FORGE_PYTHON_BASE = os.environ.get("FORGE_PYTHON_BASE_IMAGE", "python:3.12-slim")
+FORGE_CLI_IMAGE = os.environ.get("FORGE_CLI_IMAGE", "ubuntu:22.04")
+FORGE_BROWSER_IMAGE = os.environ.get(
+    "FORGE_BROWSER_IMAGE", "lscr.io/linuxserver/chromium:latest"
+)
 
 # Standard base images Forge needs locally. Pre-warmed at Celery worker
 # startup so user-triggered builds never wait on Hub.
 STANDARD_BASE_IMAGES: tuple[str, ...] = (
     FORGE_PYTHON_BASE,
-    "ubuntu:22.04",
-    "lscr.io/linuxserver/chromium:latest",
+    FORGE_CLI_IMAGE,
+    FORGE_BROWSER_IMAGE,
 )
 
 _DOCKERFILE = f"""\
@@ -44,6 +51,19 @@ _PYTHON_FROM_RE = re.compile(
 # must listen on the same port — otherwise the host-port binding routes
 # to nothing and the iframe shows "Container not running".
 FORGE_APP_PORT = 8000
+
+# Runtime limits are intentionally conservative defaults for generated code.
+# They can be overridden for larger local experiments without changing code.
+_GENERAL_MEMORY_LIMIT = os.environ.get("FORGE_CONTAINER_MEMORY", "1g")
+_BROWSER_MEMORY_LIMIT = os.environ.get("FORGE_BROWSER_MEMORY", "2g")
+_CLI_MEMORY_LIMIT = os.environ.get("FORGE_CLI_MEMORY", "1g")
+_CPU_LIMIT = int(os.environ.get("FORGE_CONTAINER_NANO_CPUS", "1000000000"))
+_PID_LIMIT = int(os.environ.get("FORGE_CONTAINER_PIDS", "256"))
+
+
+def _loopback_port() -> tuple[str, None]:
+    """Ask Docker for a random host port bound only to loopback."""
+    return ("127.0.0.1", None)
 
 # Every Forge-generated FastAPI app needs these at runtime. The LLM that
 # writes requirements.txt is a different model (Haiku) than the one that
@@ -412,7 +432,7 @@ def pull_image(image: str) -> None:
 class ContainerRuntime:
     def __init__(self) -> None:
         self._docker_client: docker.DockerClient | None = None
-        self._redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+        self._redis_url = redis_url()
 
     @staticmethod
     def _container_name(env_name: str) -> str:
@@ -446,6 +466,14 @@ class ContainerRuntime:
         # `httpx`, etc. while requirements.txt forgets them, which crashes
         # the container at boot with ModuleNotFoundError.
         _normalise_requirements(app_dir)
+
+        violations = check_generated_env(app_dir)
+        if violations:
+            details = ", ".join(
+                f"{violation.filename}: {violation.import_line}"
+                for violation in violations
+            )
+            raise RuntimeError(f"Generated environment violates network policy: {details}")
 
         # Pre-pull the base image before `docker build` to avoid
         # intermittent EOF errors when Docker tries to pull mid-build.
@@ -485,27 +513,31 @@ class ContainerRuntime:
 
     def run_cli(self, env_name: str) -> tuple[str, int]:
         """Spin up an Ubuntu 22.04 shell container (no HTTP port)."""
-        pull_image("ubuntu:22.04")
+        pull_image(FORGE_CLI_IMAGE)
         self._remove_existing(env_name)
         container = self._docker.containers.run(
-            image="ubuntu:22.04",
+            image=FORGE_CLI_IMAGE,
             name=self._container_name(env_name),
             command=["tail", "-f", "/dev/null"],
             detach=True,
             labels={"forge.env": env_name, "forge.managed": "true", "forge.type": "cli"},
             restart_policy={"Name": "unless-stopped"},
+            mem_limit=_CLI_MEMORY_LIMIT,
+            nano_cpus=_CPU_LIMIT,
+            pids_limit=_PID_LIMIT,
+            init=True,
         )
         return container.id, 0
 
     def run_browser(self, env_name: str) -> tuple[str, int]:
         """Spin up a Chromium+KasmVNC container, exposing the web UI on a random port."""
-        pull_image("lscr.io/linuxserver/chromium:latest")
+        pull_image(FORGE_BROWSER_IMAGE)
         self._remove_existing(env_name)
         container = self._docker.containers.run(
-            image="lscr.io/linuxserver/chromium:latest",
+            image=FORGE_BROWSER_IMAGE,
             name=self._container_name(env_name),
             detach=True,
-            ports={"3000/tcp": None, "9222/tcp": None},
+            ports={"3000/tcp": _loopback_port(), "9222/tcp": _loopback_port()},
             environment={
                 "PUID": "1000",
                 "PGID": "1000",
@@ -516,6 +548,10 @@ class ContainerRuntime:
             shm_size="1g",
             labels={"forge.env": env_name, "forge.managed": "true", "forge.type": "browser"},
             restart_policy={"Name": "unless-stopped"},
+            mem_limit=_BROWSER_MEMORY_LIMIT,
+            nano_cpus=_CPU_LIMIT,
+            pids_limit=_PID_LIMIT,
+            init=True,
         )
         port = _wait_for_port_binding(container, "3000/tcp", attempts=10, interval=0.3)
         return container.id, port
@@ -525,7 +561,7 @@ class ContainerRuntime:
             image=image_tag,
             name=self._container_name(env_name),
             detach=True,
-            ports={"8000/tcp": None},
+            ports={"8000/tcp": _loopback_port()},
             environment={"REDIS_URL": self._redis_url, "FORGE_ENV_NAME": env_name},
             labels={"forge.env": env_name, "forge.managed": "true"},
             # `on-failure` with a small retry cap, NOT `unless-stopped`:
@@ -535,6 +571,12 @@ class ContainerRuntime:
             # policy the container exits cleanly after a few crashes so the
             # GET cross-check can flag it and the user can see logs.
             restart_policy={"Name": "on-failure", "MaximumRetryCount": 3},
+            mem_limit=_GENERAL_MEMORY_LIMIT,
+            nano_cpus=_CPU_LIMIT,
+            pids_limit=_PID_LIMIT,
+            cap_drop=["ALL"],
+            security_opt=["no-new-privileges:true"],
+            init=True,
         )
         # The port binding is applied asynchronously by the daemon — usually
         # it's there immediately after reload(), but on a busy macOS Docker
@@ -572,7 +614,7 @@ class ContainerRuntime:
             try:
                 existing.start()
                 existing.reload()
-            except docker.errors.APIError as exc:
+            except docker.errors.APIError:
                 # Container exists but won't start (image vanished, etc.). Drop it
                 # and fall through to a fresh run.
                 try:

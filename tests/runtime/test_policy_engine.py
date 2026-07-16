@@ -72,6 +72,15 @@ def test_empty_rules_no_violations():
     assert violations == []
 
 
+def test_private_attribute_traversal_is_rejected():
+    rule = PolicyRule(
+        id="unsafe",
+        condition="state.__class__.__base__.__subclasses__()",
+        forbidden_actions=["x"],
+    )
+    assert PolicyEngine([rule]).check({}, {"type": "x"}) == []
+
+
 def test_severity_derived_from_description():
     high_rule = PolicyRule(id="r1", condition="True", forbidden_actions=["x"], description="high: bad")
     med_rule = PolicyRule(id="r2", condition="True", forbidden_actions=["x"], description="medium: ok")
