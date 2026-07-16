@@ -1,8 +1,8 @@
 # backend/app/api/envs.py
 from __future__ import annotations
-import os
 import shutil
 from pathlib import Path
+from forge.settings import generated_envs_root
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -15,7 +15,7 @@ router = APIRouter(prefix="/api/envs")
 
 
 def _envs_root() -> Path:
-    return Path(os.environ.get("FORGE_GENERATED_ENVS_DIR", "generated_envs"))
+    return generated_envs_root()
 
 
 def _validate_env_name(env_name: str) -> None:

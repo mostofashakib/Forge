@@ -1,17 +1,24 @@
 from __future__ import annotations
 import asyncio
-import os
-from pathlib import Path
 from typing import Any, Callable, Awaitable
 from forge.envgen.artifact_bus import ArtifactBus
 from forge.envgen.context import EnvGenContext
 from forge.envgen.agents.base import EnvGenAgent
-from forge.envgen.agents.app_generator import AppGeneratorAgent
+from forge.envgen.agents.app_generator import (
+    AppAssemblyAgent,
+    BackendBuilderAgent,
+    UIBuilderAgent,
+)
+from forge.envgen.agents.reviewer import GenerationReview, GenerationReviewError, ReviewerAgent
 from forge.envgen.agents.telemetry import TelemetryAgent
 from forge.envgen.agents.state_bridge import StateBridgeAgent
 from forge.envgen.agents.policy import PolicyAgent
 from forge.envgen.agents.reward import RewardAgent
 from forge.extraction.schemas import CompilerInput
+from forge.paths import confined_path, confined_relative_path, validate_path_segment
+from forge.settings import generated_envs_root
+from forge.envgen.executor import TaskExecutor
+from forge.envgen.planning import PromptPlannerAgent
 
 
 class EnvironmentOrchestrator:
@@ -47,19 +54,37 @@ class EnvironmentOrchestrator:
             bus.on_log(self._on_log)
 
         agents = self._agents or [
-            AppGeneratorAgent(),
+            BackendBuilderAgent(),
+            UIBuilderAgent(),
+            AppAssemblyAgent(),
             TelemetryAgent(),
             StateBridgeAgent(),
             PolicyAgent(),
             RewardAgent(),
+            ReviewerAgent(),
         ]
-        await asyncio.gather(*[agent.run(ctx, bus) for agent in agents])
+
+        # Explicitly supplied agents retain the open bus used by extensions and
+        # older tests. The built-in pipeline uses planned tasks and scoped A2A
+        # channels so each specialist sees only declared dependencies.
+        if self._agents is not None:
+            await asyncio.gather(*[agent.run(ctx, bus) for agent in agents])
+        else:
+            plan = PromptPlannerAgent().create_plan(ctx, agents)
+            await bus.publish("generation_plan", plan)
+            await TaskExecutor().execute(plan, agents, ctx, bus)
+            review: GenerationReview | None = bus.get("review_report")
+            if review is None:
+                raise RuntimeError("Reviewer did not publish a review report")
+            if not review.approved:
+                raise GenerationReviewError(review)
         self._write_artifacts(env_name, bus)
 
     @staticmethod
     def _write_artifacts(env_name: str, bus: ArtifactBus) -> None:
-        envs_root = Path(os.environ.get("FORGE_GENERATED_ENVS_DIR", "generated_envs"))
-        pkg_dir = envs_root / env_name
+        envs_root = generated_envs_root()
+        validate_path_segment(env_name, label="environment name")
+        pkg_dir = confined_path(envs_root, env_name)
         app_dir = pkg_dir / "app"
         app_dir.mkdir(parents=True, exist_ok=True)
         custom_dir = pkg_dir / "custom"
@@ -69,14 +94,14 @@ class EnvironmentOrchestrator:
         # agent only returns the files it touched.
         app_code: dict[str, str] = bus.get("app_code") or {}
         for path, content in app_code.items():
-            dest = app_dir / path
+            dest = confined_relative_path(app_dir, path)
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_text(content)
 
         # Overlay with instrumented versions (these take precedence).
         instrumented: dict[str, str] = bus.get("instrumented_code") or {}
         for path, content in instrumented.items():
-            dest = app_dir / path
+            dest = confined_relative_path(app_dir, path)
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_text(content)
 

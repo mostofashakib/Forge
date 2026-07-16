@@ -28,6 +28,7 @@ _SYSTEM = (
 
 
 class TelemetryAgent(EnvGenAgent):
+    agent_id = "telemetry"
     depends_on: list[str] = ["app_code"]
     produces: list[str] = ["instrumented_code"]
 

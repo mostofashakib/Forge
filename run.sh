@@ -142,7 +142,7 @@ log "Starting backend on ${CYAN}http://localhost:8000${RESET}"
   # the frontend don't trigger a backend restart and tear down WebSockets
   # mid-build.
   "$VENV_DIR/bin/uvicorn" backend.app.main:app \
-    --host 0.0.0.0 --port 8000 --reload \
+    --host "${FORGE_HOST:-127.0.0.1}" --port 8000 --reload \
     --reload-dir backend --reload-dir forge \
     --reload-include "*.py" \
     --reload-exclude "generated_envs/*" \

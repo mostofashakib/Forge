@@ -56,7 +56,9 @@ Premade environments ship with realistic seed data that resembles real products.
 ### Environment Creation
 
 - **4-option creation flow** — CLI, Browser, Custom, and Premade on the new-environment page
-- **Custom environment generator** — describe any app in plain English; five parallel LLM agents scaffold code, telemetry, state bridge, policy DSL, and reward function
+- **Custom environment generator** — describe any app in plain English; a prompt planner creates a dependency-aware task graph for dedicated backend, UI, telemetry, state-bridge, policy, reward, and review agents
+- **Agent-to-Agent context protocol** — specialists exchange typed task and artifact messages while scoped channels expose only each task's declared inputs
+- **Reviewer quality gate** — static checks and semantic review verify syntax, required APIs, UI action coverage, RL artifacts, code quality, and the original user requirements before files are written
 - **Real-time build progress** — WebSocket stream shows agent completion, Docker build phase, and live worker logs
 - **Compiler review** — inspect and edit LLM-generated compiler input before the build starts
 - **Self-healing `/start`** — detects stale image tags, missing port bindings, and crash-looped containers; clears bad state and auto-recovers
@@ -68,6 +70,30 @@ Premade environments ship with realistic seed data that resembles real products.
 - **Registry fallback** — four-tier fallback when Docker Hub flakes: canonical pull → AWS ECR → GCR → direct HTTPS via `httpx`
 - **Worker pre-warm** — Celery pulls base images on boot so user builds always hit cache
 - **Crash-loop detection** — `restart_policy=on-failure` with 3-attempt cap; status flips to `error` automatically
+
+### Custom Generation Pipeline
+
+Custom environment generation separates planning, implementation, assembly, and review:
+
+```text
+User prompt + compiler input
+          │
+          ▼
+   PromptPlannerAgent ──→ typed todo DAG + acceptance criteria
+          │
+          ├── BackendBuilderAgent ─┐
+          ├── UIBuilderAgent ──────┴─→ AppAssemblyAgent → TelemetryAgent → StateBridgeAgent
+          ├── PolicyAgent
+          └── RewardAgent
+                    │
+                    ▼
+              ReviewerAgent
+          static + semantic checks
+                    │
+             approved artifacts
+```
+
+`TaskExecutor` runs independent tasks concurrently and waits on declared dependencies. Each task receives a scoped artifact channel. The A2A protocol records assignment, completion, failure, review, and artifact-availability messages with correlation IDs, without copying large generated files into message payloads. The reviewer blocks artifact writes when generated code or requirement coverage fails.
 
 ### Agent Runs & Data Collection
 
@@ -140,8 +166,10 @@ Environments are verified deterministic at creation and launch — same seed and
 
 ### Security & Policy
 
-- **PolicyEngine DSL** — Python expressions evaluated in a sandboxed context; violations block transitions and return 0.0 reward
-- **Network isolation** — AST-based scanner blocks `requests`, `httpx`, `urllib`, `socket`, `aiohttp` in generated envs (bypass with `FORGE_DEV_NETWORK=true`)
+- **PolicyEngine DSL** — policy and verifier expressions use a restricted AST evaluator instead of `eval`; violations block transitions and return 0.0 reward
+- **Network and process isolation** — AST-based scanning blocks network modules, subprocess access, shell execution, and dynamic imports in generated envs (bypass with `FORGE_DEV_NETWORK=true`)
+- **Generated-code validation** — compiler checks run in an isolated subprocess with time and output limits; generated paths are confined to the configured environment root
+- **Local-only default** — `run.sh` binds the backend to `127.0.0.1` unless `FORGE_HOST` is explicitly changed
 - **PII redaction** — strips emails, phone numbers, and SSNs from LLM input before code generation
 - **RBAC observation filtering** — removes or restricts state fields per role, applied in `reset()` and `step()`
 - **Policy Violation Viewer** — global filterable table of violations by environment, episode, and severity
@@ -246,7 +274,7 @@ Browser / API Client
               ├── CLI:       docker run ubuntu:22.04
               ├── Browser:   docker run linuxserver/chromium
               ├── Premade:   docker run pre-built image (gmail / slack)
-              ├── Custom:    5 parallel LLM agents → docker build → docker run
+              ├── Custom:    planner → scoped specialist DAG → reviewer → docker build/run
               │                       │
               │                       ▼
               │           Reverse Proxy → Sandbox Hub (App / Terminal / Observability)
@@ -287,7 +315,10 @@ forge/
   compiler/
     generators/        # Jinja2 compiler, package builder
   envgen/              # LLM orchestration, container runtime, episode/CLI/browser runners
-    agents/            # AppGenerator, Telemetry, StateBridge, Policy, Reward agents
+    agents/            # Backend, UI, assembly, telemetry, state, policy, reward, reviewer
+    planning.py        # Typed task plans and dependency validation
+    executor.py        # Dependency-aware specialist task execution
+    a2a.py             # Typed Agent-to-Agent messages and scoped context permissions
     telemetry/         # Telemetry client and collectors
     container.py       # Docker build, run, start/stop, normalisation, mirror fallback
     tiered_reward.py   # TieredRewardEngine with partial credit and multi-method scoring
@@ -330,7 +361,7 @@ frontend/
       new/             # 4-option landing page (CLI / Browser / Custom / Premade)
       [env_name]/
         sandbox/       # Tabbed hub: App / Terminal / Observability
-        progress/      # Real-time build progress (5 LLM agent steps + Docker build)
+        progress/      # Real-time planner, specialist, review, and Docker build progress
         agent/         # Agent runs + cross-run episode selection
         dashboard/     # Pass rate, reward distribution, step efficiency
         config/        # Environment config editor
@@ -361,8 +392,8 @@ tests/
 
 ```bash
 # 1. Clone and install
-python3 -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
+uv venv && source .venv/bin/activate
+uv pip install -e ".[dev]"
 npm --prefix frontend install
 
 # 2. Start everything
@@ -380,7 +411,7 @@ npm --prefix frontend install
 
 **Run tests:**
 ```bash
-pytest
+uv run pytest
 ```
 
 ---
@@ -392,6 +423,9 @@ pytest
 | Variable | Default | Description |
 |---|---|---|
 | `FORGE_GENERATED_ENVS_DIR` | `generated_envs` | Where compiled environments are written |
+| `FORGE_DB_URL` | `sqlite:///./forge.db` | Backend database URL |
+| `FORGE_SANDBOX_LIMIT` | `10` | Maximum active sandbox environments |
+| `FORGE_HOST` | `127.0.0.1` | Backend bind host used by `run.sh` |
 | `FORGE_DEV_NETWORK` | `false` | Set to `true` to bypass network isolation in generated envs |
 | `FORGE_DISABLE_PREWARM` | unset | Set to `1` to skip base-image pre-warm on worker boot |
 | `REDIS_URL` | `redis://localhost:6379/0` | Redis URL for Celery and build/benchmark progress pub/sub |

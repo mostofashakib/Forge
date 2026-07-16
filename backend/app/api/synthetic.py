@@ -20,8 +20,8 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from pathlib import Path
+from forge.settings import generated_envs_root
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -36,7 +36,7 @@ router = APIRouter(prefix="/api/sandbox", tags=["synthetic"])
 
 
 def _replay_path(env_name: str) -> Path:
-    envs_root = Path(os.environ.get("FORGE_GENERATED_ENVS_DIR", "generated_envs"))
+    envs_root = generated_envs_root()
     return envs_root / env_name / "synthetic_replay.json"
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 import logging
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 from dotenv import load_dotenv
 from fastapi import FastAPI
@@ -29,7 +30,17 @@ from backend.app.api.detect import router as detect_router
 from backend.app.api.benchmark import router as benchmark_router
 from backend.app.database import init_db
 
-app = FastAPI(title="Forge API", version="0.3.0")
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    logger.info("[startup] initialising database…")
+    init_db()
+    logger.info("[startup] database ready")
+    _reattach_containers()
+    logger.info("[startup] Forge API ready — CORS origins: %s", _cors_origins)
+    yield
+
+
+app = FastAPI(title="Forge API", version="0.3.0", lifespan=lifespan)
 
 _cors_raw = os.environ.get("CORS_ORIGINS", "http://localhost:3000")
 _cors_origins = [o.strip() for o in _cors_raw.split(",") if o.strip()]
@@ -54,15 +65,6 @@ app.include_router(evaluate_router)
 app.include_router(synthetic_router)
 app.include_router(detect_router)
 app.include_router(benchmark_router)
-
-
-@app.on_event("startup")
-def startup():
-    logger.info("[startup] initialising database…")
-    init_db()
-    logger.info("[startup] database ready")
-    _reattach_containers()
-    logger.info("[startup] Forge API ready — CORS origins: %s", _cors_origins)
 
 
 def _reattach_containers() -> None:

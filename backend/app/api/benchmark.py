@@ -1,16 +1,18 @@
 from __future__ import annotations
 import json
 import logging
-import os
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from backend.app.database import get_db
 from backend.app.models import BenchmarkRun
+from forge.paths import confined_relative_path
+from forge.settings import redis_url
 
 logger = logging.getLogger(__name__)
 
@@ -24,14 +26,18 @@ router = APIRouter(prefix="/api/benchmark", tags=["benchmark"])
 
 
 class CreateBenchmarkRunRequest(BaseModel):
-    domains: list[str] = ["email", "project_mgmt"]
-    depth: int = 5
-    seeds: int = 5
-    output_dir: str = "benchmark_results"
+    domains: list[str] = Field(default_factory=lambda: ["email", "project_mgmt"], min_length=1)
+    depth: int = Field(default=5, ge=1, le=5)
+    seeds: int = Field(default=5, ge=1, le=100)
+    output_dir: str = Field(default="benchmark_results", min_length=1, max_length=255)
 
 
 @router.post("/runs", status_code=202)
 def create_benchmark_run(body: CreateBenchmarkRunRequest, db: Session = Depends(get_db)):
+    try:
+        output_dir = confined_relative_path(Path.cwd(), body.output_dir)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     run_id = f"bm_{uuid.uuid4().hex[:12]}"
     run = BenchmarkRun(
         id=run_id,
@@ -39,7 +45,7 @@ def create_benchmark_run(body: CreateBenchmarkRunRequest, db: Session = Depends(
         domains=",".join(body.domains),
         depth=body.depth,
         seeds=body.seeds,
-        output_dir=body.output_dir,
+        output_dir=str(output_dir),
         created_at=datetime.now(timezone.utc),
     )
     db.add(run)
@@ -51,7 +57,7 @@ def create_benchmark_run(body: CreateBenchmarkRunRequest, db: Session = Depends(
         domains=body.domains,
         depth=body.depth,
         seeds=body.seeds,
-        output_dir=body.output_dir,
+        output_dir=str(output_dir),
     )
     return {"run_id": run_id}
 
@@ -124,10 +130,10 @@ async def benchmark_progress_ws(websocket: WebSocket, run_id: str, db: Session =
         await websocket.close()
         return
 
-    redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+    redis_connection_url = redis_url()
     channel = f"forge:benchmark:{run_id}"
     try:
-        r = redis.asyncio.from_url(redis_url)
+        r = redis.asyncio.from_url(redis_connection_url)
         pubsub = r.pubsub()
         await pubsub.subscribe(channel)
         logger.info("[ws:benchmark] subscribed to %s", channel)

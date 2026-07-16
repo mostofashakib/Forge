@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from backend.app.database import get_db
@@ -20,51 +20,14 @@ router = APIRouter(prefix="/api/sandbox", tags=["agent-runs"])
 
 class CreateAgentRunRequest(BaseModel):
     agent_id: str = "llm"
-    objective: str
-    num_episodes: int = 5
-    max_steps: int = 50
-    divergence_threshold: float = 0.2
-    consecutive_below_threshold: int = 3
-    dead_end_patience: int = 5
-    success_threshold: float = 0.9
-    seed_start: int = 0
-
-
-class AgentRunResponse(BaseModel):
-    id: str
-    env_name: str
-    agent_id: str
-    objective: str
-    num_episodes: int
-    max_steps: int
-    divergence_threshold: float
-    consecutive_below_threshold: int
-    dead_end_patience: int
-    success_threshold: float
-    seed_start: int
-    status: str
-    episodes_completed: int
-    error: str | None = None
-    created_at: str
-    completed_at: str | None = None
-
-    model_config = {"from_attributes": True}
-
-
-class AgentEpisodeResponse(BaseModel):
-    id: str
-    run_id: str
-    episode_index: int
-    seed: int
-    status: str
-    total_steps: int
-    total_reward: float
-    final_objective_score: float
-    termination_reason: str | None = None
-    started_at: str
-    completed_at: str | None = None
-
-    model_config = {"from_attributes": True}
+    objective: str = Field(min_length=1, max_length=20_000)
+    num_episodes: int = Field(default=5, ge=1, le=1_000)
+    max_steps: int = Field(default=50, ge=1, le=10_000)
+    divergence_threshold: float = Field(default=0.2, ge=0.0, le=1.0)
+    consecutive_below_threshold: int = Field(default=3, ge=1, le=1_000)
+    dead_end_patience: int = Field(default=5, ge=1, le=10_000)
+    success_threshold: float = Field(default=0.9, ge=0.0, le=1.0)
+    seed_start: int = Field(default=0, ge=0)
 
 
 # ---------------------------------------------------------------------------

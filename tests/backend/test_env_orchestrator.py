@@ -66,3 +66,22 @@ async def test_orchestrator_calls_progress_callback(tmp_path, monkeypatch):
     orchestrator = EnvironmentOrchestrator(agents=agents, on_progress=on_progress)
     await orchestrator.run(env_name="test_env2", description="test", compiler_input=_compiler_input())
     assert set(progress) == {"app_code", "instrumented_code", "state_bridge_code", "policy_dsl", "reward_fn_code"}
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_rejects_generated_path_traversal(tmp_path, monkeypatch):
+    monkeypatch.setenv("FORGE_GENERATED_ENVS_DIR", str(tmp_path))
+    agents = [
+        _MockAgent("app_code", {"../../escape.py": "# unsafe"}),
+        _MockAgent("instrumented_code", {}, depends=["app_code"]),
+        _MockAgent("state_bridge_code", "", depends=["instrumented_code"]),
+        _MockAgent("policy_dsl", ""),
+        _MockAgent("reward_fn_code", ""),
+    ]
+    with pytest.raises(ValueError, match="escapes configured root"):
+        await EnvironmentOrchestrator(agents=agents).run(
+            env_name="safe_env",
+            description="test",
+            compiler_input=_compiler_input(),
+        )
+    assert not (tmp_path / "escape.py").exists()

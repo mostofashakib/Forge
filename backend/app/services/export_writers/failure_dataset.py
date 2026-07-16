@@ -3,14 +3,7 @@ import json
 from pathlib import Path
 from sqlalchemy.orm import Session
 from ._queries import get_episodes, get_steps
-
-
-def _action_to_command(action_raw: str) -> str:
-    try:
-        action = json.loads(action_raw) if action_raw else {}
-    except (json.JSONDecodeError, TypeError):
-        return str(action_raw)
-    return action.get("command") or action.get("cmd") or json.dumps(action)
+from .common import action_to_command
 
 
 def write(env_name: str, db: Session, out_dir: Path) -> None:
@@ -38,7 +31,7 @@ def write(env_name: str, db: Session, out_dir: Path) -> None:
 
                 step_records.append({
                     "step_index": s.step_index,
-                    "command": _action_to_command(s.action),
+                    "command": action_to_command(s.action),
                     "action": action,
                     "reward": s.reward,
                     "verifier_results": verifier,

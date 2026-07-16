@@ -31,6 +31,7 @@ _SYSTEM = (
 
 
 class PolicyAgent(EnvGenAgent):
+    agent_id = "policy"
     depends_on: list[str] = []
     produces: list[str] = ["policy_dsl"]
 

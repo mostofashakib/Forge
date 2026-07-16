@@ -27,6 +27,16 @@ _PLAN_SYSTEM = (
     "Call the extract tool with the plan."
 )
 
+_BACKEND_PLAN_SYSTEM = (
+    "Plan the backend file structure for a complete, runnable FastAPI application.\n"
+    "The UI is built by a separate specialist: do not include ui.html or any frontend file.\n"
+    "List only files with one focused backend responsibility.\n"
+    "Required files: main.py, requirements.txt, Dockerfile.\n"
+    "Use SQLite with SQLAlchemy and include all required Forge endpoints.\n"
+    "Docker must serve the application on port 8000.\n"
+    "Call the extract tool with the plan."
+)
+
 # ---------------------------------------------------------------------------
 # Implementation prompts — one per concern
 # ---------------------------------------------------------------------------
@@ -221,15 +231,16 @@ def _fmt(seconds: float) -> str:
     return f"{m}m {s}s"
 
 
-class AppGeneratorAgent(EnvGenAgent):
+class BackendBuilderAgent(EnvGenAgent):
+    agent_id = "backend_builder"
     depends_on: list[str] = []
-    produces: list[str] = ["app_code"]
+    produces: list[str] = ["backend_code"]
 
     def __init__(self, client: LLMClient | None = None) -> None:
-        # Capable tier for complex files (main.py, ui.html)
+        # Capable tier for complex backend files such as main.py.
         self._client = client or get_client(max_tokens=8192, capable=True)
         # Fast tier for simple template-like files (requirements.txt, Dockerfile, etc.)
-        self._fast_client = get_client(max_tokens=2048)
+        self._fast_client = client or get_client(max_tokens=2048)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -243,44 +254,6 @@ class AppGeneratorAgent(EnvGenAgent):
             lambda: client.extract(system=system, user=user, schema=GeneratedFile),
         )
         return result.content
-
-    # ------------------------------------------------------------------
-    # Multi-pass generation for ui.html
-    # ------------------------------------------------------------------
-
-    async def _generate_ui(self, app_context: str, bus: ArtifactBus) -> str:
-        """Two focused passes: HTML+CSS structure, then JavaScript logic."""
-        t0 = time.monotonic()
-        await bus.log("[app-gen] ui.html — pass 1/2: HTML structure + CSS (sonnet)…")
-        html_css = await self._call(system=_HTML_CSS_SYSTEM, user=app_context)
-        await bus.log(
-            f"[app-gen] ui.html — pass 1/2 done ({_fmt(time.monotonic() - t0)}, "
-            f"{len(html_css):,} chars)"
-        )
-
-        t1 = time.monotonic()
-        await bus.log("[app-gen] ui.html — pass 2/2: JavaScript logic (sonnet)…")
-        js = await self._call(
-            system=_JS_SYSTEM,
-            user=(
-                f"{app_context}\n\n"
-                f"HTML structure (for DOM targeting):\n"
-                f"---\n{html_css}\n---"
-            ),
-        )
-        await bus.log(
-            f"[app-gen] ui.html — pass 2/2 done ({_fmt(time.monotonic() - t1)}, "
-            f"{len(js):,} chars)"
-        )
-
-        if '<script id="app-js"></script>' in html_css:
-            return html_css.replace(
-                '<script id="app-js"></script>',
-                f'<script id="app-js">\n{js}\n</script>',
-            )
-        if "</body>" in html_css:
-            return html_css.replace("</body>", f"<script>\n{js}\n</script>\n</body>")
-        return html_css + f"\n<script>\n{js}\n</script>"
 
     # ------------------------------------------------------------------
     # run — plan first, then generate all files in parallel
@@ -305,7 +278,7 @@ class AppGeneratorAgent(EnvGenAgent):
         )
 
         await bus.log(
-            f"[app-gen] Starting — "
+            f"[backend-builder] Starting — "
             f"{len(ctx.compiler_input.entities)} entities, "
             f"{len(ctx.compiler_input.actions)} actions"
         )
@@ -314,31 +287,30 @@ class AppGeneratorAgent(EnvGenAgent):
 
         # Phase 1: plan (sequential — everything depends on it)
         t_plan = time.monotonic()
-        await bus.log("[app-gen] Phase 1/2: planning file structure (sonnet)…")
+        await bus.log("[backend-builder] Phase 1/2: planning backend files (sonnet)…")
         plan: AppPlan = await loop.run_in_executor(
             None,
             lambda: self._client.extract(
-                system=_PLAN_SYSTEM,
+                system=_BACKEND_PLAN_SYSTEM,
                 user=app_context,
                 schema=AppPlan,
             ),
         )
-        file_list = ", ".join(f.path for f in plan.files)
+        backend_files = [f for f in plan.files if f.path.lower() != "ui.html"]
+        file_list = ", ".join(f.path for f in backend_files)
         await bus.log(
-            f"[app-gen] Plan done ({_fmt(time.monotonic() - t_plan)}) — "
-            f"{len(plan.files)} files: {file_list}"
+            f"[backend-builder] Plan done ({_fmt(time.monotonic() - t_plan)}) — "
+            f"{len(backend_files)} files: {file_list}"
         )
 
         plan_summary = "\n".join(
-            f"  - {f.path}: {f.description}" for f in plan.files
+            f"  - {f.path}: {f.description}" for f in backend_files
         )
-        total = len(plan.files)
+        total = len(backend_files)
 
-        # Phase 2: generate all files in parallel
-        # ui.html is internally sequential (HTML/CSS → JS) but runs concurrently
-        # with main.py and all other files.
+        # Phase 2: generate all backend files in parallel.
         await bus.log(
-            f"[app-gen] Phase 2/2: generating {total} files in parallel…"
+            f"[backend-builder] Phase 2/2: generating {total} files in parallel…"
         )
         t_gen = time.monotonic()
 
@@ -347,13 +319,10 @@ class AppGeneratorAgent(EnvGenAgent):
             model_label = "haiku" if is_simple else "sonnet"
             t_file = time.monotonic()
             await bus.log(
-                f"[app-gen] [{i}/{total}] {file_plan.path} — starting ({model_label})…"
+                f"[backend-builder] [{i}/{total}] {file_plan.path} — starting ({model_label})…"
             )
 
-            if file_plan.path == "ui.html":
-                content = await self._generate_ui(app_context, bus)
-
-            elif file_plan.path == "main.py":
+            if file_plan.path == "main.py":
                 user = (
                     f"{app_context}\n\n"
                     f"Application file plan:\n{plan_summary}\n\n"
@@ -389,24 +358,115 @@ class AppGeneratorAgent(EnvGenAgent):
 
             elapsed = _fmt(time.monotonic() - t_file)
             await bus.log(
-                f"[app-gen] [{i}/{total}] {file_plan.path} ✓  "
+                f"[backend-builder] [{i}/{total}] {file_plan.path} ✓  "
                 f"({elapsed}, {len(content):,} chars)"
             )
             return file_plan.path, content
 
         results = await asyncio.gather(
-            *[_gen_one(i, fp) for i, fp in enumerate(plan.files, 1)]
+            *[_gen_one(i, fp) for i, fp in enumerate(backend_files, 1)]
         )
 
         files = dict(results)
         total_chars = sum(len(v) for v in files.values())
         await bus.log(
-            f"[app-gen] All files done — "
+            f"[backend-builder] All files done — "
             f"parallel wall time {_fmt(time.monotonic() - t_gen)}, "
             f"total {total_chars:,} chars across {len(files)} files"
         )
         await bus.log(
-            f"[app-gen] Total agent time: {_fmt(time.monotonic() - run_start)}"
+            f"[backend-builder] Total agent time: {_fmt(time.monotonic() - run_start)}"
         )
 
-        await bus.publish("app_code", files)
+        await bus.publish("backend_code", files)
+
+
+class UIBuilderAgent(EnvGenAgent):
+    """Builds only the user-facing HTML, CSS, and JavaScript."""
+
+    agent_id = "ui_builder"
+    depends_on: list[str] = []
+    produces: list[str] = ["ui_code"]
+
+    def __init__(self, client: LLMClient | None = None) -> None:
+        self._client = client or get_client(max_tokens=8192, capable=True)
+
+    async def _call(self, system: str, user: str) -> str:
+        loop = asyncio.get_running_loop()
+        result: GeneratedFile = await loop.run_in_executor(
+            None,
+            lambda: self._client.extract(system=system, user=user, schema=GeneratedFile),
+        )
+        return result.content
+
+    async def run(self, ctx: EnvGenContext, bus: ArtifactBus) -> None:
+        entity_summary = "\n".join(
+            f"  - {entity.name}: fields={[field.name for field in entity.fields]}"
+            for entity in ctx.compiler_input.entities
+        )
+        action_summary = "\n".join(
+            f"  - {action.name}(params={[param.name for param in action.params]})"
+            for action in ctx.compiler_input.actions
+        )
+        app_context = (
+            f"User request: {ctx.description}\n"
+            f"Domain: {ctx.compiler_input.domain}\n\n"
+            f"Entities:\n{entity_summary}\n\nActions:\n{action_summary}"
+        )
+
+        await bus.log("[ui-builder] Pass 1/2: HTML structure and CSS…")
+        html_css = await self._call(_HTML_CSS_SYSTEM, app_context)
+        await bus.log("[ui-builder] Pass 2/2: client behavior…")
+        javascript = await self._call(
+            _JS_SYSTEM,
+            f"{app_context}\n\nHTML structure:\n---\n{html_css}\n---",
+        )
+        marker = '<script id="app-js"></script>'
+        if marker in html_css:
+            complete_html = html_css.replace(
+                marker, f'<script id="app-js">\n{javascript}\n</script>'
+            )
+        elif "</body>" in html_css:
+            complete_html = html_css.replace(
+                "</body>", f"<script>\n{javascript}\n</script>\n</body>"
+            )
+        else:
+            complete_html = f"{html_css}\n<script>\n{javascript}\n</script>"
+        await bus.publish("ui_code", {"ui.html": complete_html})
+
+
+class AppAssemblyAgent(EnvGenAgent):
+    agent_id = "app_assembler"
+    depends_on = ["backend_code", "ui_code"]
+    produces = ["app_code"]
+
+    async def run(self, ctx: EnvGenContext, bus: ArtifactBus) -> None:
+        del ctx
+        backend_code = await bus.wait_for("backend_code")
+        ui_code = await bus.wait_for("ui_code")
+        overlap = set(backend_code) & set(ui_code)
+        if overlap:
+            raise ValueError(f"Backend and UI produced the same paths: {sorted(overlap)}")
+        await bus.publish("app_code", {**backend_code, **ui_code})
+
+
+class AppGeneratorAgent(EnvGenAgent):
+    """Compatibility facade for callers that still expect one app generator."""
+
+    agent_id = "app_generator"
+    depends_on: list[str] = []
+    produces: list[str] = ["app_code"]
+
+    def __init__(self, client: LLMClient | None = None) -> None:
+        self._backend = BackendBuilderAgent(client=client)
+        self._ui = UIBuilderAgent(client=client)
+
+    async def run(self, ctx: EnvGenContext, bus: ArtifactBus) -> None:
+        private_bus = ArtifactBus()
+        await asyncio.gather(
+            self._backend.run(ctx, private_bus),
+            self._ui.run(ctx, private_bus),
+        )
+        backend_code = private_bus.get("backend_code", {})
+        ui_code = private_bus.get("ui_code", {})
+        await bus.publish("app_code", {**backend_code, **ui_code})

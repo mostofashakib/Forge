@@ -5,18 +5,11 @@ from pathlib import Path
 from sqlalchemy.orm import Session
 from backend.app.models import Episode, EpisodeStep
 from ._queries import get_episodes, get_steps
-
-
-def _action_to_command(action_raw: str) -> str:
-    try:
-        action = json.loads(action_raw) if action_raw else {}
-    except (json.JSONDecodeError, TypeError):
-        return str(action_raw)
-    return action.get("command") or action.get("cmd") or json.dumps(action)
+from .common import action_to_command
 
 
 def _episode_to_messages(ep: Episode, steps: list[EpisodeStep]) -> list[dict]:
-    commands = [_action_to_command(s.action) for s in steps]
+    commands = [action_to_command(s.action) for s in steps]
     return [
         {
             "role": "user",

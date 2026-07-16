@@ -1,15 +1,14 @@
 from __future__ import annotations
 import importlib
-import os
 import sys
-from pathlib import Path
 
 from forge.runtime.determinism import run_determinism_check
+from forge.settings import generated_envs_root
 
 
 def load_forge_env(env_name: str, telemetry):
     """Dynamically import a generated ForgeEnv, verify determinism, inject telemetry."""
-    envs_root = Path(os.environ.get("FORGE_GENERATED_ENVS_DIR", "generated_envs"))
+    envs_root = generated_envs_root()
     parent = str(envs_root.parent.resolve())
     if parent not in sys.path:
         sys.path.insert(0, parent)

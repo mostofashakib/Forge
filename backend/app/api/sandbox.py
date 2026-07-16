@@ -4,15 +4,16 @@ import json
 import logging
 import os
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 import uuid
 import redis
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 import re
-from pydantic import BaseModel, field_validator
+from typing import Literal
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 from backend.app.database import get_db
 from backend.app.models import SandboxEnvironment
+from forge.settings import generated_envs_root, redis_url, sandbox_limit
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/sandbox")
@@ -20,12 +21,12 @@ router = APIRouter(prefix="/api/sandbox")
 
 class CreateSandboxRequest(BaseModel):
     env_name: str
-    env_type: str = "general"   # "general" | "cli" | "browser"
-    description: str = ""
+    env_type: Literal["general", "cli", "browser", "premade:gmail", "premade:slack"] = "general"
+    description: str = Field(default="", max_length=50_000)
     domain: str = "localhost"
-    policy_requirements: str = ""
-    reward_requirements: str = ""
-    ttl_days: int = 30
+    policy_requirements: str = Field(default="", max_length=20_000)
+    reward_requirements: str = Field(default="", max_length=20_000)
+    ttl_days: int = Field(default=30, ge=1, le=365)
 
     @field_validator("env_name")
     @classmethod
@@ -62,10 +63,14 @@ async def create_sandbox(request: CreateSandboxRequest, db: Session = Depends(ge
         .filter(SandboxEnvironment.status.notin_(["deleted", "expired"]))
         .count()
     )
-    if active_count >= 10:
+    max_environments = sandbox_limit()
+    if active_count >= max_environments:
         raise HTTPException(
             status_code=429,
-            detail="Environment limit reached (10 max). Delete an existing environment to create a new one.",
+            detail=(
+                f"Environment limit reached ({max_environments} max). "
+                "Delete an existing environment to create a new one."
+            ),
         )
 
     existing = db.get(SandboxEnvironment, request.env_name)
@@ -93,15 +98,15 @@ async def create_sandbox(request: CreateSandboxRequest, db: Session = Depends(ge
     logger.info("[sandbox] DB row created for %s (job_id=%s)", request.env_name, job_id)
 
     import asyncio
-    redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
-    logger.info("[sandbox] checking Redis at %s…", redis_url)
+    redis_connection_url = redis_url()
+    logger.info("[sandbox] checking Redis at %s…", redis_connection_url)
     try:
         loop = asyncio.get_running_loop()
         pong = await asyncio.wait_for(
             loop.run_in_executor(
                 None,
                 lambda: redis.from_url(
-                    redis_url, socket_connect_timeout=2, socket_timeout=2
+                    redis_connection_url, socket_connect_timeout=2, socket_timeout=2
                 ).ping(),
             ),
             timeout=4.0,
@@ -167,7 +172,6 @@ def get_sandbox(env_name: str, db: Session = Depends(get_db)):
             client = docker.from_env()
             container = client.containers.get(sandbox.container_id)
             container.reload()
-            state = container.attrs.get("State", {}) or {}
             # A container that's been respawned by Docker's restart policy is
             # crashing on boot (LLM-generated app likely has a bug). It looks
             # "running" only momentarily between crashes — flag it as error
@@ -323,7 +327,7 @@ def delete_sandbox(env_name: str, db: Session = Depends(get_db)):
         runtime = ContainerRuntime()
         runtime.remove(sandbox.container_id, sandbox.image_tag)
     import shutil
-    env_dir = Path(os.environ.get("FORGE_GENERATED_ENVS_DIR", "generated_envs")) / env_name
+    env_dir = generated_envs_root() / env_name
     if env_dir.exists():
         shutil.rmtree(env_dir)
     db.delete(sandbox)
@@ -335,15 +339,15 @@ async def sandbox_progress(websocket: WebSocket, env_name: str):
     """Stream build progress from a Celery worker via Redis pub/sub."""
     logger.info("[ws:progress] client connected — env_name=%s", env_name)
     await websocket.accept()
-    redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+    redis_connection_url = redis_url()
     channel = f"forge:progress:{env_name}"
     try:
-        r = redis.asyncio.from_url(redis_url)
+        r = redis.asyncio.from_url(redis_connection_url)
         pubsub = r.pubsub()
         await pubsub.subscribe(channel)
         logger.info("[ws:progress] subscribed to Redis channel %s", channel)
     except Exception:
-        logger.exception("[ws:progress] FAILED to connect to Redis (%s)", redis_url)
+        logger.exception("[ws:progress] FAILED to connect to Redis (%s)", redis_connection_url)
         await websocket.close(code=1011)
         return
     try:
@@ -374,9 +378,9 @@ async def sandbox_progress(websocket: WebSocket, env_name: str):
 async def sandbox_event_feed(websocket: WebSocket, env_name: str, db: Session = Depends(get_db)):
     """Tail forge:events:<env_name> Redis Stream and push to frontend."""
     await websocket.accept()
-    redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+    redis_connection_url = redis_url()
     from forge.envgen.telemetry.stream import StreamConsumer
-    consumer = StreamConsumer(redis_url=redis_url, env_name=env_name)
+    consumer = StreamConsumer(redis_url=redis_connection_url, env_name=env_name)
     try:
         async for event in consumer.tail(last_id="$"):
             await websocket.send_json(event)
@@ -391,14 +395,11 @@ async def sandbox_event_feed(websocket: WebSocket, env_name: str, db: Session = 
 async def sandbox_exec(websocket: WebSocket, env_name: str, db: Session = Depends(get_db)):
     """Bridge WebSocket to docker exec shell via PTY for full interactive terminal support."""
     await websocket.accept()
-    redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
     sandbox = db.get(SandboxEnvironment, env_name)
     if not sandbox or not sandbox.container_id:
         await websocket.send_text("Container not running\r\n")
         await websocket.close()
         return
-
-    container_name = f"forge-{env_name}"
 
     import fcntl
     import pty as _pty
@@ -411,7 +412,7 @@ async def sandbox_exec(websocket: WebSocket, env_name: str, db: Session = Depend
     fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
 
     proc = _subprocess.Popen(
-        ["docker", "exec", "-it", container_name, "/bin/bash"],
+        ["docker", "exec", "-it", sandbox.container_id, "/bin/bash"],
         stdin=slave_fd,
         stdout=slave_fd,
         stderr=slave_fd,
@@ -421,22 +422,6 @@ async def sandbox_exec(websocket: WebSocket, env_name: str, db: Session = Depend
 
     loop = asyncio.get_running_loop()
     closed = asyncio.Event()
-
-    cmd_buf: list[str] = []
-
-    async def _publish_command(cmd: str) -> None:
-        if not cmd.strip():
-            return
-        try:
-            r_act = redis.asyncio.from_url(redis_url)
-            await r_act.xadd(
-                f"forge:activity:{env_name}",
-                {"ts": datetime.now(timezone.utc).isoformat(), "type": "command", "content": cmd.strip()},
-                maxlen=500,
-            )
-            await r_act.aclose()
-        except Exception:
-            pass
 
     def _read_pty() -> None:
         try:
@@ -462,27 +447,17 @@ async def sandbox_exec(websocket: WebSocket, env_name: str, db: Session = Depend
                     msg = json.loads(text)
                     if msg.get("type") == "resize":
                         cols, rows = int(msg["cols"]), int(msg["rows"])
+                        if not (1 <= cols <= 500 and 1 <= rows <= 200):
+                            continue
                         fcntl.ioctl(master_fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
                         continue
                 except (ValueError, KeyError, TypeError):
                     pass
-                # Buffer keystrokes for command observability
-                for ch in text:
-                    if ch in ('\r', '\n'):
-                        await _publish_command(''.join(cmd_buf))
-                        cmd_buf.clear()
-                    elif ch in ('\x7f', '\x08'):  # backspace
-                        if cmd_buf:
-                            cmd_buf.pop()
-                    elif ch == '\x03':  # Ctrl+C
-                        cmd_buf.clear()
-                    elif len(ch) == 1 and ord(ch) >= 32:
-                        cmd_buf.append(ch)
                 try:
                     os.write(master_fd, text.encode())
                 except OSError:
                     break
-        except (WebSocketDisconnect, Exception):
+        except Exception:
             pass
         finally:
             closed.set()
@@ -505,15 +480,15 @@ async def sandbox_exec(websocket: WebSocket, env_name: str, db: Session = Depend
 
 @router.websocket("/ws/activity/{env_name}")
 async def sandbox_activity(websocket: WebSocket, env_name: str, db: Session = Depends(get_db)):
-    """Stream container logs + CLI command events to the Observability panel."""
+    """Stream container logs to the Observability panel."""
     await websocket.accept()
     sandbox = db.get(SandboxEnvironment, env_name)
-    redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
     closed = asyncio.Event()
 
     async def _docker_logs() -> None:
         if not sandbox or not sandbox.container_id:
             return
+        proc = None
         try:
             proc = await asyncio.create_subprocess_exec(
                 "docker", "logs", "--follow", "--timestamps", sandbox.container_id,
@@ -540,32 +515,10 @@ async def sandbox_activity(websocket: WebSocket, env_name: str, db: Session = De
             pass
         finally:
             try:
-                proc.terminate()
+                if proc is not None:
+                    proc.terminate()
             except Exception:
                 pass
-
-    async def _redis_events() -> None:
-        try:
-            r = redis.asyncio.from_url(redis_url)
-            last_id = "$"
-            while not closed.is_set():
-                results = await r.xread({f"forge:activity:{env_name}": last_id}, block=500, count=20)
-                for _, messages in (results or []):
-                    for msg_id, fields in messages:
-                        last_id = msg_id.decode() if isinstance(msg_id, bytes) else msg_id
-                        evt = {
-                            (k.decode() if isinstance(k, bytes) else k):
-                            (v.decode() if isinstance(v, bytes) else v)
-                            for k, v in fields.items()
-                        }
-                        if not closed.is_set():
-                            try:
-                                await websocket.send_json(evt)
-                            except Exception:
-                                closed.set()
-            await r.aclose()
-        except Exception:
-            pass
 
     async def _ws_watcher() -> None:
         try:
@@ -576,7 +529,6 @@ async def sandbox_activity(websocket: WebSocket, env_name: str, db: Session = De
 
     tasks = [
         asyncio.create_task(_docker_logs()),
-        asyncio.create_task(_redis_events()),
         asyncio.create_task(_ws_watcher()),
     ]
     await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)

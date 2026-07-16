@@ -1,17 +1,16 @@
 from __future__ import annotations
 import json
 import logging
-import os
 from datetime import datetime, timezone
-from pathlib import Path
 
 from sqlalchemy.orm import Session
 
 from backend.app.models import ExportJob
 from backend.app.services.export_writers import WRITERS
+from forge.settings import generated_envs_root
 
 logger = logging.getLogger(__name__)
-BASE_DIR = Path(os.environ.get("FORGE_GENERATED_ENVS_DIR", "generated_envs"))
+BASE_DIR = generated_envs_root()
 
 
 def run_export(export_job_id: str, db: Session) -> None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 import logging
+import importlib.util
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -31,9 +32,7 @@ def run_transfer_pipeline(config: TransferConfig) -> TransferResult:
     Requires a GPU node and the transformers + trl packages.
     Run via: forge benchmark transfer --data <dir> --base-model <model>
     """
-    try:
-        from trl import SFTTrainer  # noqa: F401
-    except ImportError:
+    if importlib.util.find_spec("trl") is None:
         raise RuntimeError(
             "transfer_pipeline requires 'trl' and 'transformers'. "
             "Install them on a GPU node: pip install trl transformers datasets"

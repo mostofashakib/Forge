@@ -1,6 +1,6 @@
 from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from backend.app.database import get_db
@@ -13,24 +13,8 @@ class CreateRolloutRequest(BaseModel):
     env_name: str
     task_name: str
     agent_id: str
-    num_episodes: int
-    seed_start: int = 0
-
-
-class RolloutJobResponse(BaseModel):
-    id: str
-    env_name: str
-    task_name: str
-    agent_id: str
-    num_episodes: int
-    seed_start: int
-    status: str
-    episodes_completed: int
-    created_at: str
-    completed_at: str | None = None
-    error: str | None = None
-
-    model_config = {"from_attributes": True}
+    num_episodes: int = Field(ge=1, le=1_000)
+    seed_start: int = Field(default=0, ge=0)
 
 
 @router.post("/")

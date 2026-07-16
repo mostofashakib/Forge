@@ -123,10 +123,7 @@ class ForgeEnv(gym.Env):
         self._invalid_action_count = 0
         self._total_reward = 0.0
 
-        _obs = self._state_store.get()
-        if self._observation_filter:
-            _obs = self._observation_filter.filter(_obs)
-        return _obs, {
+        return self._observe(self._state_store.get()), {
             "episode_id": self._episode_id,
             "task": self._current_task,
             "seed": actual_seed,
@@ -147,39 +144,9 @@ class ForgeEnv(gym.Env):
         if self._policy_engine:
             violations = self._policy_engine.check(state_before, action)
             if violations:
-                violation_events = [
-                    {"type": "policy_violation", "rule_id": v.rule_id, "severity": v.severity}
-                    for v in violations
-                ]
-                self._step_count += 1
-                snapshot = StepSnapshot(
-                    episode_id=self._episode_id,
-                    step_index=self._step_count - 1,
-                    state_hash_before=hash_before,
-                    state_hash_after=hash_before,
-                    action=action,
-                    events=violation_events,
-                    reward=0.0,
-                    verifier_results=[],
-                    diff={"added": {}, "changed": {}, "removed": {}},
-                    terminated=False,
-                    truncated=False,
+                return self._policy_violation_result(
+                    state_before, hash_before, action, violations
                 )
-                self._traj_store.record(snapshot)
-                if self._telemetry:
-                    self._telemetry.record_step(snapshot)
-                    self._telemetry.record_policy_violation(
-                        step_index=snapshot.step_index,
-                        action_type=action.get("type", ""),
-                        violations=violations,
-                    )
-                return_obs = state_before
-                if self._observation_filter:
-                    return_obs = self._observation_filter.filter(return_obs)
-                return return_obs, 0.0, False, False, {
-                    "policy_violations": [v.__dict__ for v in violations],
-                    "events": violation_events,
-                }
 
         try:
             result = self._transition_engine.apply(state_before, action, self._ctx)
@@ -222,17 +189,11 @@ class ForgeEnv(gym.Env):
             terminated=terminated,
             truncated=truncated,
         )
-        self._traj_store.record(snapshot)
-
-        if self._telemetry:
-            self._telemetry.record_step(snapshot)
+        self._record_snapshot(snapshot)
         if (terminated or truncated) and self._telemetry:
             self._telemetry.complete_episode(self._total_reward, terminated, self._step_count)
 
-        _step_obs = state_after
-        if self._observation_filter:
-            _step_obs = self._observation_filter.filter(_step_obs)
-        return _step_obs, reward_breakdown.total_reward, terminated, truncated, {
+        return self._observe(state_after), reward_breakdown.total_reward, terminated, truncated, {
             "episode_id": self._episode_id,
             "verifier_results": [vr.model_dump() for vr in verifier_results],
             "reward_breakdown": reward_breakdown.model_dump(),
@@ -255,6 +216,47 @@ class ForgeEnv(gym.Env):
             terminated=False,
             truncated=False,
         )
+        self._record_snapshot(snapshot)
+
+    def _policy_violation_result(
+        self, state: dict, state_hash: str, action: dict, violations: list
+    ) -> tuple[dict, float, bool, bool, dict]:
+        violation_events = [
+            {"type": "policy_violation", "rule_id": item.rule_id, "severity": item.severity}
+            for item in violations
+        ]
+        self._step_count += 1
+        snapshot = StepSnapshot(
+            episode_id=self._episode_id,
+            step_index=self._step_count - 1,
+            state_hash_before=state_hash,
+            state_hash_after=state_hash,
+            action=action,
+            events=violation_events,
+            reward=0.0,
+            verifier_results=[],
+            diff={"added": {}, "changed": {}, "removed": {}},
+            terminated=False,
+            truncated=False,
+        )
+        self._record_snapshot(snapshot)
+        if self._telemetry:
+            self._telemetry.record_policy_violation(
+                step_index=snapshot.step_index,
+                action_type=action.get("type", ""),
+                violations=violations,
+            )
+        return self._observe(state), 0.0, False, False, {
+            "policy_violations": [item.__dict__ for item in violations],
+            "events": violation_events,
+        }
+
+    def _record_snapshot(self, snapshot: StepSnapshot) -> None:
         self._traj_store.record(snapshot)
         if self._telemetry:
             self._telemetry.record_step(snapshot)
+
+    def _observe(self, state: dict) -> dict:
+        if self._observation_filter:
+            return self._observation_filter.filter(state)
+        return state
