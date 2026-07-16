@@ -214,12 +214,19 @@ Call the extract tool with {"objective": "<one sentence>"}.
 """
 
 
+class SyntheticPrompts:
+    GENERATE = _GENERATE_SYSTEM
+    GOALS = _GOAL_SYSTEM
+    OBJECTIVE = _OBJECTIVE_SYSTEM
+
+
 def _derive_objective(research_goal: str) -> str:
     from forge.extraction.llm_client import get_client as _get_client
-    client = _get_client(max_tokens=256)
+    from forge.envgen.config import envgen_config
+    client = _get_client(max_tokens=envgen_config().cli_llm_tokens)
     try:
         result = client.extract(
-            system=_OBJECTIVE_SYSTEM,
+            system=SyntheticPrompts.OBJECTIVE,
             user=f"Research goal: {research_goal}",
             schema=_ObjectiveOut,
         )
@@ -262,12 +269,17 @@ def _generate_one_episode(
     edge_cases: list[str] | None = None,
 ) -> _SyntheticEpisode | None:
     from forge.extraction.llm_client import get_client as _get_client
-    client = _get_client(max_tokens=1024)
+    from forge.envgen.config import envgen_config
+    client = _get_client(max_tokens=envgen_config().grading_llm_tokens)
     user = _build_episode_user_prompt(
         objective, env_type, episode_index, quality, difficulty, edge_cases or []
     )
     try:
-        return client.extract(system=_GENERATE_SYSTEM, user=user, schema=_SyntheticEpisode)
+        return client.extract(
+            system=SyntheticPrompts.GENERATE,
+            user=user,
+            schema=_SyntheticEpisode,
+        )
     except Exception as exc:
         logger.warning("[synthetic] generation failed for episode %d: %s", episode_index, exc)
         return None
@@ -289,7 +301,8 @@ def suggest_goals(
         raise HTTPException(status_code=404, detail="Sandbox not found")
 
     from forge.extraction.llm_client import get_client as _get_client
-    client = _get_client(max_tokens=512)
+    from forge.envgen.config import envgen_config
+    client = _get_client(max_tokens=envgen_config().action_llm_tokens)
 
     difficulty_label = _DIFFICULTY_LABELS[body.difficulty]
     user_parts = [
@@ -310,7 +323,7 @@ def suggest_goals(
 
     try:
         result = client.extract(
-            system=_GOAL_SYSTEM,
+            system=SyntheticPrompts.GOALS,
             user="\n".join(user_parts),
             schema=_GoalSuggestionsOut,
         )

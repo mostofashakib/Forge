@@ -1,6 +1,6 @@
 from __future__ import annotations
 from forge.extraction.llm_client import LLMClient
-from forge.extraction.prompts import ACTION_PROMPT
+from forge.extraction.prompts import ExtractionPrompts
 from forge.extraction.schemas import ActionDef, EntityDef
 
 
@@ -13,11 +13,11 @@ class ActionInferencer:
             f"- {e.name}: {[f.name for f in e.fields]}" for e in entities
         )
         result = self._client.extract(
-            system=ACTION_PROMPT.system,
-            user=ACTION_PROMPT.user_template.format(
+            system=ExtractionPrompts.ACTIONS.system,
+            user=ExtractionPrompts.ACTIONS.user_template.format(
                 entity_summary=entity_summary,
                 prompt=prompt,
             ),
-            schema=ACTION_PROMPT.output_type,
+            schema=ExtractionPrompts.ACTIONS.output_type,
         )
         return result.actions

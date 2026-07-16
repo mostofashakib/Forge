@@ -2,6 +2,7 @@ import pytest
 from pydantic import BaseModel
 from forge.extraction.llm_client import MockLLMClient, LLMClient
 from forge.extraction.schemas import EntityDef, FieldDef
+from forge.extraction.llm_client import LLMPromptFormatter
 
 
 class _SimpleSchema(BaseModel):
@@ -45,3 +46,15 @@ def test_anthropic_client_custom_max_tokens():
     from forge.extraction.llm_client import AnthropicClient
     client = AnthropicClient(max_tokens=2048)
     assert client._max_tokens == 2048
+
+
+def test_prompt_formatter_adds_explicit_output_contract():
+    prompt = LLMPromptFormatter.structured("Perform the task carefully.", _SimpleSchema)
+    assert "OUTPUT FORMAT (required)" in prompt
+    assert "_SimpleSchema" in prompt
+    assert "value" in prompt
+
+
+def test_prompt_formatter_rejects_missing_instruction():
+    with pytest.raises(ValueError, match="cannot be empty"):
+        LLMPromptFormatter.structured("  ", _SimpleSchema)

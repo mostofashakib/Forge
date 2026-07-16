@@ -176,18 +176,28 @@ Return an object { reevaluations: [...], summary: "..." } via the extract tool.
 """
 
 
+class EvaluationPrompts:
+    POLICY = _POLICY_SYSTEM
+    REWARD = _REWARD_SYSTEM
+
+
 def _run_policy_eval(
     requirements: str,
     episodes: list[tuple[AgentEpisode, list[dict]]],
 ) -> _PolicyEvalResult:
     from forge.extraction.llm_client import get_client as _get_client
-    client = _get_client(max_tokens=1024)
+    from forge.envgen.config import envgen_config
+    client = _get_client(max_tokens=envgen_config().grading_llm_tokens)
     user = (
         f"Policy requirements:\n{requirements}\n\n"
         f"Agent trajectories:\n{_build_trajectory_text(episodes)}"
     )
     try:
-        return client.extract(system=_POLICY_SYSTEM, user=user, schema=_PolicyEvalResult)
+        return client.extract(
+            system=EvaluationPrompts.POLICY,
+            user=user,
+            schema=_PolicyEvalResult,
+        )
     except Exception as exc:
         logger.warning("[evaluate] policy LLM failed: %s", exc)
         return _PolicyEvalResult(violations=[], summary=str(exc))
@@ -198,13 +208,18 @@ def _run_reward_eval(
     episodes: list[tuple[AgentEpisode, list[dict]]],
 ) -> _RewardEvalResult:
     from forge.extraction.llm_client import get_client as _get_client
-    client = _get_client(max_tokens=1024)
+    from forge.envgen.config import envgen_config
+    client = _get_client(max_tokens=envgen_config().grading_llm_tokens)
     user = (
         f"Reward requirements:\n{requirements}\n\n"
         f"Agent trajectories:\n{_build_trajectory_text(episodes)}"
     )
     try:
-        return client.extract(system=_REWARD_SYSTEM, user=user, schema=_RewardEvalResult)
+        return client.extract(
+            system=EvaluationPrompts.REWARD,
+            user=user,
+            schema=_RewardEvalResult,
+        )
     except Exception as exc:
         logger.warning("[evaluate] reward LLM failed: %s", exc)
         return _RewardEvalResult(reevaluations=[], summary=str(exc))

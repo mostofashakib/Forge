@@ -40,6 +40,7 @@ next-env.d.ts
 
 # docs
 docs/
+TASKS.md
 
 # python
 __pycache__/

@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 @celery.task(bind=True)
 def run_episode_task(self, rollout_job_id: str, episode_index: int, seed: int) -> str:
     """Run a single episode for a RolloutJob. Returns episode_id."""
-    from forge.runtime.telemetry import TelemetryClient
+    from backend.app.services.episode_collector import EpisodeDataCollector
     from forge.runtime.agents.factory import make_agent
     from backend.app.database import get_session_factory
 
@@ -58,7 +58,7 @@ def run_episode_task(self, rollout_job_id: str, episode_index: int, seed: int) -
 
     with SessionLocal() as db_ep:
         try:
-            telemetry = TelemetryClient(
+            telemetry = EpisodeDataCollector(
                 episode_id=episode_id,
                 db_session=db_ep,
                 jsonl_path=jsonl_path,
@@ -107,6 +107,7 @@ def build_sandbox_task(
     domain: str = "localhost",
     policy_requirements: str = "",
     reward_requirements: str = "",
+    reference_urls: list[str] | None = None,
 ) -> None:
     """Run sandbox build in a worker, stream progress via Redis pub/sub.
 
@@ -200,6 +201,10 @@ def build_sandbox_task(
         async def on_progress(artifact_name: str, _value) -> None:
             label = {
                 "generation_plan":   "Prompt Planner",
+                "backend_research":  "User Research (backend context)",
+                "ui_research":       "User Research (UI context)",
+                "rl_research":       "User Research (RL context)",
+                "reviewer_research": "User Research (review context)",
                 "backend_code":      "Backend Builder",
                 "ui_code":           "UI Builder",
                 "app_code":          "App Assembly",
@@ -234,6 +239,7 @@ def build_sandbox_task(
             compiler_input=compiler_input,
             policy_requirements=policy_requirements,
             reward_requirements=reward_requirements,
+            reference_urls=reference_urls or [],
         )
         publish({"log": "[forge] all agents finished — building Docker image…"})
 

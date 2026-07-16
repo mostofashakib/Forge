@@ -5,6 +5,7 @@ from forge.envgen.artifact_bus import ArtifactBus
 from forge.envgen.context import EnvGenContext
 from forge.envgen.schemas import GeneratedApp
 from forge.extraction.llm_client import LLMClient, get_client
+from forge.envgen.config import envgen_config
 
 _SYSTEM = (
     "Instrument the provided FastAPI app to emit events to Redis Streams on every state-mutating route.\n"
@@ -27,13 +28,19 @@ _SYSTEM = (
 )
 
 
+class TelemetryPrompts:
+    SYSTEM = _SYSTEM
+
+
 class TelemetryAgent(EnvGenAgent):
     agent_id = "telemetry"
     depends_on: list[str] = ["app_code"]
     produces: list[str] = ["instrumented_code"]
 
     def __init__(self, client: LLMClient | None = None) -> None:
-        self._client = client or get_client(max_tokens=32768)
+        self._client = client or get_client(
+            max_tokens=envgen_config().telemetry_llm_tokens
+        )
 
     async def run(self, ctx: EnvGenContext, bus: ArtifactBus) -> None:
         app_code: dict[str, str] = await bus.wait_for("app_code")
@@ -49,6 +56,9 @@ class TelemetryAgent(EnvGenAgent):
         )
         loop = asyncio.get_event_loop()
         result: GeneratedApp = await loop.run_in_executor(
-            None, lambda: self._client.extract(system=_SYSTEM, user=user, schema=GeneratedApp)
+            None,
+            lambda: self._client.extract(
+                system=TelemetryPrompts.SYSTEM, user=user, schema=GeneratedApp
+            ),
         )
         await bus.publish("instrumented_code", {f.path: f.content for f in result.files})

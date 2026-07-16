@@ -17,7 +17,7 @@ from forge.runtime.policy_engine import PolicyEngine
 from forge.runtime.observation_filter import ObservationFilter
 
 if TYPE_CHECKING:
-    from forge.runtime.telemetry import TelemetryClient
+    from forge.runtime.telemetry import TelemetrySink
 
 
 class InitialStateFactory(Protocol):
@@ -34,7 +34,7 @@ class ForgeEnv(gym.Env):
         transition_engine: TransitionEngine,
         verifier_engine: VerifierEngine,
         reward_engine: RewardEngine,
-        telemetry: "TelemetryClient | None" = None,
+        telemetry: "TelemetrySink | None" = None,
         policy_engine: "PolicyEngine | None" = None,
         observation_filter: "ObservationFilter | None" = None,
         tool_specs: list[ToolSpec] | None = None,

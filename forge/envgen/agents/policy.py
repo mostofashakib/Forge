@@ -5,6 +5,7 @@ from forge.envgen.artifact_bus import ArtifactBus
 from forge.envgen.context import EnvGenContext
 from forge.envgen.schemas import GeneratedFile
 from forge.extraction.llm_client import LLMClient, get_client
+from forge.envgen.config import envgen_config
 
 _DEFAULT_POLICY = """\
 policies:
@@ -30,13 +31,17 @@ _SYSTEM = (
 )
 
 
+class PolicyPrompts:
+    SYSTEM = _SYSTEM
+
+
 class PolicyAgent(EnvGenAgent):
     agent_id = "policy"
-    depends_on: list[str] = []
+    depends_on: list[str] = ["rl_research"]
     produces: list[str] = ["policy_dsl"]
 
     def __init__(self, client: LLMClient | None = None) -> None:
-        self._client = client or get_client(max_tokens=2048)
+        self._client = client or get_client(max_tokens=envgen_config().fast_llm_tokens)
 
     async def run(self, ctx: EnvGenContext, bus: ArtifactBus) -> None:
         if not ctx.policy_requirements.strip():
@@ -44,8 +49,14 @@ class PolicyAgent(EnvGenAgent):
             return
         action_names = [a.name for a in ctx.compiler_input.actions]
         user = f"Actions: {action_names}\n\nPolicy requirements:\n{ctx.policy_requirements}"
+        research = bus.get("rl_research")
+        if research is not None:
+            user += f"\n\nRESEARCHED RL CONTEXT:\n{research.as_prompt()}"
         loop = asyncio.get_event_loop()
         result: GeneratedFile = await loop.run_in_executor(
-            None, lambda: self._client.extract(system=_SYSTEM, user=user, schema=GeneratedFile)
+            None,
+            lambda: self._client.extract(
+                system=PolicyPrompts.SYSTEM, user=user, schema=GeneratedFile
+            ),
         )
         await bus.publish("policy_dsl", result.content)

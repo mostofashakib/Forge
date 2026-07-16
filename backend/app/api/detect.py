@@ -93,6 +93,10 @@ Return your analysis via the extract tool.
 """
 
 
+class DetectionPrompts:
+    SYSTEM = _DETECT_SYSTEM
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -185,10 +189,14 @@ def detect_issues(env_name: str, db: Session = Depends(get_db)):
     )
 
     from forge.extraction.llm_client import get_client as _get_client
-    client = _get_client(max_tokens=1024, capable=True)
+    from forge.envgen.config import envgen_config
+    client = _get_client(
+        max_tokens=envgen_config().grading_llm_tokens,
+        capable=True,
+    )
     try:
         result: _DetectionResult = client.extract(
-            system=_DETECT_SYSTEM, user=user, schema=_DetectionResult
+            system=DetectionPrompts.SYSTEM, user=user, schema=_DetectionResult
         )
     except Exception as exc:
         logger.warning("[detect] LLM failed: %s", exc)
