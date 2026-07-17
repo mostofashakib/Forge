@@ -5,6 +5,9 @@ These tests cover the full HTTP → DB → Celery dispatch path using
 in-memory SQLite and mocked external dependencies (Redis, Celery, Docker).
 """
 import asyncio
+import logging
+
+import docker.errors
 import pytest
 from datetime import datetime, timezone, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -391,6 +394,33 @@ def test_get_sandbox_logs_docker_status_sync_failure(client, caplog):
     assert response.status_code == 200
     assert response.json()["status"] == "running"
     assert "could not synchronize Docker status" in caplog.text
+
+
+def test_get_sandbox_treats_missing_docker_socket_as_expected(client, caplog):
+    _add_sandbox(client, "docker_not_running", status="running")
+    from backend.app import database
+    db: Session = database.get_session_factory()()
+    try:
+        sandbox = db.get(SandboxEnvironment, "docker_not_running")
+        sandbox.container_id = "container-id"
+        db.commit()
+    finally:
+        db.close()
+
+    error = docker.errors.DockerException(
+        "Error while fetching server API version",
+        ("Connection aborted", FileNotFoundError(2, "No such file or directory")),
+    )
+    with (
+        caplog.at_level(logging.DEBUG, logger="backend.app.api.sandbox"),
+        patch("docker.from_env", side_effect=error),
+    ):
+        response = client.get("/api/sandbox/docker_not_running")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "running"
+    assert "Docker is not running; returning persisted status" in caplog.text
+    assert not any(record.levelno >= logging.WARNING for record in caplog.records)
 
 
 def test_stop_sandbox_surfaces_container_failure(client):
