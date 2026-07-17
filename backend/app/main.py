@@ -1,5 +1,4 @@
 from __future__ import annotations
-import errno
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -30,6 +29,8 @@ from backend.app.api.synthetic import router as synthetic_router
 from backend.app.api.detect import router as detect_router
 from backend.app.api.benchmark import router as benchmark_router
 from backend.app.database import init_db
+from backend.app.docker_utils import is_docker_daemon_unavailable
+
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
@@ -68,28 +69,6 @@ app.include_router(detect_router)
 app.include_router(benchmark_router)
 
 
-def _contains_unavailable_socket_error(value: object, seen: set[int] | None = None) -> bool:
-    """Find socket availability errors nested inside Docker SDK wrappers."""
-    if seen is None:
-        seen = set()
-    value_id = id(value)
-    if value_id in seen:
-        return False
-    seen.add(value_id)
-
-    if isinstance(value, OSError) and value.errno in {errno.ENOENT, errno.ECONNREFUSED}:
-        return True
-    if isinstance(value, BaseException):
-        nested = [value.__cause__, value.__context__, *value.args]
-        return any(
-            item is not None and _contains_unavailable_socket_error(item, seen)
-            for item in nested
-        )
-    if isinstance(value, (tuple, list)):
-        return any(_contains_unavailable_socket_error(item, seen) for item in value)
-    return False
-
-
 def _reattach_containers() -> None:
     try:
         from forge.envgen.container import ContainerRuntime
@@ -111,7 +90,7 @@ def _reattach_containers() -> None:
                     logger.info("[startup] reattached container for %s → port %s", env_name, port)
             db.commit()
     except Exception as exc:
-        if _contains_unavailable_socket_error(exc):
+        if is_docker_daemon_unavailable(exc):
             logger.info("[startup] Docker is not running; container reattach disabled")
         else:
             logger.warning(

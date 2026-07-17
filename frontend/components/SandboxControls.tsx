@@ -53,21 +53,22 @@ export function SandboxControls({ envName, status, hasSandbox }: Props) {
   }
 
   return (
-    <div className="flex items-center gap-2">
+    <div className="sandbox-controls">
       {canStart && (
         <button
           onClick={handleStart}
           disabled={busy !== null}
-          className="px-3 py-1.5 border border-green-300 text-green-700 rounded-md text-sm hover:bg-green-50 transition-colors disabled:opacity-50"
+          className="sandbox-control sandbox-control--start"
         >
-          {busy === "start" ? "Starting…" : "Start"}
+          <span className="sandbox-control__dot" />
+          {busy === "start" ? "Starting…" : "Start core"}
         </button>
       )}
       {canStop && (
         <button
           onClick={handleStop}
           disabled={busy !== null}
-          className="px-3 py-1.5 border rounded-md text-sm hover:bg-muted/30 transition-colors disabled:opacity-50"
+          className="sandbox-control sandbox-control--stop"
         >
           {busy === "stop" ? "Stopping…" : "Stop"}
         </button>
@@ -75,7 +76,7 @@ export function SandboxControls({ envName, status, hasSandbox }: Props) {
       <button
         onClick={handleDelete}
         disabled={busy !== null}
-        className="px-3 py-1.5 border border-red-200 text-red-600 rounded-md text-sm hover:bg-red-50 transition-colors disabled:opacity-50"
+        className="sandbox-control sandbox-control--delete"
       >
         {busy === "delete" ? "Deleting…" : "Delete"}
       </button>
