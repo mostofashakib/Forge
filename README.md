@@ -237,6 +237,8 @@ The report page colour-codes each value: green ≥ 0.7, amber 0.4–0.7, red < 0
 
 ### Web UI
 
+The responsive Next.js control surface uses an industrial foundry visual system with active navigation, environment inventory telemetry, live status indicators, and accessible reduced-motion behavior.
+
 | Page | What it does |
 |---|---|
 | **Run** | Configure domains, max difficulty (1–5), seeds per task, and output dir; launch with live log streaming and a progress bar |
@@ -412,6 +414,8 @@ npm --prefix frontend install
 # 3. Stop everything
 ./kill.sh
 ```
+
+The development runner configures Redis with a TCP backlog of 128 to match the default macOS kernel limit and avoid local startup warnings.
 
 | Service | URL |
 |---|---|
