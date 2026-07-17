@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { IBM_Plex_Sans, IBM_Plex_Mono } from "next/font/google";
-import Link from "next/link";
+import AppHeader from "@/components/AppHeader";
 import "./globals.css";
 
 const plexSans = IBM_Plex_Sans({
@@ -84,11 +84,6 @@ const JSON_LD = {
   ],
 };
 
-const NAV = [
-  { label: "Environments", href: "/environments" },
-  { label: "Benchmark", href: "/benchmark" },
-];
-
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
@@ -100,41 +95,20 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       </head>
       <body className={`${plexSans.className} ${plexMono.variable}`}>
         <div className="min-h-screen flex flex-col">
-          {/* Header */}
-          <header className="sticky top-0 z-50 bg-foreground text-background border-b-4 border-primary px-5 sm:px-8 h-16 flex items-center justify-between shadow-lg">
-            <Link href="/environments/new" className="flex items-center gap-2.5 group">
-              <div className="w-9 h-9 bg-primary flex items-center justify-center shadow-[3px_3px_0_rgba(255,255,255,0.18)] group-hover:-rotate-3 transition-transform">
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                  <path d="M7 1L13 4V10L7 13L1 10V4L7 1Z" stroke="white" strokeWidth="1.5" strokeLinejoin="round" />
-                  <path d="M7 5L9 6.5V9L7 10.5L5 9V6.5L7 5Z" fill="white" />
-                </svg>
-              </div>
-              <span className="font-semibold text-sm tracking-[0.24em] text-background">FORGE</span>
-            </Link>
+          <AppHeader />
 
-            <nav className="flex items-center gap-1">
-              {NAV.map((item) => (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  className="px-3 py-2 text-xs font-medium uppercase tracking-[0.12em] text-background/65 hover:text-background hover:bg-background/10 transition-colors"
-                >
-                  {item.label}
-                </Link>
-              ))}
-            </nav>
-          </header>
+          <main className="app-main forge-enter">{children}</main>
 
-          <main className="container mx-auto px-5 sm:px-8 py-10 sm:py-14 max-w-6xl flex-1 forge-enter">{children}</main>
-
-          <footer className="border-t border-foreground/15 mt-auto py-5 px-6 flex items-center justify-between max-w-6xl w-full mx-auto">
-            <p className="text-xs text-muted-foreground/70">
+          <footer className="app-footer">
+            <p>
+              <span className="app-footer__stamp">FORGE / 2026</span>
+              <span className="app-footer__divider" />
               Developed by{" "}
               <a
                 href="https://www.mostofashakib.com/"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-muted-foreground font-medium hover:text-foreground transition-colors"
+                className="font-medium hover:text-foreground transition-colors"
               >
                 Mostofa Shakib
               </a>
