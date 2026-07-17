@@ -186,7 +186,10 @@ export default function ViolationsPage() {
     setLoading(false);
   }, [envName]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => void load(), 0);
+    return () => window.clearTimeout(timer);
+  }, [load]);
 
   const violations = logs.filter((l) => l.violation);
 

@@ -56,7 +56,7 @@ Premade environments ship with realistic seed data that resembles real products.
 ### Environment Creation
 
 - **4-option creation flow** — CLI, Browser, Custom, and Premade on the new-environment page
-- **Custom environment generator** — describe any app in plain English; a prompt planner creates a dependency-aware task graph for dedicated backend, UI, telemetry, state-bridge, policy, reward, and review agents
+- **Custom environment generator** — describe any app in plain English; optionally enable the user researcher with an original product name and URL, then a prompt planner creates a dependency-aware task graph for dedicated backend, UI, telemetry, state-bridge, policy, reward, and review agents
 - **Agent-to-Agent context protocol** — specialists exchange typed task and artifact messages while scoped channels expose only each task's declared inputs
 - **Reviewer quality gate** — static checks and semantic review verify syntax, required APIs, UI action coverage, RL artifacts, code quality, and the original user requirements before files are written
 - **Real-time build progress** — WebSocket stream shows agent completion, Docker build phase, and live worker logs
@@ -76,10 +76,10 @@ Premade environments ship with realistic seed data that resembles real products.
 Custom environment generation separates planning, implementation, assembly, and review:
 
 ```text
-User prompt + compiler input + optional reference URLs
+User prompt + compiler input + optional original product research
           │
           ▼
-   UserResearchAgent ──→ backend / UI / RL / review briefs
+   UserResearchAgent? ─→ backend / UI / RL / review briefs
           │                 (role-pruned + size-bounded)
           ▼
    PromptPlannerAgent ──→ typed todo DAG + acceptance criteria
@@ -96,7 +96,7 @@ User prompt + compiler input + optional reference URLs
              approved artifacts
 ```
 
-`UserResearchAgent` reads the extracted application spec, explicit reference URLs, and a small web search when references are not provided. It synthesizes the target product's workflows, functionality, UI states, data, rules, RL observations, and edge cases. Raw pages are discarded inside the research task; backend, UI, RL, and review specialists receive only their relevant sections under a hard character budget.
+When enabled for a custom environment, `UserResearchAgent` reads the extracted application spec, the required original product name and URL, optional reference URLs, and a small web search when references are not provided. It synthesizes the target product's workflows, functionality, UI states, data, rules, RL observations, and edge cases. Raw pages are discarded inside the research task; backend, UI, RL, and review specialists receive only their relevant sections under a hard character budget. When disabled, the planner omits the research task and downstream specialists run with the application spec alone.
 
 `TaskExecutor` runs independent tasks concurrently and waits on declared dependencies. Each task receives a scoped artifact channel. The A2A protocol records assignment, completion, failure, review, and artifact-availability messages with correlation IDs, without copying large generated files into message payloads. The reviewer blocks artifact writes when generated code or requirement coverage fails. Local follow-up work, including reviewer-driven automatic repairs, is tracked in the git-ignored `TASKS.md`.
 

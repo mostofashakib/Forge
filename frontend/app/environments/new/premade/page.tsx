@@ -1,11 +1,10 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { API_BASE } from "@/lib/api";
-
-const ENV_LIMIT = 10;
+import { useSandboxCapacity } from "@/lib/useSandboxCapacity";
 
 // ---------------------------------------------------------------------------
 // Premade templates
@@ -99,11 +98,13 @@ function CreateModal({
   template,
   atLimit,
   activeCount,
+  limit,
   onClose,
 }: {
   template: Template;
   atLimit: boolean;
   activeCount: number | null;
+  limit: number | null;
   onClose: () => void;
 }) {
   const router = useRouter();
@@ -178,7 +179,7 @@ function CreateModal({
             <div className="border border-red-200 bg-red-50 rounded-lg p-3">
               <p className="text-xs font-semibold text-red-700">Environment limit reached</p>
               <p className="text-xs text-red-600 mt-0.5">
-                You have {activeCount} / {ENV_LIMIT} environments.{" "}
+                You have {activeCount} / {limit} environments.{" "}
                 <Link href="/environments" className="underline font-medium">Delete one</Link> to continue.
               </p>
             </div>
@@ -232,16 +233,8 @@ function CreateModal({
 
 export default function PremadeEnvironmentsPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [activeCount, setActiveCount] = useState<number | null>(null);
-
-  useEffect(() => {
-    fetch(`${API_BASE}/api/sandbox/`, { cache: "no-store" })
-      .then((r) => r.json())
-      .then((list: unknown[]) => setActiveCount(list.length))
-      .catch(() => {});
-  }, []);
-
-  const atLimit = activeCount !== null && activeCount >= ENV_LIMIT;
+  const { activeCount, limit, error: capacityError } = useSandboxCapacity();
+  const atLimit = activeCount !== null && limit !== null && activeCount >= limit;
   const selected = TEMPLATES.find((t) => t.id === selectedId) ?? null;
 
   return (
@@ -251,6 +244,7 @@ export default function PremadeEnvironmentsPage() {
           template={selected}
           atLimit={atLimit}
           activeCount={activeCount}
+          limit={limit}
           onClose={() => setSelectedId(null)}
         />
       )}
@@ -272,11 +266,17 @@ export default function PremadeEnvironmentsPage() {
           </Link>
         </div>
 
+        {capacityError && (
+          <div role="alert" className="border border-red-200 bg-red-50 rounded-lg p-4 text-sm text-red-700">
+            Could not load environment capacity: {capacityError}
+          </div>
+        )}
+
         {atLimit && (
           <div className="border border-red-200 bg-red-50 rounded-lg p-4">
             <p className="text-sm font-semibold text-red-700">Environment limit reached</p>
             <p className="text-xs text-red-600 mt-1">
-              You have {activeCount} active environments (max {ENV_LIMIT}).{" "}
+              You have {activeCount} active environments (max {limit}).{" "}
               <Link href="/environments" className="underline font-medium">Delete one</Link> to continue.
             </p>
           </div>

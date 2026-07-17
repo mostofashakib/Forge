@@ -621,7 +621,9 @@ function RunCard({
   }, [envName, run.id]);
 
   useEffect(() => {
-    if (expanded) loadEpisodes();
+    if (!expanded) return;
+    const timer = window.setTimeout(() => void loadEpisodes(), 0);
+    return () => window.clearTimeout(timer);
   }, [expanded, loadEpisodes]);
 
   // Auto-refresh while running
@@ -765,11 +767,13 @@ function DataCollectionPanel({
 }) {
   const [prompt, setPrompt] = useState("");
   const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState("");
   const totalEps = Object.values(selection).reduce((s, ids) => s + ids.length, 0);
 
   async function handleExport() {
     if (!prompt.trim()) return;
     setExporting(true);
+    setExportError("");
     try {
       const lines: string[] = [];
       // Metadata header line
@@ -784,19 +788,17 @@ function DataCollectionPanel({
       // Fetch trajectories for every selected episode
       for (const [runId, epIds] of Object.entries(selection)) {
         for (const epId of epIds) {
-          try {
-            const res = await fetch(
-              `${API_BASE}/api/sandbox/${envName}/agent-runs/${runId}/episodes/${epId}/trajectory`
-            );
-            if (!res.ok) continue;
-            const data = await res.json();
-            for (const step of data.steps ?? []) {
-              lines.push(JSON.stringify({ type: "step", run_id: runId, episode_id: epId, ...step }));
-            }
-            if (data.summary) {
-              lines.push(JSON.stringify({ type: "episode_summary", run_id: runId, episode_id: epId, ...data.summary }));
-            }
-          } catch { /* skip failed episodes */ }
+          const res = await fetch(
+            `${API_BASE}/api/sandbox/${envName}/agent-runs/${runId}/episodes/${epId}/trajectory`
+          );
+          if (!res.ok) throw new Error(`Trajectory request failed (${res.status})`);
+          const data = await res.json();
+          for (const step of data.steps ?? []) {
+            lines.push(JSON.stringify({ type: "step", run_id: runId, episode_id: epId, ...step }));
+          }
+          if (data.summary) {
+            lines.push(JSON.stringify({ type: "episode_summary", run_id: runId, episode_id: epId, ...data.summary }));
+          }
         }
       }
 
@@ -808,6 +810,8 @@ function DataCollectionPanel({
       a.click();
       URL.revokeObjectURL(url);
       onClear();
+    } catch (cause) {
+      setExportError(cause instanceof Error ? cause.message : "Could not export selected episodes");
     } finally {
       setExporting(false);
     }
@@ -820,6 +824,7 @@ function DataCollectionPanel({
       <div className="max-w-5xl mx-auto px-6 py-4">
         <div className="flex items-start gap-4">
           <div className="flex-1 space-y-2">
+            {exportError && <p role="alert" className="text-xs text-red-600">Export failed: {exportError}</p>}
             <div className="flex items-center gap-2">
               <span className="text-sm font-semibold text-gray-900">Data Collection</span>
               <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs font-medium rounded-full">
@@ -965,7 +970,10 @@ export default function AgentRunsPage() {
     }
   }, [envName]);
 
-  useEffect(() => { loadRuns(); }, [loadRuns]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => void loadRuns(), 0);
+    return () => window.clearTimeout(timer);
+  }, [loadRuns]);
 
   async function launchReplayRun(seedStart: number, numEpisodes: number) {
     if (!replayStatus?.objective) return;

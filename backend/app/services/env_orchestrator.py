@@ -41,6 +41,9 @@ class EnvironmentOrchestrator:
         policy_requirements: str = "",
         reward_requirements: str = "",
         reference_urls: list[str] | None = None,
+        use_user_researcher: bool = False,
+        source_product_name: str = "",
+        source_product_url: str = "",
     ) -> None:
         ctx = EnvGenContext(
             env_name=env_name,
@@ -49,6 +52,8 @@ class EnvironmentOrchestrator:
             policy_requirements=policy_requirements,
             reward_requirements=reward_requirements,
             reference_urls=reference_urls or [],
+            source_product_name=source_product_name,
+            source_product_url=source_product_url,
         )
         bus = ArtifactBus()
         if self._on_progress:
@@ -57,7 +62,7 @@ class EnvironmentOrchestrator:
             bus.on_log(self._on_log)
 
         agents = self._agents or [
-            UserResearchAgent(),
+            *([UserResearchAgent()] if use_user_researcher else []),
             BackendBuilderAgent(),
             UIBuilderAgent(),
             AppAssemblyAgent(),

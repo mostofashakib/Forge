@@ -6,7 +6,7 @@ import { API_BASE, wsBase } from "@/lib/api";
 
 type EnvType = "general" | "cli" | "browser";
 
-const AGENTS = [
+const CORE_AGENTS = [
   { id: "generation_plan",   label: "Prompt Planner",             logPrefix: null },
   { id: "backend_code",      label: "Backend Builder",            logPrefix: "[backend-builder]" },
   { id: "ui_code",           label: "UI Builder",                 logPrefix: "[ui-builder]" },
@@ -18,7 +18,18 @@ const AGENTS = [
   { id: "review_report",     label: "Quality Reviewer",          logPrefix: null },
 ];
 
-const STEP_PCT = Math.floor(100 / AGENTS.length);
+const RESEARCH_AGENT = {
+  id: "user_researcher",
+  label: "User Researcher",
+  logPrefix: "[user-researcher]",
+};
+
+const RESEARCH_ARTIFACTS = new Set([
+  "backend_research",
+  "ui_research",
+  "rl_research",
+  "reviewer_research",
+]);
 
 export default function ProgressPage({
   params,
@@ -31,9 +42,12 @@ export default function ProgressPage({
   const envTypeRef = useRef<EnvType>("general");
   const [done, setDone] = useState<Set<string>>(new Set());
   const doneRef = useRef<Set<string>>(new Set());
+  const [agents, setAgents] = useState(CORE_AGENTS);
+  const agentsRef = useRef(CORE_AGENTS);
   const [logs, setLogs] = useState<string[]>([]);
   const [agentStep, setAgentStep] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
+  const [connectionWarning, setConnectionWarning] = useState<string | null>(null);
   const [finished, setFinished] = useState(false);
   const finishedRef = useRef(false);
   const [phase, setPhase] = useState<"connecting" | "building" | "docker" | "ready" | "error">("connecting");
@@ -50,9 +64,13 @@ export default function ProgressPage({
   // and the Redis pub/sub `done` message may be published before the WS subscribes.
   useEffect(() => {
     fetch(`${API_BASE}/api/sandbox/${envName}`, { cache: "no-store" })
-      .then((r) => r.ok ? r.json() : null)
+      .then((response) => {
+        if (!response.ok) throw new Error(`Environment request failed (${response.status})`);
+        return response.json();
+      })
       .then((d) => {
         if (!d?.env_type) return;
+        setConnectionWarning(null);
         const t = d.env_type as EnvType;
         envTypeRef.current = t;
         setEnvType(t);
@@ -60,7 +78,11 @@ export default function ProgressPage({
           startPollingRef.current();
         }
       })
-      .catch(() => {});
+      .catch((cause: unknown) => {
+        setConnectionWarning(
+          cause instanceof Error ? cause.message : "Could not load environment details",
+        );
+      });
   }, [envName]);
 
   useEffect(() => {
@@ -91,8 +113,9 @@ export default function ProgressPage({
       if (finishedRef.current) { clearInterval(pollRef.current!); return; }
       try {
         const res = await fetch(`${API_BASE}/api/sandbox/${envName}`, { cache: "no-store" });
-        if (!res.ok) return;
+        if (!res.ok) throw new Error(`Status request failed (${res.status})`);
         const data = await res.json();
+        setConnectionWarning(null);
         if (data.status === "running") {
           markDone();
         } else if (data.status === "error") {
@@ -100,7 +123,11 @@ export default function ProgressPage({
           setPhase("error");
           setError("Build failed — check the worker logs for details.");
         }
-      } catch { /* network blip, retry */ }
+      } catch (cause) {
+        setConnectionWarning(
+          cause instanceof Error ? cause.message : "Status polling could not reach the backend",
+        );
+      }
     }, 5000);
   }, [envName, markDone]);
 
@@ -119,7 +146,7 @@ export default function ProgressPage({
         const line = msg.log as string;
         setLogs((prev) => [...prev.slice(-998), line]);
         if (line.includes("building Docker image")) setPhase("docker");
-        for (const agent of AGENTS) {
+        for (const agent of agentsRef.current) {
           if (agent.logPrefix && line.startsWith(agent.logPrefix)) {
             setAgentStep((prev) => ({ ...prev, [agent.id]: line.replace(agent.logPrefix + " ", "") }));
             break;
@@ -127,8 +154,18 @@ export default function ProgressPage({
         }
       }
 
+      if (typeof msg.user_researcher_enabled === "boolean") {
+        const activeAgents = msg.user_researcher_enabled
+          ? [CORE_AGENTS[0], RESEARCH_AGENT, ...CORE_AGENTS.slice(1)]
+          : CORE_AGENTS;
+        agentsRef.current = activeAgents;
+        setAgents(activeAgents);
+      }
+
       if (msg.artifact) {
-        const id = msg.artifact as string;
+        const artifact = msg.artifact as string;
+        if (RESEARCH_ARTIFACTS.has(artifact) && artifact !== "reviewer_research") return;
+        const id = artifact === "reviewer_research" ? "user_researcher" : artifact;
         const next = new Set([...doneRef.current, id]);
         doneRef.current = next;
         setDone(new Set(next));
@@ -150,7 +187,7 @@ export default function ProgressPage({
     ws.onerror = () => {
       if (finishedRef.current) return;
       // Use envTypeRef (not envType) to avoid stale closure
-      const allAgentsDone = doneRef.current.size >= AGENTS.length;
+      const allAgentsDone = agentsRef.current.every((agent) => doneRef.current.has(agent.id));
       if (allAgentsDone || envTypeRef.current !== "general") {
         startPolling();
       } else {
@@ -161,7 +198,7 @@ export default function ProgressPage({
 
     ws.onclose = () => {
       if (finishedRef.current) return;
-      const allAgentsDone = doneRef.current.size >= AGENTS.length;
+      const allAgentsDone = agentsRef.current.every((agent) => doneRef.current.has(agent.id));
       if (allAgentsDone || envTypeRef.current !== "general") {
         startPolling();
       }
@@ -173,8 +210,9 @@ export default function ProgressPage({
     };
   }, [envName, markDone, startPolling]);
 
-  const completedCount = done.size;
-  const pct = finished ? 100 : phase === "docker" ? 97 : Math.min(completedCount * STEP_PCT, 95);
+  const completedCount = agents.filter((agent) => done.has(agent.id)).length;
+  const stepPct = Math.floor(100 / agents.length);
+  const pct = finished ? 100 : phase === "docker" ? 97 : Math.min(completedCount * stepPct, 95);
 
   const phaseLabel: Record<typeof phase, string> = {
     connecting: "connecting…",
@@ -216,10 +254,16 @@ export default function ProgressPage({
         </p>
       </div>
 
+      {connectionWarning && phase !== "error" && (
+        <div role="status" className="border border-amber-200 bg-amber-50 rounded-lg p-3 text-xs text-amber-800">
+          Connection issue: {connectionWarning}. Retrying automatically.
+        </div>
+      )}
+
       <div className="space-y-1.5">
         <div className="flex items-center justify-between text-xs text-muted-foreground">
           {envType === "general"
-            ? <span>{completedCount} / {AGENTS.length} agents done</span>
+            ? <span>{completedCount} / {agents.length} agents done</span>
             : <span>{envType === "cli" ? "Starting CLI container" : "Starting Browser container"}</span>
           }
           <span className="font-medium text-foreground">{pct}%</span>
@@ -237,7 +281,7 @@ export default function ProgressPage({
         <div className="border rounded-lg divide-y">
           {envType === "general" ? (
             <>
-              {AGENTS.map((a) => {
+              {agents.map((a) => {
                 const isDone = done.has(a.id);
                 const step = agentStep[a.id];
                 return (

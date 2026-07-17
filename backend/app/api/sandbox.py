@@ -9,7 +9,7 @@ import redis
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 import re
 from typing import Literal
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy.orm import Session
 from backend.app.database import get_db
 from backend.app.models import SandboxEnvironment
@@ -27,6 +27,9 @@ class CreateSandboxRequest(BaseModel):
     policy_requirements: str = Field(default="", max_length=20_000)
     reward_requirements: str = Field(default="", max_length=20_000)
     reference_urls: list[str] = Field(default_factory=list, max_length=5)
+    use_user_researcher: bool = False
+    source_product_name: str = Field(default="", max_length=200)
+    source_product_url: str = Field(default="", max_length=2_000)
     ttl_days: int = Field(default=30, ge=1, le=365)
 
     @field_validator("env_name")
@@ -38,6 +41,22 @@ class CreateSandboxRequest(BaseModel):
                 "letters, digits, underscores, and hyphens (no spaces)"
             )
         return v
+
+    @model_validator(mode="after")
+    def validate_research_source(self) -> CreateSandboxRequest:
+        self.source_product_name = self.source_product_name.strip()
+        self.source_product_url = self.source_product_url.strip()
+        if not self.use_user_researcher:
+            self.source_product_name = ""
+            self.source_product_url = ""
+            return self
+        if not self.source_product_name:
+            raise ValueError("source_product_name is required when user research is enabled")
+        if not re.fullmatch(r"https?://[^\s]+", self.source_product_url):
+            raise ValueError(
+                "source_product_url must be a valid http or https URL when user research is enabled"
+            )
+        return self
 
 
 class SandboxResponse(BaseModel):
@@ -55,15 +74,30 @@ class SandboxResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
-@router.post("/", status_code=202)
-async def create_sandbox(request: CreateSandboxRequest, db: Session = Depends(get_db)):
-    logger.info("[sandbox] POST /api/sandbox/ — env_name=%s", request.env_name)
+class SandboxCapacityResponse(BaseModel):
+    active_count: int
+    limit: int
 
-    active_count = (
+
+def _active_sandbox_count(db: Session) -> int:
+    return (
         db.query(SandboxEnvironment)
         .filter(SandboxEnvironment.status.notin_(["deleted", "expired"]))
         .count()
     )
+
+
+def _remove_undispatched_sandbox(db: Session, sandbox: SandboxEnvironment) -> None:
+    """Remove a build record when Celery definitively rejected the dispatch."""
+    db.delete(sandbox)
+    db.commit()
+
+
+@router.post("/", status_code=202)
+async def create_sandbox(request: CreateSandboxRequest, db: Session = Depends(get_db)):
+    logger.info("[sandbox] POST /api/sandbox/ — env_name=%s", request.env_name)
+
+    active_count = _active_sandbox_count(db)
     max_environments = sandbox_limit()
     if active_count >= max_environments:
         raise HTTPException(
@@ -84,21 +118,6 @@ async def create_sandbox(request: CreateSandboxRequest, db: Session = Depends(ge
             logger.warning("[sandbox] conflict: %s already exists (status=%s)", request.env_name, existing.status)
             raise HTTPException(status_code=409, detail=f"Sandbox '{request.env_name}' already exists")
 
-    job_id = str(uuid.uuid4())
-    sandbox = SandboxEnvironment(
-        id=request.env_name,
-        status="queued",
-        env_type=request.env_type,
-        ttl_days=request.ttl_days,
-        expires_at=datetime.now(timezone.utc) + timedelta(days=request.ttl_days),
-        policy_requirements=request.policy_requirements or None,
-        reward_requirements=request.reward_requirements or None,
-    )
-    db.add(sandbox)
-    db.commit()
-    logger.info("[sandbox] DB row created for %s (job_id=%s)", request.env_name, job_id)
-
-    import asyncio
     redis_connection_url = redis_url()
     logger.info("[sandbox] checking Redis at %s…", redis_connection_url)
     try:
@@ -122,6 +141,22 @@ async def create_sandbox(request: CreateSandboxRequest, db: Session = Depends(ge
             detail="Worker unavailable — Redis is not responding. Run: redis-server --daemonize yes",
         )
 
+    # The worker needs this row before it can start, so persist it only after
+    # Redis is known to be available and immediately before dispatch.
+    job_id = str(uuid.uuid4())
+    sandbox = SandboxEnvironment(
+        id=request.env_name,
+        status="queued",
+        env_type=request.env_type,
+        ttl_days=request.ttl_days,
+        expires_at=datetime.now(timezone.utc) + timedelta(days=request.ttl_days),
+        policy_requirements=request.policy_requirements or None,
+        reward_requirements=request.reward_requirements or None,
+    )
+    db.add(sandbox)
+    db.commit()
+    logger.info("[sandbox] DB row created for %s (job_id=%s)", request.env_name, job_id)
+
     logger.info("[sandbox] dispatching build_sandbox_task to Celery for %s…", request.env_name)
     try:
         from backend.app.worker.tasks import build_sandbox_task
@@ -138,6 +173,9 @@ async def create_sandbox(request: CreateSandboxRequest, db: Session = Depends(ge
                     policy_requirements=request.policy_requirements,
                     reward_requirements=request.reward_requirements,
                     reference_urls=request.reference_urls,
+                    use_user_researcher=request.use_user_researcher,
+                    source_product_name=request.source_product_name,
+                    source_product_url=request.source_product_url,
                 ),
             ),
             timeout=15.0,
@@ -145,9 +183,14 @@ async def create_sandbox(request: CreateSandboxRequest, db: Session = Depends(ge
         logger.info("[sandbox] task queued — celery task_id=%s env_name=%s", result.id, request.env_name)
     except asyncio.TimeoutError:
         logger.error("[sandbox] Celery dispatch timed out for %s", request.env_name)
+        # The executor thread may still complete after our timeout. Preserve
+        # the row for a late worker, but never leave it falsely queued.
+        sandbox.status = "error"
+        db.commit()
         raise HTTPException(status_code=503, detail="Worker unavailable — Celery did not accept the task within 15 s. Check Redis and the Celery worker.")
     except Exception:
         logger.exception("[sandbox] FAILED to dispatch task for %s", request.env_name)
+        _remove_undispatched_sandbox(db, sandbox)
         raise HTTPException(status_code=503, detail="Worker unavailable — could not queue build task")
 
     return {"job_id": job_id, "env_name": request.env_name}
@@ -160,6 +203,14 @@ def list_sandboxes(db: Session = Depends(get_db)):
         .filter(SandboxEnvironment.status.notin_(["deleted", "expired"]))
         .order_by(SandboxEnvironment.created_at.desc())
         .all()
+    )
+
+
+@router.get("/capacity", response_model=SandboxCapacityResponse)
+def get_sandbox_capacity(db: Session = Depends(get_db)):
+    return SandboxCapacityResponse(
+        active_count=_active_sandbox_count(db),
+        limit=sandbox_limit(),
     )
 
 
@@ -219,8 +270,14 @@ def get_sandbox(env_name: str, db: Session = Depends(get_db)):
         except docker.errors.NotFound:
             sandbox.status = "stopped"
             db.commit()
-        except Exception:
-            pass  # SDK/credential error — trust the DB status
+        except Exception as exc:
+            logger.warning(
+                "[sandbox:get] could not synchronize Docker status for %s; "
+                "returning persisted status: %s: %s",
+                env_name,
+                type(exc).__name__,
+                exc,
+            )
     return sandbox
 
 
@@ -313,8 +370,12 @@ def stop_sandbox(env_name: str, db: Session = Depends(get_db)):
         try:
             from forge.envgen.container import ContainerRuntime
             ContainerRuntime().stop(sandbox.container_id)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.exception("[sandbox:stop] failed for %s", env_name)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to stop container: {exc}",
+            ) from exc
     sandbox.status = "stopped"
     db.commit()
 
@@ -511,16 +572,20 @@ async def sandbox_activity(websocket: WebSocket, env_name: str, db: Session = De
                     content, ts = ts, ""
                 try:
                     await websocket.send_json({"type": "log", "ts": ts[:19], "content": content})
-                except Exception:
+                except (WebSocketDisconnect, RuntimeError):
                     break
-        except Exception:
-            pass
+        except (FileNotFoundError, OSError) as exc:
+            logger.warning(
+                "[sandbox:activity] Docker log stream failed for %s: %s",
+                env_name,
+                exc,
+            )
         finally:
             try:
                 if proc is not None:
                     proc.terminate()
-            except Exception:
-                pass
+            except ProcessLookupError:
+                logger.debug("[sandbox:activity] Docker log process already exited for %s", env_name)
 
     async def _ws_watcher() -> None:
         try:

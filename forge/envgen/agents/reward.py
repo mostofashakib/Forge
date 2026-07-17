@@ -43,7 +43,7 @@ class RewardPrompts:
 
 class RewardAgent(EnvGenAgent):
     agent_id = "reward"
-    depends_on: list[str] = ["rl_research"]
+    optional_depends_on: list[str] = ["rl_research"]
     produces: list[str] = ["reward_fn_code"]
 
     def __init__(self, client: LLMClient | None = None) -> None:
