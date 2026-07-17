@@ -103,6 +103,68 @@ def test_create_sandbox_queues_successfully(client):
     assert resp2.json()["status"] == "queued"
 
 
+def test_create_sandbox_redis_failure_leaves_no_record(client):
+    redis_client = MagicMock()
+    redis_client.ping.side_effect = ConnectionError("redis unavailable")
+
+    with patch("backend.app.api.sandbox.redis.from_url", return_value=redis_client):
+        response = client.post("/api/sandbox/", json={"env_name": "redis_failure"})
+
+    assert response.status_code == 503
+    assert client.get("/api/sandbox/redis_failure").status_code == 404
+
+
+def test_create_sandbox_dispatch_failure_removes_queued_record(client):
+    redis_patch, task_patch = _mock_create_deps()
+    with redis_patch, task_patch as task_delay:
+        task_delay.side_effect = RuntimeError("broker rejected message")
+        response = client.post("/api/sandbox/", json={"env_name": "dispatch_failure"})
+
+    assert response.status_code == 503
+    assert client.get("/api/sandbox/dispatch_failure").status_code == 404
+
+
+def test_capacity_uses_backend_configuration(client, monkeypatch):
+    monkeypatch.setenv("FORGE_SANDBOX_LIMIT", "17")
+    _add_sandbox(client, "active_env", status="running")
+    _add_sandbox(client, "deleted_env", status="deleted")
+
+    response = client.get("/api/sandbox/capacity")
+
+    assert response.status_code == 200
+    assert response.json() == {"active_count": 1, "limit": 17}
+
+
+def test_create_sandbox_requires_product_details_for_user_research(client):
+    response = client.post("/api/sandbox/", json={
+        "env_name": "researched_env",
+        "description": "A project tracker",
+        "use_user_researcher": True,
+    })
+
+    assert response.status_code == 422
+    assert "source_product_name is required" in response.text
+
+
+def test_create_sandbox_forwards_user_research_selection(client):
+    mocks = _mock_create_deps()
+    with mocks[0], mocks[1] as task_delay:
+        response = client.post("/api/sandbox/", json={
+            "env_name": "researched_env",
+            "description": "A project tracker",
+            "use_user_researcher": True,
+            "source_product_name": "Linear",
+            "source_product_url": "https://linear.app",
+            "reference_urls": ["https://linear.app/docs"],
+        })
+
+    assert response.status_code == 202
+    task_kwargs = task_delay.call_args.kwargs
+    assert task_kwargs["use_user_researcher"] is True
+    assert task_kwargs["source_product_name"] == "Linear"
+    assert task_kwargs["source_product_url"] == "https://linear.app"
+
+
 def test_create_sandbox_duplicate_name_rejected(client):
     """Creating a sandbox with a name that already exists returns 409."""
     mocks = _mock_create_deps()
@@ -310,6 +372,45 @@ def test_get_sandbox_marks_restarting_container_as_error(client):
         info = client.get("/api/sandbox/restart_state").json()
 
     assert info["status"] == "error"
+
+
+def test_get_sandbox_logs_docker_status_sync_failure(client, caplog):
+    _add_sandbox(client, "docker_unavailable", status="running")
+    from backend.app import database
+    db: Session = database.get_session_factory()()
+    try:
+        sandbox = db.get(SandboxEnvironment, "docker_unavailable")
+        sandbox.container_id = "container-id"
+        db.commit()
+    finally:
+        db.close()
+
+    with patch("docker.from_env", side_effect=RuntimeError("daemon unavailable")):
+        response = client.get("/api/sandbox/docker_unavailable")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "running"
+    assert "could not synchronize Docker status" in caplog.text
+
+
+def test_stop_sandbox_surfaces_container_failure(client):
+    _add_sandbox(client, "stop_failure", status="running")
+    from backend.app import database
+    db: Session = database.get_session_factory()()
+    try:
+        sandbox = db.get(SandboxEnvironment, "stop_failure")
+        sandbox.container_id = "container-id"
+        db.commit()
+    finally:
+        db.close()
+
+    with patch("forge.envgen.container.ContainerRuntime") as runtime:
+        runtime.return_value.stop.side_effect = RuntimeError("daemon unavailable")
+        response = client.post("/api/sandbox/stop_failure/stop")
+
+    assert response.status_code == 500
+    assert "Failed to stop container" in response.json()["detail"]
+    assert client.get("/api/sandbox/stop_failure").json()["status"] == "running"
 
 
 def test_logs_endpoint_returns_container_output(client):

@@ -58,7 +58,8 @@ class StateBridgePrompts:
 
 class StateBridgeAgent(EnvGenAgent):
     agent_id = "state_bridge"
-    depends_on: list[str] = ["instrumented_code", "rl_research"]
+    depends_on: list[str] = ["instrumented_code"]
+    optional_depends_on: list[str] = ["rl_research"]
     produces: list[str] = ["state_bridge_code", "state_schema_manifest"]
 
     def __init__(

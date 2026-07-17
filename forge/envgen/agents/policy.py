@@ -37,7 +37,7 @@ class PolicyPrompts:
 
 class PolicyAgent(EnvGenAgent):
     agent_id = "policy"
-    depends_on: list[str] = ["rl_research"]
+    optional_depends_on: list[str] = ["rl_research"]
     produces: list[str] = ["policy_dsl"]
 
     def __init__(self, client: LLMClient | None = None) -> None:

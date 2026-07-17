@@ -208,10 +208,15 @@ class UserResearchAgent(EnvGenAgent):
 
     async def run(self, ctx: EnvGenContext, bus: ArtifactBus) -> None:
         await bus.log("[user-researcher] Reading application spec and external references…")
-        urls = list(dict.fromkeys(ctx.reference_urls + self._urls_in(ctx.description)))
+        urls = list(dict.fromkeys(
+            [ctx.source_product_url]
+            + ctx.reference_urls
+            + self._urls_in(ctx.description)
+        ))
+        urls = [url for url in urls if url]
         if not urls and ctx.compiler_input.domain.lower() not in {"localhost", "test", ""}:
             query = (
-                f"{ctx.compiler_input.domain} {ctx.description[:300]} "
+                f"{ctx.source_product_name or ctx.compiler_input.domain} {ctx.description[:300]} "
                 "application user guide workflows features data states"
             )
             try:
@@ -284,6 +289,8 @@ class UserResearchAgent(EnvGenAgent):
         )
         return (
             f"USER REQUEST:\n{ctx.description}\n\n"
+            f"ORIGINAL PRODUCT: {ctx.source_product_name or 'not specified'}\n"
+            f"ORIGINAL PRODUCT URL: {ctx.source_product_url or 'not specified'}\n\n"
             f"STRUCTURED APP SPEC:\n{ctx.compiler_input.model_dump_json(indent=2)}\n\n"
             f"EXTERNAL REFERENCES:\n{excerpts}"
         )

@@ -1,8 +1,10 @@
-import pytest
+import logging
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch, call
+
 import docker.errors
+import pytest
 
 from forge.envgen.container import (
     ContainerRuntime,
@@ -1004,8 +1006,9 @@ def test_pull_image_uses_canonical_first():
     mock_pull.assert_called_once_with("python:3.12-slim")
 
 
-def test_pull_image_falls_back_to_aws_ecr_when_dockerhub_fails():
+def test_pull_image_falls_back_to_aws_ecr_when_dockerhub_fails(caplog):
     """When docker.io throws EOF, the next mirror (public.ecr.aws) is tried."""
+    caplog.set_level(logging.INFO, logger="forge.envgen.container")
     canonical_fail = RuntimeError("Failed to pull python:3.12-slim: EOF")
 
     def pull_side_effect(ref, **_):
@@ -1019,6 +1022,12 @@ def test_pull_image_falls_back_to_aws_ecr_when_dockerhub_fails():
          patch("forge.envgen.container.subprocess.run") as mock_subproc:
         mock_subproc.return_value = MagicMock(returncode=0)
         pull_image("python:3.12-slim")
+
+    assert "docker.io unavailable" in caplog.text
+    assert not any(
+        record.levelno >= logging.WARNING and "docker.io" in record.message
+        for record in caplog.records
+    )
 
     refs_pulled = [c.args[0] for c in mock_pull.call_args_list]
     assert refs_pulled[0] == "python:3.12-slim"

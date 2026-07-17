@@ -73,8 +73,14 @@ class PromptPlannerAgent:
         tasks: list[AgentTask] = []
         for agent in agents:
             inputs = self._as_list(agent.depends_on)
+            optional_inputs = self._as_list(agent.optional_depends_on)
+            available_optional_inputs = [
+                name for name in optional_inputs if name in producers
+            ]
             dependency_agents = list(dict.fromkeys(
-                producers[name] for name in inputs if name in producers
+                producers[name]
+                for name in inputs + available_optional_inputs
+                if name in producers
             ))
             missing_inputs = [name for name in inputs if name not in producers]
             if missing_inputs:
@@ -87,7 +93,9 @@ class PromptPlannerAgent:
                 agent_id=agent.agent_id,
                 description=self._description(agent.agent_id, ctx),
                 dependencies=dependency_agents,
-                context_keys=inputs,
+                # Optional keys remain readable even when no producer is in
+                # this plan; AgentChannel.get() then returns its default.
+                context_keys=inputs + optional_inputs,
                 outputs=normalized_outputs[agent.agent_id],
                 acceptance_criteria=self._criteria(agent.agent_id, ctx),
             ))

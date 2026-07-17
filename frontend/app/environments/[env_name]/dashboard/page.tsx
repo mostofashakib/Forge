@@ -181,7 +181,10 @@ export default function DashboardPage() {
     else setRefreshing(false);
   }, [envName]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => void load(), 0);
+    return () => window.clearTimeout(timer);
+  }, [load]);
 
   useEffect(() => {
     const hasActive = runs.some((r) => r.status === "running" || r.status === "pending");

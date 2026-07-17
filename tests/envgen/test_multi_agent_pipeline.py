@@ -50,6 +50,15 @@ class _Consumer(EnvGenAgent):
         await bus.publish("result", (await bus.wait_for("source")).upper())
 
 
+class _OptionalConsumer(EnvGenAgent):
+    agent_id = "optional_consumer"
+    optional_depends_on = ["source"]
+    produces = ["result"]
+
+    async def run(self, ctx, bus) -> None:
+        await bus.publish("result", bus.get("source", ctx.description))
+
+
 class _FailingAgent(EnvGenAgent):
     agent_id = "failing"
     produces = ["never"]
@@ -65,6 +74,20 @@ def test_prompt_planner_creates_dependency_aware_todos():
     assert consumer.context_keys == ["source"]
     assert consumer.outputs == ["result"]
     assert plan.user_request == _ctx().description
+
+
+def test_prompt_planner_only_scopes_optional_context_when_produced():
+    without_source = PromptPlannerAgent().create_plan(_ctx(), [_OptionalConsumer()])
+    task = without_source.tasks[0]
+    assert task.dependencies == []
+    assert task.context_keys == ["source"]
+
+    with_source = PromptPlannerAgent().create_plan(
+        _ctx(), [_Producer(), _OptionalConsumer()]
+    )
+    task = next(item for item in with_source.tasks if item.id == "optional_consumer")
+    assert task.dependencies == ["producer"]
+    assert task.context_keys == ["source"]
 
 
 @pytest.mark.asyncio
@@ -119,7 +142,7 @@ async def test_app_assembler_keeps_backend_and_ui_separate():
     }
 
 
-async def _review_bus(main_py: str) -> ArtifactBus:
+async def _review_bus(main_py: str, *, include_research: bool = True) -> ArtifactBus:
     bus = ArtifactBus()
     app_code = {
         "main.py": main_py,
@@ -133,10 +156,11 @@ async def _review_bus(main_py: str) -> ArtifactBus:
     await bus.publish("state_schema_manifest", {"fields": {}})
     await bus.publish("policy_dsl", "policies: []\n")
     await bus.publish("reward_fn_code", "def compute_reward(*args):\n    return 0.0\n")
-    await bus.publish("reviewer_research", SpecialistResearchContext(
-        role="reviewer",
-        product_summary="A task tracker",
-    ))
+    if include_research:
+        await bus.publish("reviewer_research", SpecialistResearchContext(
+            role="reviewer",
+            product_summary="A task tracker",
+        ))
     return bus
 
 
@@ -148,6 +172,19 @@ async def test_reviewer_approves_complete_generation():
     ))
     bus = await _review_bus(f"ROUTES = {endpoints!r}\n")
     await ReviewerAgent(semantic_review=False).run(_ctx(), bus)
+    assert bus.get("review_report").approved is True
+
+
+@pytest.mark.asyncio
+async def test_reviewer_does_not_require_research_context():
+    endpoints = " ".join((
+        "/forge/health", "/forge/state", "/forge/reset", "/forge/snapshot",
+        "/forge/restore", "/forge/restore-state", "complete_task",
+    ))
+    bus = await _review_bus(f"ROUTES = {endpoints!r}\n", include_research=False)
+
+    await ReviewerAgent(semantic_review=False).run(_ctx(), bus)
+
     assert bus.get("review_report").approved is True
 
 
