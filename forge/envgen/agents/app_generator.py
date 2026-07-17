@@ -246,7 +246,7 @@ def _fmt(seconds: float) -> str:
 
 class BackendBuilderAgent(EnvGenAgent):
     agent_id = "backend_builder"
-    depends_on: list[str] = ["backend_research"]
+    optional_depends_on: list[str] = ["backend_research"]
     produces: list[str] = ["backend_code"]
 
     def __init__(self, client: LLMClient | None = None) -> None:
@@ -404,7 +404,7 @@ class UIBuilderAgent(EnvGenAgent):
     """Builds only the user-facing HTML, CSS, and JavaScript."""
 
     agent_id = "ui_builder"
-    depends_on: list[str] = ["ui_research"]
+    optional_depends_on: list[str] = ["ui_research"]
     produces: list[str] = ["ui_code"]
 
     def __init__(self, client: LLMClient | None = None) -> None:

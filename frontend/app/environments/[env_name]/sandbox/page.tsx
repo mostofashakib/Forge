@@ -37,6 +37,7 @@ export default function SandboxPage({ params }: Props) {
   const [stopping,  setStopping]  = useState(false);
   const [deleting,  setDeleting]  = useState(false);
   const [resetting, setResetting] = useState(false);
+  const [mountedAt] = useState(() => Date.now());
 
   // Iframe ref for Reload control
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -121,13 +122,13 @@ export default function SandboxPage({ params }: Props) {
 
   function reloadIframe() {
     if (iframeRef.current) {
-      // eslint-disable-next-line no-self-assign
-      iframeRef.current.src = iframeRef.current.src;
+      const currentSource = iframeRef.current.src;
+      iframeRef.current.src = currentSource;
     }
   }
 
   const daysLeft = info?.expires_at
-    ? Math.max(0, Math.ceil((new Date(info.expires_at).getTime() - Date.now()) / 86400000))
+    ? Math.max(0, Math.ceil((new Date(info.expires_at).getTime() - mountedAt) / 86400000))
     : null;
 
   const envType = info?.env_type ?? "general";

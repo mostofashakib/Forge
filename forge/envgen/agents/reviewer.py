@@ -67,8 +67,8 @@ class ReviewerAgent(EnvGenAgent):
         "state_schema_manifest",
         "policy_dsl",
         "reward_fn_code",
-        "reviewer_research",
     ]
+    optional_depends_on = ["reviewer_research"]
     produces = ["review_report"]
 
     def __init__(
@@ -85,6 +85,7 @@ class ReviewerAgent(EnvGenAgent):
 
     async def run(self, ctx: EnvGenContext, bus: ArtifactBus) -> None:
         artifacts = {name: await bus.wait_for(name) for name in self.depends_on}
+        artifacts.update({name: bus.get(name) for name in self.optional_depends_on})
         issues: list[ReviewIssue] = []
         app_code: dict[str, str] = artifacts["app_code"] or {}
 
@@ -183,6 +184,12 @@ class ReviewerAgent(EnvGenAgent):
                 f"=== {path} ===\n{content[:review_chars]}"
                 for path, content in app_code.items()
             )
+            researched_context = artifacts["reviewer_research"]
+            research_section = (
+                f"Researched product context:\n{researched_context.as_prompt()}\n\n"
+                if researched_context is not None
+                else ""
+            )
             semantic_input = (
                 f"User request: {ctx.description}\n"
                 f"Domain: {ctx.compiler_input.domain}\n"
@@ -190,7 +197,7 @@ class ReviewerAgent(EnvGenAgent):
                 f"Actions: {[action.model_dump() for action in ctx.compiler_input.actions]}\n"
                 f"Policy requirements: {ctx.policy_requirements or 'default'}\n"
                 f"Reward requirements: {ctx.reward_requirements or 'default'}\n\n"
-                f"Researched product context:\n{artifacts['reviewer_research'].as_prompt()}\n\n"
+                f"{research_section}"
                 f"Generated application:\n{artifact_excerpt}\n\n"
                 f"State bridge:\n{str(artifacts['state_bridge_code'])[:8000]}\n\n"
                 f"Policy:\n{str(artifacts['policy_dsl'])[:4000]}\n\n"

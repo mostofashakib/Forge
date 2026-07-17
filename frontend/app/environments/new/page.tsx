@@ -1,11 +1,10 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { API_BASE } from "@/lib/api";
-
-const ENV_LIMIT = 10;
+import { useSandboxCapacity } from "@/lib/useSandboxCapacity";
 
 // ---------------------------------------------------------------------------
 // Quick-create modal (Browser / CLI)
@@ -22,11 +21,13 @@ function QuickCreateModal({
   def,
   atLimit,
   activeCount,
+  limit,
   onClose,
 }: {
   def: QuickCreateDef;
   atLimit: boolean;
   activeCount: number | null;
+  limit: number | null;
   onClose: () => void;
 }) {
   const router = useRouter();
@@ -93,7 +94,7 @@ function QuickCreateModal({
             <div className="border border-red-200 bg-red-50 rounded-lg p-3">
               <p className="text-xs font-semibold text-red-700">Environment limit reached</p>
               <p className="text-xs text-red-600 mt-0.5">
-                {activeCount} / {ENV_LIMIT} used.{" "}
+                {activeCount} / {limit} used.{" "}
                 <Link href="/environments" className="underline font-medium">Delete one</Link> to continue.
               </p>
             </div>
@@ -180,14 +181,12 @@ const CARD_ICONS: Record<string, React.ReactNode> = {
 };
 
 function OptionCard({
-  icon,
   label,
   description,
   themeKey,
   onClick,
   href,
 }: {
-  icon: string;
   label: string;
   description: string;
   themeKey: string;
@@ -197,8 +196,8 @@ function OptionCard({
   const theme = CARD_THEMES[themeKey] ?? CARD_THEMES.custom;
 
   const inner = (
-    <div className={`group h-full card-shadow hover:card-shadow-hover hover:-translate-y-0.5 bg-card border border-border/60 rounded-2xl p-6 flex flex-col gap-4 transition-all duration-200 cursor-pointer ${theme.accent}`}>
-      <div className={`w-10 h-10 rounded-xl ${theme.iconBg} ${theme.iconText} flex items-center justify-center shrink-0`}>
+    <div className={`group h-full card-shadow hover:card-shadow-hover hover:-translate-y-1 bg-card border border-foreground/20 p-6 flex flex-col gap-5 transition-all duration-200 cursor-pointer ${theme.accent}`}>
+      <div className={`w-11 h-11 ${theme.iconBg} ${theme.iconText} flex items-center justify-center shrink-0 border border-current/15`}>
         {CARD_ICONS[themeKey]}
       </div>
       <div className="flex-1">
@@ -245,16 +244,8 @@ const QUICK_CREATE: Record<string, QuickCreateDef> = {
 
 export default function NewEnvironmentPage() {
   const [modal, setModal] = useState<"cli" | "browser" | null>(null);
-  const [activeCount, setActiveCount] = useState<number | null>(null);
-
-  useEffect(() => {
-    fetch(`${API_BASE}/api/sandbox/`, { cache: "no-store" })
-      .then((r) => r.json())
-      .then((list: unknown[]) => setActiveCount(list.length))
-      .catch(() => {});
-  }, []);
-
-  const atLimit = activeCount !== null && activeCount >= ENV_LIMIT;
+  const { activeCount, limit, error: capacityError } = useSandboxCapacity();
+  const atLimit = activeCount !== null && limit !== null && activeCount >= limit;
 
   return (
     <>
@@ -263,33 +254,40 @@ export default function NewEnvironmentPage() {
           def={QUICK_CREATE[modal]}
           atLimit={atLimit}
           activeCount={activeCount}
+          limit={limit}
           onClose={() => setModal(null)}
         />
       )}
 
-      <div className="max-w-3xl mx-auto space-y-8">
+      <div className="max-w-4xl mx-auto space-y-8">
         {/* Header */}
-        <div className="flex items-start justify-between">
+        <div className="blueprint-panel p-7 sm:p-9 flex items-start justify-between gap-6 before:absolute before:right-0 before:top-0 before:h-full before:w-2 before:bg-accent">
           <div>
-            <h1 className="text-2xl font-semibold tracking-tight">New Environment</h1>
-            <p className="text-sm text-muted-foreground mt-1.5">
-              Choose an environment type to get started.
+            <span className="signal-chip mb-4">Build sequence / 01</span>
+            <p className="text-sm text-muted-foreground mt-3 max-w-lg">
+              Start from a live runtime, describe a custom system, or deploy a proven template.
             </p>
           </div>
-          {activeCount !== null && (
+          {activeCount !== null && limit !== null && (
             <span className={`text-xs px-2.5 py-1 rounded-full font-medium shrink-0 ${
               atLimit ? "bg-red-100 text-red-700" : "bg-muted text-muted-foreground"
             }`}>
-              {activeCount} / {ENV_LIMIT}
+              {activeCount} / {limit}
             </span>
           )}
         </div>
+
+        {capacityError && (
+          <div role="alert" className="border border-red-200 bg-red-50 rounded-lg p-4 text-sm text-red-700">
+            Could not load environment capacity: {capacityError}
+          </div>
+        )}
 
         {atLimit && (
           <div className="border border-red-200 bg-red-50 rounded-lg p-4">
             <p className="text-sm font-semibold text-red-700">Environment limit reached</p>
             <p className="text-xs text-red-600 mt-1">
-              You have {activeCount} active environments (max {ENV_LIMIT}).{" "}
+              You have {activeCount} active environments (max {limit}).{" "}
               <Link href="/environments" className="underline font-medium">Delete one</Link> to continue.
             </p>
           </div>
@@ -298,28 +296,24 @@ export default function NewEnvironmentPage() {
         {/* 2×2 grid */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <OptionCard
-            icon="cli"
             label="CLI Terminal"
             themeKey="cli"
             description="Full Ubuntu 22.04 terminal in Docker for shell scripting, package management, and system administration tasks."
             onClick={() => !atLimit && setModal("cli")}
           />
           <OptionCard
-            icon="browser"
             label="Browser"
             themeKey="browser"
             description="Real Chromium browser in Docker for web automation, multi-step form filling, scraping, and navigation tasks."
             onClick={() => !atLimit && setModal("browser")}
           />
           <OptionCard
-            icon="custom"
             label="Custom Environment"
             themeKey="custom"
             description="Describe any real-world application and Forge generates a complete RL environment with policy, reward, and observability."
             href="/environments/new/custom"
           />
           <OptionCard
-            icon="premade"
             label="Premade"
             themeKey="premade"
             description="Ready-to-use environments pre-configured with realistic apps, policies, and reward functions. Gmail and Slack available now."

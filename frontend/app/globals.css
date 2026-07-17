@@ -40,38 +40,43 @@
 }
 
 :root {
-  --background: oklch(0.98 0.005 255);
-  --foreground: oklch(0.12 0.018 265);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.12 0.018 265);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.12 0.018 265);
-  --primary: oklch(0.48 0.24 265);
-  --primary-foreground: oklch(0.99 0 0);
-  --secondary: oklch(0.94 0.008 265);
-  --secondary-foreground: oklch(0.22 0.018 265);
-  --muted: oklch(0.94 0.008 265);
-  --muted-foreground: oklch(0.46 0.014 265);
-  --accent: oklch(0.94 0.008 265);
-  --accent-foreground: oklch(0.12 0.018 265);
+  --background: oklch(0.955 0.018 83);
+  --foreground: oklch(0.17 0.018 62);
+  --card: oklch(0.985 0.012 85);
+  --card-foreground: oklch(0.17 0.018 62);
+  --popover: oklch(0.985 0.012 85);
+  --popover-foreground: oklch(0.17 0.018 62);
+  --primary: oklch(0.62 0.22 36);
+  --primary-foreground: oklch(0.985 0.01 85);
+  --secondary: oklch(0.89 0.025 80);
+  --secondary-foreground: oklch(0.22 0.02 62);
+  --muted: oklch(0.91 0.02 82);
+  --muted-foreground: oklch(0.46 0.025 64);
+  --accent: oklch(0.88 0.16 116);
+  --accent-foreground: oklch(0.18 0.03 100);
   --destructive: oklch(0.55 0.22 25);
-  --border: oklch(0.88 0.010 265);
-  --input: oklch(0.94 0.008 265);
-  --ring: oklch(0.48 0.24 265);
-  --radius: 0.625rem;
-  --sidebar: oklch(0.96 0.006 265);
-  --sidebar-foreground: oklch(0.12 0.018 265);
-  --sidebar-primary: oklch(0.48 0.24 265);
+  --border: oklch(0.78 0.025 75);
+  --input: oklch(0.91 0.02 82);
+  --ring: oklch(0.62 0.22 36);
+  --radius: 0.35rem;
+  --sidebar: oklch(0.19 0.02 62);
+  --sidebar-foreground: oklch(0.96 0.018 83);
+  --sidebar-primary: oklch(0.62 0.22 36);
   --sidebar-primary-foreground: oklch(0.99 0 0);
-  --sidebar-accent: oklch(0.94 0.008 265);
-  --sidebar-accent-foreground: oklch(0.12 0.018 265);
-  --sidebar-border: oklch(0.88 0.010 265);
-  --sidebar-ring: oklch(0.48 0.24 265);
+  --sidebar-accent: oklch(0.28 0.025 62);
+  --sidebar-accent-foreground: oklch(0.98 0.01 83);
+  --sidebar-border: oklch(0.36 0.025 62);
+  --sidebar-ring: oklch(0.62 0.22 36);
 }
 
 @keyframes progress-slide {
   0%   { transform: translateX(-100%); }
   100% { transform: translateX(200%); }
+}
+
+@keyframes forge-enter {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 @theme inline {
@@ -85,21 +90,25 @@
   body {
     @apply bg-background text-foreground antialiased;
     background-image:
-      radial-gradient(ellipse 80% 50% at 50% -20%, oklch(0.90 0.06 265 / 0.12), transparent);
+      linear-gradient(oklch(0.35 0.02 70 / 0.055) 1px, transparent 1px),
+      linear-gradient(90deg, oklch(0.35 0.02 70 / 0.055) 1px, transparent 1px),
+      radial-gradient(circle at 85% 0%, oklch(0.76 0.17 55 / 0.18), transparent 32%);
+    background-size: 32px 32px, 32px 32px, auto;
     background-attachment: fixed;
   }
+  ::selection { background: oklch(0.82 0.17 85); color: oklch(0.16 0.02 62); }
 }
 
 @layer utilities {
   .card-shadow {
     box-shadow:
-      0 1px 2px oklch(0.12 0.018 265 / 0.04),
-      0 2px 8px oklch(0.12 0.018 265 / 0.06);
+      3px 3px 0 oklch(0.20 0.02 62 / 0.10),
+      0 8px 24px oklch(0.20 0.02 62 / 0.05);
   }
   .card-shadow-hover {
     box-shadow:
-      0 2px 4px oklch(0.12 0.018 265 / 0.06),
-      0 8px 24px oklch(0.12 0.018 265 / 0.10);
+      5px 5px 0 oklch(0.62 0.22 36 / 0.25),
+      0 14px 32px oklch(0.20 0.02 62 / 0.12);
   }
   .card-shadow-md {
     box-shadow:
@@ -109,7 +118,7 @@
 
   /* Reusable section label */
   .section-label {
-    @apply text-xs font-medium text-muted-foreground uppercase tracking-widest;
+    @apply text-xs font-semibold text-muted-foreground uppercase tracking-[0.18em];
   }
 
   /* KPI / stat card */
@@ -118,6 +127,15 @@
     box-shadow:
       0 1px 2px oklch(0.12 0.018 265 / 0.04),
       0 2px 8px oklch(0.12 0.018 265 / 0.06);
+  }
+
+  .forge-enter { animation: forge-enter 420ms cubic-bezier(.2,.8,.2,1) both; }
+  .signal-chip {
+    @apply inline-flex items-center gap-2 border border-foreground/20 bg-accent px-2.5 py-1 text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-accent-foreground;
+  }
+  .blueprint-panel {
+    @apply relative overflow-hidden border border-foreground/20 bg-card;
+    box-shadow: 4px 4px 0 oklch(0.20 0.02 62 / 0.12);
   }
 
   /* Forge form input — use on <input> and <textarea> to avoid repetition */
@@ -144,5 +162,14 @@
   .scrollbar-thin::-webkit-scrollbar-thumb {
     background: oklch(0.88 0.010 265);
     border-radius: 99px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }

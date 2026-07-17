@@ -59,7 +59,10 @@ export default function RewardPage() {
     setLoading(false);
   }, [envName]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => void load(), 0);
+    return () => window.clearTimeout(timer);
+  }, [load]);
 
   function toggleMethod(id: ScoringMethod) {
     setSelectedMethods((prev) => {

@@ -15,7 +15,12 @@ from forge.extraction.llm_client import MockLLMClient
 from forge.extraction.schemas import ActionDef, CompilerInput, EntityDef, FieldDef
 
 
-def _ctx(*, reference_urls: list[str] | None = None) -> EnvGenContext:
+def _ctx(
+    *,
+    reference_urls: list[str] | None = None,
+    source_product_name: str = "",
+    source_product_url: str = "",
+) -> EnvGenContext:
     return EnvGenContext(
         env_name="mail_env",
         description="A faithful prototype of Acme Mail",
@@ -27,6 +32,8 @@ def _ctx(*, reference_urls: list[str] | None = None) -> EnvGenContext:
             tasks=[],
         ),
         reference_urls=reference_urls or [],
+        source_product_name=source_product_name,
+        source_product_url=source_product_url,
     )
 
 
@@ -79,6 +86,26 @@ async def test_research_agent_reads_explicit_sources_and_publishes_pruned_contex
     assert "ui_states" not in bus.get("backend_research").sections
     assert "rl_observations" in bus.get("rl_research").sections
     assert all("raw" not in key for key in bus.snapshot())
+
+
+@pytest.mark.asyncio
+async def test_research_agent_prioritizes_original_product_url():
+    web = _Web()
+    agent = UserResearchAgent(
+        client=MockLLMClient({"ApplicationResearchBrief": _brief()}),
+        web=web,
+    )
+
+    await agent.run(_ctx(
+        source_product_name="Acme Mail",
+        source_product_url="https://acme.example.test",
+        reference_urls=["https://docs.example.test/mail"],
+    ), ArtifactBus())
+
+    assert web.fetched == [
+        "https://acme.example.test",
+        "https://docs.example.test/mail",
+    ]
 
 
 @pytest.mark.asyncio

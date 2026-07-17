@@ -131,7 +131,10 @@ export default function SyntheticPage() {
     setReplayStatus(data);
   }, [envName]);
 
-  useEffect(() => { loadStatus(); }, [loadStatus]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => void loadStatus(), 0);
+    return () => window.clearTimeout(timer);
+  }, [loadStatus]);
 
   const suggestGoals = useCallback(async () => {
     setSuggestingGoals(true);

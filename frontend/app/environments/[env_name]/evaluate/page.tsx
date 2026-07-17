@@ -195,7 +195,10 @@ export default function EvaluatePage() {
     setLoadingReqs(false);
   }, [envName]);
 
-  useEffect(() => { loadReqs(); }, [loadReqs]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => void loadReqs(), 0);
+    return () => window.clearTimeout(timer);
+  }, [loadReqs]);
 
   async function runEval(type: EvalType) {
     const setRunning = type === "policy" ? setRunningPolicy : setRunningReward;

@@ -398,7 +398,9 @@ def pull_image(image: str) -> None:
         return
     except RuntimeError as exc:
         errors.append(f"docker.io → {redact_sensitive_text(exc)}")
-        log.warning("[pull] docker.io failed for %s, trying mirrors", image)
+        # A registry miss is expected fallback behavior, not an operational
+        # warning. Only surface a warning if every pull transport fails.
+        log.info("[pull] docker.io unavailable for %s; trying mirrors", image)
 
     # 2) Hub mirrors (AWS ECR, Google GCR mirror)
     for mirror in _HUB_MIRRORS:
@@ -410,13 +412,13 @@ def pull_image(image: str) -> None:
             return
         except (RuntimeError, subprocess.CalledProcessError) as exc:
             errors.append(f"{mirror} → {redact_sensitive_text(exc)}")
-            log.warning("[pull] %s failed for %s", mirror, image)
+            log.info("[pull] %s unavailable for %s", mirror, image)
 
     # 3) Direct HTTPS via httpx — independent transport, independent of
     #    whatever's wrong with the Docker daemon's HTTP/2 client.
     try:
         from forge.envgen._image_pull_http import pull_via_http
-        log.warning(
+        log.info(
             "[pull] all docker-pull paths failed for %s; falling back to direct HTTPS",
             image,
         )

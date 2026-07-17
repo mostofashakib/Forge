@@ -1,4 +1,5 @@
 from __future__ import annotations
+import errno
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -67,6 +68,28 @@ app.include_router(detect_router)
 app.include_router(benchmark_router)
 
 
+def _contains_unavailable_socket_error(value: object, seen: set[int] | None = None) -> bool:
+    """Find socket availability errors nested inside Docker SDK wrappers."""
+    if seen is None:
+        seen = set()
+    value_id = id(value)
+    if value_id in seen:
+        return False
+    seen.add(value_id)
+
+    if isinstance(value, OSError) and value.errno in {errno.ENOENT, errno.ECONNREFUSED}:
+        return True
+    if isinstance(value, BaseException):
+        nested = [value.__cause__, value.__context__, *value.args]
+        return any(
+            item is not None and _contains_unavailable_socket_error(item, seen)
+            for item in nested
+        )
+    if isinstance(value, (tuple, list)):
+        return any(_contains_unavailable_socket_error(item, seen) for item in value)
+    return False
+
+
 def _reattach_containers() -> None:
     try:
         from forge.envgen.container import ContainerRuntime
@@ -88,4 +111,12 @@ def _reattach_containers() -> None:
                     logger.info("[startup] reattached container for %s → port %s", env_name, port)
             db.commit()
     except Exception as exc:
-        logger.warning("[startup] container reattach skipped — %s: %s", type(exc).__name__, exc)
+        if _contains_unavailable_socket_error(exc):
+            logger.info("[startup] Docker is not running; container reattach disabled")
+        else:
+            logger.warning(
+                "[startup] container reattach failed — %s: %s",
+                type(exc).__name__,
+                exc,
+                exc_info=True,
+            )

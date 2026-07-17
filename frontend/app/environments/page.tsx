@@ -45,13 +45,21 @@ export default function EnvironmentsPage() {
   const [sandboxMap, setSandboxMap] = useState<Map<string, SandboxInfo>>(new Map());
   const [loading, setLoading] = useState(true);
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [requestError, setRequestError] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
     try {
       const signal = AbortSignal.timeout(8000);
+      const [fileResponse, sandboxResponse] = await Promise.all([
+        fetch(`${API_BASE}/api/envs/`, { signal }),
+        fetch(`${API_BASE}/api/sandbox/`, { signal }),
+      ]);
+      if (!fileResponse.ok || !sandboxResponse.ok) {
+        throw new Error(`Backend request failed (${fileResponse.status}/${sandboxResponse.status})`);
+      }
       const [fileEnvs, sandboxes]: [string[], SandboxInfo[]] = await Promise.all([
-        fetch(`${API_BASE}/api/envs/`, { signal }).then((r) => (r.ok ? r.json() : [])).catch(() => []),
-        fetch(`${API_BASE}/api/sandbox/`, { signal }).then((r) => (r.ok ? r.json() : [])).catch(() => []),
+        fileResponse.json(),
+        sandboxResponse.json(),
       ]);
       const map = new Map((sandboxes as SandboxInfo[]).map((s) => [s.id, s]));
       const names = Array.from(
@@ -59,14 +67,18 @@ export default function EnvironmentsPage() {
       ).sort();
       setSandboxMap(map);
       setAllNames(names);
-    } catch {
-      // backend unreachable
+      setRequestError(null);
+    } catch (cause) {
+      setRequestError(cause instanceof Error ? cause.message : "Could not reach the backend");
     } finally {
       setLoading(false);
     }
   }, []);
 
-  useEffect(() => { fetchData(); }, [fetchData]);
+  useEffect(() => {
+    const initialFetch = window.setTimeout(fetchData, 0);
+    return () => window.clearTimeout(initialFetch);
+  }, [fetchData]);
 
   async function handleDelete(name: string, hasSandbox: boolean, e: React.MouseEvent) {
     e.preventDefault();
@@ -74,10 +86,17 @@ export default function EnvironmentsPage() {
     if (!confirm(`Delete environment "${name}"? This cannot be undone.`)) return;
     setDeleting(name);
     const url = hasSandbox ? `${API_BASE}/api/sandbox/${name}` : `${API_BASE}/api/envs/${name}`;
-    await fetch(url, { method: "DELETE" }).catch(() => {});
-    setAllNames((prev) => prev.filter((n) => n !== name));
-    setSandboxMap((prev) => { const next = new Map(prev); next.delete(name); return next; });
-    setDeleting(null);
+    try {
+      const response = await fetch(url, { method: "DELETE" });
+      if (!response.ok) throw new Error(`Delete failed (${response.status})`);
+      setAllNames((prev) => prev.filter((n) => n !== name));
+      setSandboxMap((prev) => { const next = new Map(prev); next.delete(name); return next; });
+      setRequestError(null);
+    } catch (cause) {
+      setRequestError(cause instanceof Error ? cause.message : "Could not reach the backend");
+    } finally {
+      setDeleting(null);
+    }
   }
 
   useEffect(() => {
@@ -97,20 +116,21 @@ export default function EnvironmentsPage() {
   }
 
   return (
-    <div className="space-y-7">
+    <div className="space-y-8">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="blueprint-panel p-6 sm:p-8 flex items-end justify-between gap-6 before:absolute before:top-0 before:left-0 before:h-1 before:w-28 before:bg-primary">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Environments</h1>
-          <p className="text-sm text-muted-foreground mt-1">
+          <span className="signal-chip mb-4"><span className="size-1.5 rounded-full bg-foreground animate-pulse" /> system inventory</span>
+          <h1 className="text-4xl sm:text-5xl font-semibold tracking-[-0.045em] leading-none">Environments</h1>
+          <p className="text-sm text-muted-foreground mt-3 max-w-lg">
             {allNames.length === 0
-              ? "No environments yet"
-              : `${allNames.length} environment${allNames.length !== 1 ? "s" : ""}`}
+              ? "Turn application behavior into reproducible training grounds."
+              : `${allNames.length} active training ground${allNames.length !== 1 ? "s" : ""} in your foundry.`}
           </p>
         </div>
         <Link
           href="/environments/new"
-          className="flex items-center gap-1.5 px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:bg-primary/90 shadow-sm hover:shadow-md transition-all"
+          className="flex items-center gap-2 px-5 py-3 bg-primary text-primary-foreground text-xs uppercase tracking-[0.12em] font-semibold hover:-translate-y-0.5 shadow-[4px_4px_0_var(--foreground)] transition-all"
         >
           <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
             <path d="M6 1v10M1 6h10" />
@@ -119,9 +139,15 @@ export default function EnvironmentsPage() {
         </Link>
       </div>
 
+      {requestError && (
+        <div role="alert" className="border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+          Could not update environments: {requestError}
+        </div>
+      )}
+
       {allNames.length === 0 ? (
         /* Empty state */
-        <div className="flex flex-col items-center justify-center py-32 border border-dashed border-border rounded-2xl bg-muted/10">
+        <div className="flex flex-col items-center justify-center py-24 border-2 border-dashed border-foreground/25 bg-card/70">
           <div className="w-14 h-14 rounded-2xl bg-primary/10 flex items-center justify-center mb-5 ring-1 ring-primary/15">
             <svg width="24" height="24" viewBox="0 0 14 14" fill="none">
               <path d="M7 1L13 4V10L7 13L1 10V4L7 1Z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" className="text-primary" />
@@ -151,7 +177,7 @@ export default function EnvironmentsPage() {
             return (
               <div
                 key={name}
-                className={`relative group card-shadow hover:card-shadow-hover hover:-translate-y-0.5 transition-all duration-200 rounded-xl bg-card border border-border/60 overflow-hidden before:absolute before:left-0 before:top-0 before:bottom-0 before:w-0.75 ${accent}`}
+                className={`relative group card-shadow hover:card-shadow-hover hover:-translate-y-1 transition-all duration-200 bg-card border border-foreground/20 overflow-hidden before:absolute before:left-0 before:top-0 before:bottom-0 before:w-1 ${accent}`}
               >
                 <Link
                   href={inProgress ? `/environments/${name}/progress` : `/environments/${name}`}

@@ -108,6 +108,9 @@ def build_sandbox_task(
     policy_requirements: str = "",
     reward_requirements: str = "",
     reference_urls: list[str] | None = None,
+    use_user_researcher: bool = False,
+    source_product_name: str = "",
+    source_product_url: str = "",
 ) -> None:
     """Run sandbox build in a worker, stream progress via Redis pub/sub.
 
@@ -199,6 +202,12 @@ def build_sandbox_task(
         _set_status("building")
 
         async def on_progress(artifact_name: str, _value) -> None:
+            if artifact_name == "generation_plan":
+                publish({
+                    "user_researcher_enabled": any(
+                        task.agent_id == "user_researcher" for task in _value.tasks
+                    )
+                })
             label = {
                 "generation_plan":   "Prompt Planner",
                 "backend_research":  "User Research (backend context)",
@@ -240,6 +249,9 @@ def build_sandbox_task(
             policy_requirements=policy_requirements,
             reward_requirements=reward_requirements,
             reference_urls=reference_urls or [],
+            use_user_researcher=use_user_researcher,
+            source_product_name=source_product_name,
+            source_product_url=source_product_url,
         )
         publish({"log": "[forge] all agents finished — building Docker image…"})
 

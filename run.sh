@@ -22,7 +22,6 @@ err()  { echo -e "${RED}  ✗${RESET} $*"; }
 # ── Prefixed log streams ──────────────────────────────────────────────────────
 backend_log()  { while IFS= read -r line; do echo -e "${CYAN}[backend] ${RESET}$line"; done; }
 frontend_log() { while IFS= read -r line; do echo -e "${GREEN}[frontend]${RESET} $line"; done; }
-celery_log()   { while IFS= read -r line; do echo -e "${YELLOW}[celery]  ${RESET}$line"; done; }
 redis_log()    { while IFS= read -r line; do echo -e "${RED}[redis]   ${RESET}$line"; done; }
 
 # ── Kill a port — uses nc for a fast check, lsof only to get the PIDs ────────
@@ -159,7 +158,8 @@ BACKEND_PID=$!
 sleep 2
 
 # ── Start Celery worker ───────────────────────────────────────────────────────
-log "Starting Celery worker"
+CELERY_LOG="/tmp/forge-celery.log"
+log "Starting Celery worker (quiet; errors: $CELERY_LOG)"
 (
   cd "$ROOT"
   if [[ -f "backend/.env" ]]; then
@@ -168,8 +168,12 @@ log "Starting Celery worker"
     source backend/.env
     set +a
   fi
-  "$VENV_DIR/bin/celery" -A backend.app.worker.celery_app worker --loglevel=info --concurrency=2 2>&1
-) | celery_log &
+  # Worker chatter obscures the interactive backend/frontend output. Keep the
+  # terminal quiet while retaining actionable failures for local diagnosis.
+  "$VENV_DIR/bin/celery" -A backend.app.worker.celery_app worker \
+    --loglevel=ERROR --concurrency=2 --without-gossip --without-mingle \
+    >"$CELERY_LOG" 2>&1
+) &
 CELERY_PID=$!
 
 # ── Start frontend ────────────────────────────────────────────────────────────
@@ -186,7 +190,7 @@ echo -e "  ${BOLD}Forge is running${RESET}"
 echo -e "  ${CYAN}Backend${RESET}  → http://localhost:8000"
 echo -e "  ${CYAN}API Docs${RESET} → http://localhost:8000/docs"
 echo -e "  ${GREEN}Frontend${RESET} → http://localhost:3000"
-echo -e "  ${YELLOW}Celery${RESET}   → worker (concurrency=2)"
+echo -e "  ${YELLOW}Celery${RESET}   → worker (quiet, concurrency=2)"
 echo -e "  ${RED}Redis${RESET}    → localhost:6379"
 echo -e "  Press ${BOLD}Ctrl+C${RESET} to stop all"
 echo ""
