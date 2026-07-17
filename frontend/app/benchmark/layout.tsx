@@ -3,47 +3,68 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const SIDEBAR_ITEMS = [
-  { href: "/benchmark/run",      label: "Run",      available: true,  badge: undefined },
-  { href: "/benchmark/report",   label: "Report",   available: true,  badge: undefined },
-  { href: "/benchmark/transfer", label: "Transfer", available: false, badge: "GPU"     },
-  { href: "/benchmark/eval",     label: "Eval",     available: false, badge: "soon"    },
+  { href: "/benchmark/run", label: "Run", available: true, badge: undefined },
+  {
+    href: "/benchmark/report",
+    label: "Report",
+    available: true,
+    badge: undefined,
+  },
+  {
+    href: "/benchmark/transfer",
+    label: "Transfer",
+    available: false,
+    badge: "GPU",
+  },
+  { href: "/benchmark/eval", label: "Eval", available: false, badge: "soon" },
 ];
 
-export default function BenchmarkLayout({ children }: { children: React.ReactNode }) {
+export default function BenchmarkLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   const pathname = usePathname();
 
   return (
-    <div className="flex gap-8">
-      <aside className="w-40 shrink-0 pt-1">
-        <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3 px-3">
-          Benchmark
-        </p>
-        <nav className="flex flex-col gap-0.5">
+    <div className="benchmark-shell">
+      <aside className="benchmark-rail">
+        <div className="benchmark-rail__header">
+          <span>Suite</span>
+          <strong>
+            BENCH
+            <br />
+            MARK
+          </strong>
+          <p>Quality Control</p>
+        </div>
+        <nav className="benchmark-rail__nav" aria-label="Benchmark navigation">
           {SIDEBAR_ITEMS.map((item) => {
-            const isActive = pathname === item.href || pathname.startsWith(item.href + "/");
+            const isActive =
+              pathname === item.href || pathname.startsWith(item.href + "/");
             return (
               <Link
                 key={item.href}
                 href={item.available ? item.href : "#"}
                 onClick={(e) => !item.available && e.preventDefault()}
-                className={`px-3 py-2 rounded-lg text-sm transition-colors flex items-center justify-between ${
-                  isActive
-                    ? "bg-primary/10 text-primary font-medium"
-                    : item.available
-                    ? "text-muted-foreground hover:text-foreground hover:bg-muted/60"
-                    : "text-muted-foreground/40 cursor-not-allowed"
+                aria-current={isActive ? "page" : undefined}
+                className={`benchmark-rail__link ${isActive ? "benchmark-rail__link--active" : ""} ${
+                  !item.available ? "benchmark-rail__link--disabled" : ""
                 }`}
               >
-                {item.label}
+                <span className="benchmark-rail__index">
+                  0{SIDEBAR_ITEMS.indexOf(item) + 1}
+                </span>
+                <span>{item.label}</span>
                 {item.badge && (
-                  <span className="text-[10px] opacity-60 font-normal">{item.badge}</span>
+                  <span className="benchmark-rail__badge">{item.badge}</span>
                 )}
               </Link>
             );
           })}
         </nav>
       </aside>
-      <div className="flex-1 min-w-0">{children}</div>
+      <div className="benchmark-stage">{children}</div>
     </div>
   );
 }
