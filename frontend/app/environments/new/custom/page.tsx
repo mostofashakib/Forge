@@ -7,6 +7,7 @@ import { API_BASE } from "@/lib/api";
 import { Toast } from "@/components/Toast";
 import { useSandboxCapacity } from "@/lib/useSandboxCapacity";
 const TTL_OPTIONS = [7, 30, 90, 365];
+type BuildMode = "research" | "manual";
 
 interface FormState {
   env_name: string;
@@ -21,11 +22,29 @@ interface FormState {
   ttl_days: number;
 }
 
+function projectIdentityFromUrl(rawUrl: string): { envName: string; productName: string; domain: string } | null {
+  try {
+    const parsed = new URL(rawUrl);
+    if (!(["http:", "https:"] as string[]).includes(parsed.protocol)) return null;
+    const domain = parsed.hostname.replace(/^www\./, "");
+    const pathParts = parsed.pathname.split("/").filter(Boolean);
+    const sourceKey = ["github.com", "gitlab.com", "bitbucket.org"].includes(domain) && pathParts.length > 0
+      ? pathParts[pathParts.length - 1].replace(/\.git$/, "")
+      : domain.split(".")[0];
+    const envName = `${sourceKey.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "")}_env`;
+    const productName = sourceKey.replace(/[-_]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+    return envName && productName ? { envName, productName, domain } : null;
+  } catch {
+    return null;
+  }
+}
+
 export default function CustomEnvironmentPage() {
   const router = useRouter();
   const [showToast, setShowToast] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [mode, setMode] = useState<BuildMode>("research");
   const { activeCount, limit, error: capacityError } = useSandboxCapacity();
   const [form, setForm] = useState<FormState>({
     env_name: "",
@@ -34,16 +53,15 @@ export default function CustomEnvironmentPage() {
     policy_requirements: "",
     reward_requirements: "",
     reference_urls: "",
-    use_user_researcher: false,
+    use_user_researcher: true,
     source_product_name: "",
     source_product_url: "",
     ttl_days: 30,
   });
 
   const atLimit = activeCount !== null && limit !== null && activeCount >= limit;
-  const researchIncomplete = form.use_user_researcher && (
-    !form.source_product_name.trim() || !form.source_product_url.trim()
-  );
+  const researchIdentity = projectIdentityFromUrl(form.source_product_url.trim());
+  const researchIncomplete = mode === "research" && !researchIdentity;
 
   function update<K extends keyof FormState>(field: K, value: FormState[K]) {
     setForm((prev) => ({ ...prev, [field]: value }));
@@ -52,21 +70,37 @@ export default function CustomEnvironmentPage() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setSubmitError(null);
+    if (mode === "research" && !researchIdentity) {
+      setSubmitError("Enter a complete http or https project URL.");
+      return;
+    }
     setSubmitting(true);
     try {
+      const researchPayload = mode === "research" && researchIdentity
+        ? {
+            env_name: researchIdentity.envName,
+            description: form.description.trim(),
+            domain: researchIdentity.domain,
+            policy_requirements: "",
+            reward_requirements: "",
+            reference_urls: [],
+            use_user_researcher: true,
+            source_product_name: researchIdentity.productName,
+            source_product_url: form.source_product_url.trim(),
+            ttl_days: form.ttl_days,
+          }
+        : null;
+      const manualPayload = {
+        ...form,
+        reference_urls: [],
+        use_user_researcher: false,
+        source_product_name: "",
+        source_product_url: "",
+      };
       const res = await fetch(`${API_BASE}/api/sandbox/`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ...form,
-          reference_urls: form.use_user_researcher
-            ? form.reference_urls
-                .split("\n")
-                .map((url) => url.trim())
-                .filter(Boolean)
-            : [],
-          env_type: "general",
-        }),
+        body: JSON.stringify({ ...(researchPayload ?? manualPayload), env_type: "general" }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -94,33 +128,20 @@ export default function CustomEnvironmentPage() {
         <Toast message="Environment added to queue" onDismiss={() => setShowToast(false)} />
       )}
 
-      <div className="max-w-3xl mx-auto space-y-8">
-        {/* Header */}
-        <div className="blueprint-panel p-7 sm:p-9 flex items-start justify-between gap-6 before:absolute before:left-0 before:top-0 before:h-full before:w-2 before:bg-primary">
+      <div className="custom-builder">
+        <header className="custom-builder__hero">
           <div>
-            <span className="signal-chip mb-4">Generative foundry</span>
-            <h1 className="text-4xl sm:text-5xl font-semibold tracking-[-0.045em] leading-none">Specify the world</h1>
-            <p className="text-sm text-muted-foreground mt-3 max-w-lg">
-              Describe any real-world application — Forge generates a full-stack RL environment
-              with policy rules and a reward function.
-            </p>
+            <Link href="/environments/new" className="custom-builder__back">← Build paths</Link>
+            <span>Generative foundry / Custom</span>
+            <h1>BRING THE<br /><em>REAL WORLD.</em></h1>
+            <p>Start with a live product and let the researcher map it, or specify the environment yourself with complete control.</p>
           </div>
-          <div className="flex items-center gap-3 shrink-0">
-            {activeCount !== null && limit !== null && (
-              <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${
-                atLimit ? "bg-red-100 text-red-700" : "bg-muted text-muted-foreground"
-              }`}>
-                {activeCount} / {limit}
-              </span>
-            )}
-            <Link
-              href="/environments/new"
-              className="text-sm text-muted-foreground hover:text-foreground transition-colors"
-            >
-              ← Back
-            </Link>
-          </div>
-        </div>
+          <aside>
+            <span>Build capacity</span>
+            <strong>{activeCount ?? "--"}<small>/ {limit ?? "--"}</small></strong>
+            <p>{atLimit ? "No build slots available" : "Local compiler ready"}</p>
+          </aside>
+        </header>
 
         {capacityError && (
           <div role="alert" className="border border-red-200 bg-red-50 rounded-lg p-4 text-sm text-red-700">
@@ -138,190 +159,66 @@ export default function CustomEnvironmentPage() {
           </div>
         )}
 
-        <form onSubmit={handleSubmit} className="space-y-5">
-          {/* Core section */}
-          <div className="blueprint-panel p-6 space-y-5">
-            {/* Name */}
-            <div>
-              <label className="block text-xs font-medium text-muted-foreground uppercase tracking-widest mb-2">
-                Environment Name
-              </label>
-              <input
-                className="w-full border rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-foreground/20 disabled:opacity-50"
-                placeholder="e.g. crm_support_env"
-                value={form.env_name}
-                onChange={(e) => update("env_name", e.target.value.replace(/\s+/g, "_"))}
-                disabled={atLimit}
-                required
-              />
-            </div>
+        <div className="custom-builder__modes" role="tablist" aria-label="Custom environment build method">
+          <button type="button" role="tab" aria-selected={mode === "research"} onClick={() => setMode("research")} className={mode === "research" ? "is-active" : ""}>
+            <span>01</span><div><strong>Research a real project</strong><small>Drop a link. Forge investigates the rest.</small></div><i>↗</i>
+          </button>
+          <button type="button" role="tab" aria-selected={mode === "manual"} onClick={() => setMode("manual")} className={mode === "manual" ? "is-active" : ""}>
+            <span>02</span><div><strong>Specify it manually</strong><small>Define the system, policy, and reward yourself.</small></div><i>↗</i>
+          </button>
+        </div>
 
-            {/* Description — most important field */}
-            <div>
-              <label className="block text-xs font-medium text-muted-foreground uppercase tracking-widest mb-2">
-                Application Description
-              </label>
-              <textarea
-                className="w-full border rounded-lg px-3 py-2.5 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-foreground/20 disabled:opacity-50"
-                rows={6}
-                placeholder={"Describe the real-world application to simulate.\n\nExamples:\n• A CRM where agents handle inbound support tickets and escalate urgent ones\n• A file storage service where agents organise uploads and remove duplicates\n• An e-commerce backend where agents process orders and update inventory"}
-                value={form.description}
-                onChange={(e) => update("description", e.target.value)}
-                disabled={atLimit}
-                required
-              />
-              <p className="text-xs text-muted-foreground mt-1.5">
-                Be specific about what the agent does and what success looks like.
-              </p>
-            </div>
-          </div>
-
-          {/* Training config */}
-          <div className="blueprint-panel p-6 space-y-5">
-            <p className="text-xs font-medium text-muted-foreground uppercase tracking-widest">
-              Training Config <span className="normal-case font-normal ml-1">— optional, AI fills defaults if blank</span>
-            </p>
-
-            <div>
-              <label className="block text-xs font-medium text-muted-foreground mb-1.5">
-                Policy Requirements
-              </label>
-              <textarea
-                className="w-full border rounded-lg px-3 py-2.5 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-foreground/20 disabled:opacity-50"
-                rows={3}
-                placeholder={"Rules the agent must follow.\n\ne.g. The agent must not delete records permanently."}
-                value={form.policy_requirements}
-                onChange={(e) => update("policy_requirements", e.target.value)}
-                disabled={atLimit}
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-medium text-muted-foreground mb-1.5">
-                Reward Requirements
-              </label>
-              <textarea
-                className="w-full border rounded-lg px-3 py-2.5 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-foreground/20 disabled:opacity-50"
-                rows={3}
-                placeholder={"How success is measured.\n\ne.g. Reward speed. Penalise errors and unnecessary steps heavily."}
-                value={form.reward_requirements}
-                onChange={(e) => update("reward_requirements", e.target.value)}
-                disabled={atLimit}
-              />
-            </div>
-          </div>
-
-          {/* Settings */}
-          <div className="blueprint-panel p-6 space-y-5">
-            <p className="text-xs font-medium text-muted-foreground uppercase tracking-widest">
-              Settings
-            </p>
-
-            <div>
-              <label className="block text-xs font-medium text-muted-foreground mb-1.5">
-                Domain <span className="font-normal">(optional)</span>
-              </label>
-              <input
-                className="w-full border rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-foreground/20 disabled:opacity-50"
-                placeholder="e.g. support, email, crm — defaults to localhost"
-                value={form.domain}
-                onChange={(e) => update("domain", e.target.value)}
-                disabled={atLimit}
-              />
-            </div>
-
-            <div className="border border-foreground/20 bg-muted/30 p-4 space-y-4">
-              <label className="flex items-start gap-3 cursor-pointer">
-                <input
-                  type="checkbox"
-                  className="mt-0.5 size-4 accent-[var(--primary)]"
-                  checked={form.use_user_researcher}
-                  onChange={(e) => update("use_user_researcher", e.target.checked)}
-                  disabled={atLimit}
-                />
-                <span>
-                  <span className="block text-sm font-semibold">Use the user researcher agent</span>
-                  <span className="block text-xs text-muted-foreground mt-1 leading-relaxed">
-                    Research the original product before generation so its workflows, states,
-                    and data model can inform the prototype.
-                  </span>
-                </span>
-              </label>
-
-              {form.use_user_researcher && (
-                <div className="border-t border-foreground/15 pt-4 space-y-4">
-                  <div>
-                    <label htmlFor="source-product-name" className="block text-xs font-medium text-muted-foreground mb-1.5">
-                      Original product name <span className="text-destructive">*</span>
-                    </label>
-                    <input
-                      id="source-product-name"
-                      className="forge-input"
-                      placeholder="e.g. Linear"
-                      value={form.source_product_name}
-                      onChange={(e) => update("source_product_name", e.target.value)}
-                      disabled={atLimit}
-                      required
-                    />
-                  </div>
-
-                  <div>
-                    <label htmlFor="source-product-url" className="block text-xs font-medium text-muted-foreground mb-1.5">
-                      Original product URL <span className="text-destructive">*</span>
-                    </label>
-                    <input
-                      id="source-product-url"
-                      type="url"
-                      className="forge-input"
-                      placeholder="https://linear.app"
-                      value={form.source_product_url}
-                      onChange={(e) => update("source_product_url", e.target.value)}
-                      disabled={atLimit}
-                      required
-                    />
-                  </div>
-
-                  <div>
-                    <label htmlFor="reference-urls" className="block text-xs font-medium text-muted-foreground mb-1.5">
-                      Additional documentation <span className="font-normal">(optional, one URL per line)</span>
-                    </label>
-                    <textarea
-                      id="reference-urls"
-                      className="forge-input resize-none"
-                      rows={3}
-                      placeholder={"https://docs.example.com/product\nhttps://example.com/help/workflows"}
-                      value={form.reference_urls}
-                      onChange={(e) => update("reference_urls", e.target.value)}
-                      disabled={atLimit}
-                    />
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div>
-              <label className="block text-xs font-medium text-muted-foreground mb-2">
-                TTL
-              </label>
-              <div className="flex gap-2">
-                {TTL_OPTIONS.map((d) => (
-                  <button
-                    key={d}
-                    type="button"
-                    onClick={() => update("ttl_days", d)}
-                    disabled={atLimit}
-                    className={`flex-1 py-2 text-xs font-medium rounded-lg border-2 transition-colors disabled:opacity-50 ${
-                      form.ttl_days === d
-                        ? "border-foreground bg-foreground text-background"
-                        : "border-border text-muted-foreground hover:border-foreground/30"
-                    }`}
-                  >
-                    {d}d
-                  </button>
-                ))}
+        <form onSubmit={handleSubmit} className="custom-builder__form">
+          {mode === "research" ? (
+            <section className="research-launcher" role="tabpanel">
+              <div className="research-launcher__intro">
+                <span>User researcher / armed</span>
+                <h2>Drop the source.<br />We map the system.</h2>
+                <p>The researcher reads the public project, identifies workflows and states, then briefs the UI, backend, RL, and review agents.</p>
               </div>
+              <div className="research-launcher__fields">
+                <label>
+                  <span>Real project URL <b>Required</b></span>
+                  <div className="research-url-input"><i>↗</i><input type="url" value={form.source_product_url} onChange={(e) => update("source_product_url", e.target.value)} placeholder="https://your-project.com" disabled={atLimit} required autoFocus /></div>
+                  {form.source_product_url && !researchIdentity && <small className="research-field-error">Enter a complete http or https URL.</small>}
+                  {researchIdentity && <small className="research-field-preview">Environment identity: <strong>{researchIdentity.envName}</strong></small>}
+                </label>
+                <label>
+                  <span>What should we focus on? <b>Optional</b></span>
+                  <textarea rows={5} value={form.description} onChange={(e) => update("description", e.target.value)} placeholder="Add a workflow, audience, constraint, or research goal. Leave blank to let the researcher discover the product independently." disabled={atLimit} />
+                </label>
+                <div className="research-pipeline" aria-label="Research pipeline">
+                  {[
+                    ["01", "Inspect source"], ["02", "Map workflows"], ["03", "Brief agents"], ["04", "Build environment"],
+                  ].map(([step, label]) => <div key={step}><span>{step}</span><strong>{label}</strong></div>)}
+                </div>
+              </div>
+            </section>
+          ) : (
+            <div className="manual-builder" role="tabpanel">
+              <section>
+                <div className="manual-builder__heading"><span>01</span><div><h2>Application core</h2><p>Name the environment and describe the system the agent will operate.</p></div></div>
+                <div className="manual-builder__fields">
+                  <label><span>Environment name</span><input className="forge-input" placeholder="e.g. crm_support_env" value={form.env_name} onChange={(e) => update("env_name", e.target.value.replace(/\s+/g, "_"))} disabled={atLimit} required /></label>
+                  <label><span>Application description</span><textarea className="forge-input resize-none" rows={6} placeholder="Describe the application, its users, core workflows, and what the agent should accomplish." value={form.description} onChange={(e) => update("description", e.target.value)} disabled={atLimit} required /></label>
+                </div>
+              </section>
+              <section>
+                <div className="manual-builder__heading"><span>02</span><div><h2>Training logic</h2><p>Optional constraints. Forge fills sensible defaults when left blank.</p></div></div>
+                <div className="manual-builder__fields manual-builder__fields--split">
+                  <label><span>Policy requirements</span><textarea className="forge-input resize-none" rows={4} placeholder="Rules the agent must follow." value={form.policy_requirements} onChange={(e) => update("policy_requirements", e.target.value)} disabled={atLimit} /></label>
+                  <label><span>Reward requirements</span><textarea className="forge-input resize-none" rows={4} placeholder="How success should be measured." value={form.reward_requirements} onChange={(e) => update("reward_requirements", e.target.value)} disabled={atLimit} /></label>
+                </div>
+              </section>
+              <section>
+                <div className="manual-builder__heading"><span>03</span><div><h2>Runtime settings</h2><p>Set the environment namespace and retention window.</p></div></div>
+                <div className="manual-builder__fields manual-builder__fields--split">
+                  <label><span>Domain <b>Optional</b></span><input className="forge-input" placeholder="e.g. support, email, crm" value={form.domain} onChange={(e) => update("domain", e.target.value)} disabled={atLimit} /></label>
+                  <div><span className="manual-builder__label">TTL</span><div className="manual-builder__ttl">{TTL_OPTIONS.map((days) => <button key={days} type="button" onClick={() => update("ttl_days", days)} disabled={atLimit} className={form.ttl_days === days ? "is-active" : ""}>{days}d</button>)}</div></div>
+                </div>
+              </section>
             </div>
-          </div>
+          )}
 
           {submitError && (
             <div className="border border-red-200 bg-red-50 rounded-lg p-3">
@@ -337,13 +234,11 @@ export default function CustomEnvironmentPage() {
           <button
             type="submit"
             disabled={submitting || atLimit || researchIncomplete}
-            className="w-full py-3 text-sm font-semibold bg-foreground text-background rounded-xl hover:opacity-90 disabled:opacity-50 transition-opacity"
+            className="custom-builder__submit"
           >
-            {submitting ? "Generating…" : "Generate Environment →"}
+            <span>{submitting ? (mode === "research" ? "Researching…" : "Generating…") : (mode === "research" ? "Research & generate environment" : "Generate from specification")}</span><span>↗</span>
           </button>
-          <p className="text-xs text-center text-muted-foreground -mt-2">
-            Forge will scaffold the app, policy, and reward function using AI. Takes 2–5 minutes.
-          </p>
+          <p className="custom-builder__estimate">{mode === "research" ? "The user researcher starts first, then hands evidence to the build agents." : "Forge scaffolds the app, policy, and reward function from your specification."} Usually takes 2–5 minutes.</p>
         </form>
       </div>
     </>
