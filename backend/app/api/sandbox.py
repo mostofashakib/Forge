@@ -9,6 +9,7 @@ import redis
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 import re
 from typing import Literal
+from urllib.parse import urlparse
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy.orm import Session
 from backend.app.database import get_db
@@ -51,12 +52,19 @@ class CreateSandboxRequest(BaseModel):
             self.source_product_name = ""
             self.source_product_url = ""
             return self
-        if not self.source_product_name:
-            raise ValueError("source_product_name is required when user research is enabled")
         if not re.fullmatch(r"https?://[^\s]+", self.source_product_url):
             raise ValueError(
                 "source_product_url must be a valid http or https URL when user research is enabled"
             )
+        if not self.source_product_name:
+            parsed = urlparse(self.source_product_url)
+            hostname = (parsed.hostname or "").removeprefix("www.")
+            source_key = hostname.split(".")[0]
+            if hostname in {"github.com", "gitlab.com", "bitbucket.org"}:
+                path_parts = [part for part in parsed.path.split("/") if part]
+                if path_parts:
+                    source_key = path_parts[-1].removesuffix(".git")
+            self.source_product_name = re.sub(r"[-_]+", " ", source_key).strip().title()
         return self
 
 
