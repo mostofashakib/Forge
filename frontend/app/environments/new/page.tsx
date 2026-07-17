@@ -71,25 +71,25 @@ function QuickCreateModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm"
+      className="new-env-modal-backdrop"
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div className="bg-background border border-border rounded-2xl shadow-xl w-full max-w-sm">
-        <div className="flex items-center justify-between px-6 pt-6 pb-4 border-b border-border">
+      <div className="new-env-modal">
+        <div className="new-env-modal__header">
           <div className="flex items-center gap-2.5">
-            <span className="font-mono text-lg">{def.icon}</span>
-            <h2 className="font-semibold text-sm">{def.label}</h2>
+            <span>{def.icon}</span>
+            <div><small>Quick runtime</small><h2>{def.label}</h2></div>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="text-muted-foreground hover:text-foreground text-lg leading-none"
+            className="new-env-modal__close"
           >
             ✕
           </button>
         </div>
 
-        <form onSubmit={handleCreate} className="px-6 py-5 space-y-4">
+        <form onSubmit={handleCreate} className="new-env-modal__form">
           {atLimit && (
             <div className="border border-red-200 bg-red-50 rounded-lg p-3">
               <p className="text-xs font-semibold text-red-700">Environment limit reached</p>
@@ -101,9 +101,9 @@ function QuickCreateModal({
           )}
 
           <div>
-            <label className="block text-sm font-medium mb-1.5">Environment name</label>
+            <label className="new-env-modal__label">Environment name</label>
             <input
-              className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-foreground/20 disabled:opacity-50"
+              className="new-env-modal__input"
               placeholder={def.placeholder}
               value={envName}
               onChange={(e) => setEnvName(e.target.value.replace(/\s+/g, "_"))}
@@ -115,18 +115,18 @@ function QuickCreateModal({
 
           {error && <p className="text-sm text-red-600">{error}</p>}
 
-          <div className="flex items-center gap-3 pt-1">
+          <div className="new-env-modal__actions">
             <button
               type="submit"
               disabled={submitting || atLimit || !envName.trim()}
-              className="px-5 py-2 text-sm font-medium text-white bg-foreground rounded-lg hover:opacity-90 disabled:opacity-50 transition-opacity"
+              className="new-env-modal__submit"
             >
               {submitting ? "Creating…" : "Create environment →"}
             </button>
             <button
               type="button"
               onClick={onClose}
-              className="text-sm text-muted-foreground hover:text-foreground"
+              className="new-env-modal__cancel"
             >
               Cancel
             </button>
@@ -141,11 +141,11 @@ function QuickCreateModal({
 // Option card
 // ---------------------------------------------------------------------------
 
-const CARD_THEMES: Record<string, { iconBg: string; iconText: string; accent: string }> = {
-  cli:     { iconBg: "bg-emerald-50",  iconText: "text-emerald-600",  accent: "group-hover:border-emerald-300/60" },
-  browser: { iconBg: "bg-blue-50",     iconText: "text-blue-600",     accent: "group-hover:border-blue-300/60" },
-  custom:  { iconBg: "bg-violet-50",   iconText: "text-violet-600",   accent: "group-hover:border-violet-300/60" },
-  premade: { iconBg: "bg-orange-50",   iconText: "text-orange-500",   accent: "group-hover:border-orange-300/60" },
+const CARD_INDEX: Record<string, string> = {
+  cli: "01",
+  browser: "02",
+  custom: "03",
+  premade: "04",
 };
 
 const CARD_ICONS: Record<string, React.ReactNode> = {
@@ -193,23 +193,20 @@ function OptionCard({
   onClick?: () => void;
   href?: string;
 }) {
-  const theme = CARD_THEMES[themeKey] ?? CARD_THEMES.custom;
-
   const inner = (
-    <div className={`group h-full card-shadow hover:card-shadow-hover hover:-translate-y-1 bg-card border border-foreground/20 p-6 flex flex-col gap-5 transition-all duration-200 cursor-pointer ${theme.accent}`}>
-      <div className={`w-11 h-11 ${theme.iconBg} ${theme.iconText} flex items-center justify-center shrink-0 border border-current/15`}>
-        {CARD_ICONS[themeKey]}
+    <div className="new-env-card" data-theme={themeKey}>
+      <div className="new-env-card__topline">
+        <span>{CARD_INDEX[themeKey] ?? "00"} / BUILD PATH</span>
+        <span>↗</span>
       </div>
-      <div className="flex-1">
-        <div className="font-semibold text-sm mb-1.5">{label}</div>
-        <p className="text-xs text-muted-foreground leading-relaxed">{description}</p>
+      <div className="new-env-card__body">
+        <div className="new-env-card__icon">{CARD_ICONS[themeKey]}</div>
+        <div>
+          <h2>{label}</h2>
+          <p>{description}</p>
+        </div>
       </div>
-      <span className="text-xs text-muted-foreground/60 group-hover:text-muted-foreground flex items-center gap-1 transition-colors">
-        Select
-        <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M2 5h6M5.5 2.5L8 5l-2.5 2.5" />
-        </svg>
-      </span>
+      <div className="new-env-card__action"><span>Select path</span><i /></div>
     </div>
   );
 
@@ -259,23 +256,26 @@ export default function NewEnvironmentPage() {
         />
       )}
 
-      <div className="max-w-4xl mx-auto space-y-8">
-        {/* Header */}
-        <div className="blueprint-panel p-7 sm:p-9 flex items-start justify-between gap-6 before:absolute before:right-0 before:top-0 before:h-full before:w-2 before:bg-accent">
-          <div>
-            <span className="signal-chip mb-4">Build sequence / 01</span>
-            <p className="text-sm text-muted-foreground mt-3 max-w-lg">
-              Start from a live runtime, describe a custom system, or deploy a proven template.
-            </p>
+      <div className="new-env-page">
+        <header className="new-env-hero">
+          <div className="new-env-hero__copy">
+            <span>Build sequence / 01</span>
+            <h1>CHOOSE YOUR<br /><em>STARTING POINT.</em></h1>
+            <p>Launch a live runtime, describe a custom system, or deploy a proven template. Every path ends in a training-ready environment.</p>
           </div>
-          {activeCount !== null && limit !== null && (
-            <span className={`text-xs px-2.5 py-1 rounded-full font-medium shrink-0 ${
-              atLimit ? "bg-red-100 text-red-700" : "bg-muted text-muted-foreground"
-            }`}>
-              {activeCount} / {limit}
-            </span>
-          )}
-        </div>
+          <div className="new-env-hero__capacity">
+            <span>Local capacity</span>
+            {activeCount !== null && limit !== null ? (
+              <>
+                <strong>{String(activeCount).padStart(2, "0")}<small>/ {String(limit).padStart(2, "0")}</small></strong>
+                <div><i style={{ width: `${Math.min((activeCount / limit) * 100, 100)}%` }} /></div>
+                <p>{atLimit ? "Capacity reached" : `${limit - activeCount} build slots available`}</p>
+              </>
+            ) : (
+              <><strong>--<small>/ --</small></strong><p>Reading local core</p></>
+            )}
+          </div>
+        </header>
 
         {capacityError && (
           <div role="alert" className="border border-red-200 bg-red-50 rounded-lg p-4 text-sm text-red-700">
@@ -293,8 +293,12 @@ export default function NewEnvironmentPage() {
           </div>
         )}
 
-        {/* 2×2 grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className="new-env-heading">
+          <div><span />Available build paths</div>
+          <p>04 routes / select one</p>
+        </div>
+
+        <div className="new-env-grid">
           <OptionCard
             label="CLI Terminal"
             themeKey="cli"
