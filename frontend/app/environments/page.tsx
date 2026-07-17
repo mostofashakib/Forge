@@ -115,29 +115,47 @@ export default function EnvironmentsPage() {
     );
   }
 
+  const liveCount = Array.from(sandboxMap.values()).filter((sandbox) => sandbox.status === "running").length;
+  const buildCount = Array.from(sandboxMap.values()).filter((sandbox) => IN_PROGRESS.has(sandbox.status as Status)).length;
+
   return (
-    <div className="space-y-8">
+    <div className="space-y-10">
       {/* Header */}
-      <div className="blueprint-panel p-6 sm:p-8 flex items-end justify-between gap-6 before:absolute before:top-0 before:left-0 before:h-1 before:w-28 before:bg-primary">
-        <div>
-          <span className="signal-chip mb-4"><span className="size-1.5 rounded-full bg-foreground animate-pulse" /> system inventory</span>
-          <h1 className="text-4xl sm:text-5xl font-semibold tracking-[-0.045em] leading-none">Environments</h1>
-          <p className="text-sm text-muted-foreground mt-3 max-w-lg">
+      <section className="environment-hero blueprint-panel">
+        <div className="environment-hero__copy">
+          <div className="flex items-center gap-3 mb-6">
+            <span className="signal-chip"><span className="size-1.5 rounded-full bg-foreground animate-pulse" /> system inventory</span>
+          </div>
+          <p className="environment-hero__eyebrow">Build controlled worlds for capable agents.</p>
+          <h1 className="environment-hero__title">ENVIRONMENTS</h1>
+          <p className="text-sm leading-6 text-muted-foreground mt-5 max-w-xl">
             {allNames.length === 0
-              ? "Turn application behavior into reproducible training grounds."
-              : `${allNames.length} active training ground${allNames.length !== 1 ? "s" : ""} in your foundry.`}
+              ? "Turn application behavior into reproducible, inspectable training grounds."
+              : `${allNames.length} training ground${allNames.length !== 1 ? "s" : ""} connected to your local foundry.`}
           </p>
+          <Link href="/environments/new" className="forge-cta mt-8">
+            <span className="forge-cta__plus" aria-hidden="true">+</span>
+            Create environment
+            <span aria-hidden="true">↗</span>
+          </Link>
         </div>
-        <Link
-          href="/environments/new"
-          className="flex items-center gap-2 px-5 py-3 bg-primary text-primary-foreground text-xs uppercase tracking-[0.12em] font-semibold hover:-translate-y-0.5 shadow-[4px_4px_0_var(--foreground)] transition-all"
-        >
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-            <path d="M6 1v10M1 6h10" />
-          </svg>
-          New
-        </Link>
-      </div>
+
+        <div className="environment-hero__telemetry" aria-label="Environment summary">
+          <div className="environment-hero__orb" aria-hidden="true">
+            <span className="environment-hero__orbit environment-hero__orbit--one" />
+            <span className="environment-hero__orbit environment-hero__orbit--two" />
+            <svg viewBox="0 0 100 100" fill="none">
+              <path d="M50 15 80 31v38L50 85 20 69V31l30-16Z" stroke="currentColor" />
+              <path d="m50 37 12 6v14l-12 6-12-6V43l12-6Z" fill="currentColor" />
+            </svg>
+          </div>
+          <div className="environment-stats">
+            <div><span>Registered</span><strong>{String(allNames.length).padStart(2, "0")}</strong></div>
+            <div><span>Online</span><strong>{String(liveCount).padStart(2, "0")}</strong></div>
+            <div><span>Building</span><strong>{String(buildCount).padStart(2, "0")}</strong></div>
+          </div>
+        </div>
+      </section>
 
       {requestError && (
         <div role="alert" className="border border-red-200 bg-red-50 p-4 text-sm text-red-700">
@@ -166,7 +184,15 @@ export default function EnvironmentsPage() {
           </Link>
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        <section>
+          <div className="inventory-heading">
+            <div>
+              <span className="inventory-heading__line" />
+              <h2>Active inventory</h2>
+            </div>
+            <span>{String(allNames.length).padStart(2, "0")} UNITS</span>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
           {allNames.map((name) => {
             const sandbox = sandboxMap.get(name);
             const status = (sandbox?.status ?? "stopped") as Status;
@@ -177,7 +203,7 @@ export default function EnvironmentsPage() {
             return (
               <div
                 key={name}
-                className={`relative group card-shadow hover:card-shadow-hover hover:-translate-y-1 transition-all duration-200 bg-card border border-foreground/20 overflow-hidden before:absolute before:left-0 before:top-0 before:bottom-0 before:w-1 ${accent}`}
+                className={`environment-card relative group card-shadow hover:card-shadow-hover hover:-translate-y-1 transition-all duration-200 bg-card border border-foreground/25 overflow-hidden before:absolute before:left-0 before:top-0 before:bottom-0 before:w-1 ${accent}`}
               >
                 <Link
                   href={inProgress ? `/environments/${name}/progress` : `/environments/${name}`}
@@ -239,7 +265,8 @@ export default function EnvironmentsPage() {
               </div>
             );
           })}
-        </div>
+          </div>
+        </section>
       )}
     </div>
   );

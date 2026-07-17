@@ -105,6 +105,7 @@ fi
 REDIS_LOG="/tmp/forge-redis.log"
 log "Starting Redis on port 6379"
 redis-server --bind 127.0.0.1 --save "" --appendonly no \
+  --tcp-backlog 128 \
   --daemonize no --loglevel notice \
   >"$REDIS_LOG" 2>&1 &
 REDIS_PID=$!
