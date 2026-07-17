@@ -138,7 +138,7 @@ def test_capacity_uses_backend_configuration(client, monkeypatch):
     assert response.json() == {"active_count": 1, "limit": 17}
 
 
-def test_create_sandbox_requires_product_details_for_user_research(client):
+def test_create_sandbox_requires_product_url_for_user_research(client):
     response = client.post("/api/sandbox/", json={
         "env_name": "researched_env",
         "description": "A project tracker",
@@ -146,7 +146,20 @@ def test_create_sandbox_requires_product_details_for_user_research(client):
     })
 
     assert response.status_code == 422
-    assert "source_product_name is required" in response.text
+    assert "source_product_url must be a valid" in response.text
+
+
+def test_create_sandbox_infers_product_name_from_research_url(client):
+    mocks = _mock_create_deps()
+    with mocks[0], mocks[1] as task_delay:
+        response = client.post("/api/sandbox/", json={
+            "env_name": "researched_env",
+            "use_user_researcher": True,
+            "source_product_url": "https://github.com/acme/project-board",
+        })
+
+    assert response.status_code == 202
+    assert task_delay.call_args.kwargs["source_product_name"] == "Project Board"
 
 
 def test_create_sandbox_forwards_user_research_selection(client):
