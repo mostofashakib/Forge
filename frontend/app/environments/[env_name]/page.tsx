@@ -152,14 +152,15 @@ const ICON_THEME: Record<ActionId, { bg: string; color: string }> = {
 interface Section {
   id: string;
   label: string;
+  description: string;
   actions: ActionId[];
 }
 
 const SECTIONS: Section[] = [
-  { id: "training",      label: "Training",       actions: ["agent", "dashboard"] },
-  { id: "configuration", label: "Configuration",  actions: ["policy", "reward"] },
-  { id: "analysis",      label: "Analysis",       actions: ["evaluate", "violations"] },
-  { id: "data",          label: "Data",           actions: ["synthetic", "export"] },
+  { id: "training",      label: "Training",      description: "Run, observe, and measure agent behavior.", actions: ["agent", "dashboard"] },
+  { id: "configuration", label: "Configuration", description: "Shape the rules and definition of success.", actions: ["policy", "reward"] },
+  { id: "analysis",      label: "Analysis",      description: "Interrogate trajectories and surface risk.", actions: ["evaluate", "violations"] },
+  { id: "data",          label: "Data",          description: "Create and package learning-ready datasets.", actions: ["synthetic", "export"] },
 ];
 
 interface ActionDef {
@@ -262,47 +263,52 @@ export default async function EnvironmentHubPage({
   const rewardConfigured = !!(evalConfig?.reward_requirements?.trim());
 
   const badgeCtx = { policyConfigured, rewardConfigured, isLive, hasSandbox, sandbox };
+  const expiryDate = sandbox
+    ? new Date(sandbox.expires_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+    : null;
 
   return (
-    <div className="space-y-8">
+    <div className="environment-hub">
       {/* ------------------------------------------------------------------ */}
       {/* Header */}
       {/* ------------------------------------------------------------------ */}
-      <div className="flex items-start justify-between gap-4">
-        <div className="flex items-center gap-4 min-w-0">
-          <div className="w-11 h-11 rounded-2xl bg-primary/10 flex items-center justify-center shrink-0 ring-1 ring-primary/15">
-            <svg width="18" height="18" viewBox="0 0 14 14" fill="none">
+      <section className="environment-hub__header">
+        <div className="environment-hub__topline">
+          <span>Environment workspace</span>
+          <Link href="/environments" className="environment-hub__back">← All environments</Link>
+        </div>
+
+        <div className="environment-hub__identity">
+          <div className="environment-hub__mark">
+            <svg width="24" height="24" viewBox="0 0 14 14" fill="none">
               <path d="M7 1L13 4V10L7 13L1 10V4L7 1Z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" className="text-primary" />
               <path d="M7 5L9 6.5V9L7 10.5L5 9V6.5L7 5Z" fill="currentColor" className="text-primary" />
             </svg>
           </div>
-          <div className="min-w-0">
-            <div className="flex items-center gap-2.5 flex-wrap">
-              <h1 className="text-2xl font-semibold tracking-tight">{env_name}</h1>
+          <div className="environment-hub__name">
+            <div className="flex items-center gap-3 flex-wrap">
+              <h1>{env_name}</h1>
               {sandbox && <StatusBadge status={sandbox.status} />}
             </div>
-            <p className="text-sm text-muted-foreground mt-0.5">
-              {hasSandbox
-                ? `Sandbox · TTL ${sandbox!.ttl_days}d · expires ${new Date(sandbox!.expires_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`
-                : "File-based environment"}
-            </p>
+            <p>{hasSandbox ? "Containerized agent training environment" : "File-based training environment"}</p>
           </div>
-        </div>
 
-        <div className="flex items-center gap-3 shrink-0">
+          <div className="environment-hub__controls">
           <SandboxControls
             envName={env_name}
             status={sandbox?.status ?? ""}
             hasSandbox={hasSandbox}
           />
-          <Link
-            href="/environments"
-            className="text-sm text-muted-foreground hover:text-foreground transition-colors"
-          >
-            ← All
-          </Link>
+          </div>
         </div>
-      </div>
+
+        <div className="environment-hub__meta">
+          <div><span>Runtime</span><strong>{hasSandbox ? "Sandbox" : "File"}</strong></div>
+          <div><span>Retention</span><strong>{sandbox ? `${sandbox.ttl_days} days` : "Persistent"}</strong></div>
+          <div><span>Expires</span><strong>{expiryDate ?? "Never"}</strong></div>
+          <div><span>Core state</span><strong className={isLive ? "text-accent" : "text-background"}>{sandbox?.status ?? "local"}</strong></div>
+        </div>
+      </section>
 
       {/* ------------------------------------------------------------------ */}
       {/* Status banners */}
@@ -344,15 +350,19 @@ export default async function EnvironmentHubPage({
       {/* ------------------------------------------------------------------ */}
       {/* All action cards in one flat grid — section labels as col-span-2 separators */}
       {/* ------------------------------------------------------------------ */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        {SECTIONS.flatMap((section) => [
-          /* Section label — spans both columns */
-          <div key={`label-${section.id}`} className="col-span-full mt-2 first:mt-0">
-            <h2 className="section-label">{section.label}</h2>
-          </div>,
+      <div className="environment-hub__sections">
+        {SECTIONS.map((section, sectionIndex) => (
+          <section key={section.id} className="hub-section">
+            <header className="hub-section__header">
+              <span className="hub-section__number">0{sectionIndex + 1}</span>
+              <div>
+                <h2>{section.label}</h2>
+                <p>{section.description}</p>
+              </div>
+            </header>
 
-          /* Action cards for this section */
-          ...section.actions.map((actionId) => {
+            <div className="hub-section__grid">
+            {section.actions.map((actionId) => {
             const action = ACTION_MAP[actionId];
             const theme = ICON_THEME[actionId];
             const disabled = action.requiresSandbox && !isLive;
@@ -360,23 +370,20 @@ export default async function EnvironmentHubPage({
 
             const card = (
               <div
-                className={`group relative h-full min-h-24 border rounded-xl p-4 bg-card transition-all duration-200 ${
-                  disabled
-                    ? "border-border/40 opacity-40 cursor-not-allowed"
-                    : "border-border/60 card-shadow hover:card-shadow-hover hover:-translate-y-0.5 cursor-pointer"
-                }`}
+                data-action={actionId}
+                className={`hub-action-card group ${disabled ? "hub-action-card--disabled" : ""}`}
               >
-                <div className="flex items-start gap-3">
+                <div className="hub-action-card__content">
                   {/* Icon well */}
-                  <div className={`w-10 h-10 rounded-xl ${theme.bg} ${theme.color} flex items-center justify-center shrink-0 mt-0.5`}>
+                  <div className={`hub-action-card__icon ${theme.bg} ${theme.color}`}>
                     {ACTION_ICONS[actionId]}
                   </div>
 
                   {/* Content */}
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between gap-2 mb-1">
-                      <span className="font-medium text-sm">{action.label}</span>
-                      <span className="shrink-0 text-xs">
+                    <div className="hub-action-card__title-row">
+                      <h3>{action.label}</h3>
+                      <span className="hub-action-card__badge">
                         {action.requiresSandbox && isLive && (
                           <span className="text-green-600 font-medium flex items-center gap-1">
                             <span className="w-1.5 h-1.5 rounded-full bg-green-500 inline-block" />
@@ -396,15 +403,13 @@ export default async function EnvironmentHubPage({
                         )}
                       </span>
                     </div>
-                    <p className="text-xs text-muted-foreground leading-relaxed line-clamp-2">{action.description}</p>
+                    <p>{action.description}</p>
                   </div>
                 </div>
 
                 {/* Hover arrow */}
                 {!disabled && (
-                  <span className="absolute bottom-3.5 right-4 text-muted-foreground/0 group-hover:text-muted-foreground transition-colors text-xs">
-                    →
-                  </span>
+                  <span className="hub-action-card__arrow">↗</span>
                 )}
               </div>
             );
@@ -416,8 +421,10 @@ export default async function EnvironmentHubPage({
                 {card}
               </Link>
             );
-          }),
-        ])}
+            })}
+            </div>
+          </section>
+        ))}
       </div>
     </div>
   );

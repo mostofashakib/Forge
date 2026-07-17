@@ -101,8 +101,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 
           <footer className="app-footer">
             <p>
-              <span className="app-footer__stamp">FORGE / 2026</span>
-              <span className="app-footer__divider" />
               Developed by{" "}
               <a
                 href="https://www.mostofashakib.com/"

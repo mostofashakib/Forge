@@ -14,7 +14,7 @@ Covers scenarios not addressed by the targeted unit tests:
 import json
 import pytest
 from datetime import datetime, timezone, timedelta
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
@@ -296,6 +296,47 @@ def test_websocket_exec_rejects_unknown_env(client):
     with client.websocket_connect("/api/sandbox/ws/exec/ghost_env") as ws:
         msg = ws.receive_text()
     assert "not running" in msg.lower()
+
+
+@pytest.mark.asyncio
+async def test_websocket_feed_tolerates_disconnect_before_accept():
+    """A client that unmounts during the handshake must not raise an ASGI error."""
+    from backend.app.api.sandbox import sandbox_event_feed
+
+    websocket = MagicMock()
+    websocket.accept = AsyncMock(
+        side_effect=RuntimeError(
+            "Expected ASGI message 'websocket.send' or 'websocket.close', "
+            "but got 'websocket.accept'."
+        )
+    )
+
+    with patch("forge.envgen.telemetry.stream.StreamConsumer") as consumer:
+        await sandbox_event_feed(websocket, "fast_unmount", db=MagicMock())
+
+    consumer.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_websocket_feed_tolerates_disconnect_during_send():
+    """A disconnect after acceptance must also close the stream cleanly."""
+    from backend.app.api.sandbox import sandbox_event_feed
+
+    async def events():
+        yield {"type": "action"}
+
+    websocket = MagicMock()
+    websocket.accept = AsyncMock()
+    websocket.send_json = AsyncMock(side_effect=RuntimeError("WebSocket is not connected"))
+    websocket.close = AsyncMock(side_effect=RuntimeError("WebSocket is already closed"))
+
+    consumer = MagicMock()
+    consumer.tail.return_value = events()
+    consumer.close = AsyncMock()
+    with patch("forge.envgen.telemetry.stream.StreamConsumer", return_value=consumer):
+        await sandbox_event_feed(websocket, "closed_during_send", db=MagicMock())
+
+    consumer.close.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------

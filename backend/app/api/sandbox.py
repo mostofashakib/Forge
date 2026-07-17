@@ -12,6 +12,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy.orm import Session
 from backend.app.database import get_db
+from backend.app.docker_utils import is_docker_daemon_unavailable
 from backend.app.models import SandboxEnvironment
 from forge.settings import generated_envs_root, redis_url, sandbox_limit
 
@@ -271,13 +272,19 @@ def get_sandbox(env_name: str, db: Session = Depends(get_db)):
             sandbox.status = "stopped"
             db.commit()
         except Exception as exc:
-            logger.warning(
-                "[sandbox:get] could not synchronize Docker status for %s; "
-                "returning persisted status: %s: %s",
-                env_name,
-                type(exc).__name__,
-                exc,
-            )
+            if is_docker_daemon_unavailable(exc):
+                logger.debug(
+                    "[sandbox:get] Docker is not running; returning persisted status for %s",
+                    env_name,
+                )
+            else:
+                logger.warning(
+                    "[sandbox:get] could not synchronize Docker status for %s; "
+                    "returning persisted status: %s: %s",
+                    env_name,
+                    type(exc).__name__,
+                    exc,
+                )
     return sandbox
 
 
@@ -440,18 +447,33 @@ async def sandbox_progress(websocket: WebSocket, env_name: str):
 @router.websocket("/ws/feed/{env_name}")
 async def sandbox_event_feed(websocket: WebSocket, env_name: str, db: Session = Depends(get_db)):
     """Tail forge:events:<env_name> Redis Stream and push to frontend."""
-    await websocket.accept()
+    try:
+        await websocket.accept()
+    except (WebSocketDisconnect, RuntimeError):
+        # The React client can mount and immediately unmount the feed before
+        # Uvicorn completes the handshake. That is a normal disconnect race,
+        # not an application failure.
+        logger.debug("[ws:feed] client disconnected before accept — env_name=%s", env_name)
+        return
+
     redis_connection_url = redis_url()
     from forge.envgen.telemetry.stream import StreamConsumer
     consumer = StreamConsumer(redis_url=redis_connection_url, env_name=env_name)
     try:
         async for event in consumer.tail(last_id="$"):
-            await websocket.send_json(event)
+            try:
+                await websocket.send_json(event)
+            except (WebSocketDisconnect, RuntimeError):
+                logger.debug("[ws:feed] client disconnected — env_name=%s", env_name)
+                break
     except WebSocketDisconnect:
-        pass
+        logger.debug("[ws:feed] client disconnected — env_name=%s", env_name)
     finally:
         await consumer.close()
-        await websocket.close()
+        try:
+            await websocket.close()
+        except (WebSocketDisconnect, RuntimeError):
+            pass
 
 
 @router.websocket("/ws/exec/{env_name}")
