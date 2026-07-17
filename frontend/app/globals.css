@@ -40,28 +40,28 @@
 }
 
 :root {
-  --background: oklch(0.955 0.018 83);
-  --foreground: oklch(0.17 0.018 62);
-  --card: oklch(0.985 0.012 85);
-  --card-foreground: oklch(0.17 0.018 62);
-  --popover: oklch(0.985 0.012 85);
-  --popover-foreground: oklch(0.17 0.018 62);
-  --primary: oklch(0.62 0.22 36);
-  --primary-foreground: oklch(0.985 0.01 85);
-  --secondary: oklch(0.89 0.025 80);
-  --secondary-foreground: oklch(0.22 0.02 62);
-  --muted: oklch(0.91 0.02 82);
-  --muted-foreground: oklch(0.46 0.025 64);
-  --accent: oklch(0.88 0.16 116);
-  --accent-foreground: oklch(0.18 0.03 100);
-  --destructive: oklch(0.55 0.22 25);
-  --border: oklch(0.78 0.025 75);
-  --input: oklch(0.91 0.02 82);
-  --ring: oklch(0.62 0.22 36);
-  --radius: 0.35rem;
-  --sidebar: oklch(0.19 0.02 62);
-  --sidebar-foreground: oklch(0.96 0.018 83);
-  --sidebar-primary: oklch(0.62 0.22 36);
+  --background: oklch(0.93 0.025 84);
+  --foreground: oklch(0.155 0.014 65);
+  --card: oklch(0.975 0.018 86);
+  --card-foreground: oklch(0.155 0.014 65);
+  --popover: oklch(0.985 0.014 86);
+  --popover-foreground: oklch(0.155 0.014 65);
+  --primary: oklch(0.64 0.235 39);
+  --primary-foreground: oklch(0.985 0.01 88);
+  --secondary: oklch(0.86 0.035 81);
+  --secondary-foreground: oklch(0.20 0.018 64);
+  --muted: oklch(0.875 0.025 82);
+  --muted-foreground: oklch(0.42 0.025 63);
+  --accent: oklch(0.89 0.19 116);
+  --accent-foreground: oklch(0.19 0.04 108);
+  --destructive: oklch(0.56 0.23 25);
+  --border: oklch(0.69 0.035 72);
+  --input: oklch(0.91 0.022 83);
+  --ring: oklch(0.64 0.235 39);
+  --radius: 0.22rem;
+  --sidebar: oklch(0.155 0.014 65);
+  --sidebar-foreground: oklch(0.95 0.02 84);
+  --sidebar-primary: oklch(0.64 0.235 39);
   --sidebar-primary-foreground: oklch(0.99 0 0);
   --sidebar-accent: oklch(0.28 0.025 62);
   --sidebar-accent-foreground: oklch(0.98 0.01 83);
@@ -75,8 +75,13 @@
 }
 
 @keyframes forge-enter {
-  from { opacity: 0; transform: translateY(10px); }
+  from { opacity: 0; transform: translateY(14px); }
   to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes grid-drift {
+  from { background-position: 0 0, 0 0, 0 0; }
+  to { background-position: 36px 36px, 36px 36px, 0 0; }
 }
 
 @theme inline {
@@ -90,20 +95,154 @@
   body {
     @apply bg-background text-foreground antialiased;
     background-image:
-      linear-gradient(oklch(0.35 0.02 70 / 0.055) 1px, transparent 1px),
-      linear-gradient(90deg, oklch(0.35 0.02 70 / 0.055) 1px, transparent 1px),
-      radial-gradient(circle at 85% 0%, oklch(0.76 0.17 55 / 0.18), transparent 32%);
-    background-size: 32px 32px, 32px 32px, auto;
+      linear-gradient(oklch(0.25 0.02 68 / 0.075) 1px, transparent 1px),
+      linear-gradient(90deg, oklch(0.25 0.02 68 / 0.075) 1px, transparent 1px),
+      radial-gradient(circle at 82% -12%, oklch(0.72 0.22 45 / 0.28), transparent 38%);
+    background-size: 36px 36px, 36px 36px, auto;
     background-attachment: fixed;
+    min-width: 320px;
+  }
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    opacity: 0.22;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.18'/%3E%3C/svg%3E");
   }
   ::selection { background: oklch(0.82 0.17 85); color: oklch(0.16 0.02 62); }
 }
 
 @layer utilities {
+  .app-header {
+    @apply sticky top-0 z-50 border-b border-white/15 text-white;
+    background: oklch(0.145 0.015 65 / 0.97);
+    box-shadow: 0 10px 35px oklch(0.12 0.01 65 / 0.22);
+    backdrop-filter: blur(16px);
+  }
+  .app-header::after {
+    content: "";
+    @apply absolute bottom-0 left-0 h-[3px] w-full;
+    background: linear-gradient(90deg, var(--primary) 0 22%, var(--accent) 22% 29%, transparent 29%);
+  }
+  .app-header__rail {
+    @apply mx-auto flex h-[4.75rem] max-w-[88rem] items-center gap-6 px-5 sm:px-8;
+  }
+  .forge-mark {
+    @apply flex shrink-0 items-center gap-3 text-white;
+  }
+  .forge-mark__icon {
+    @apply grid size-10 place-items-center bg-primary text-white transition-transform duration-300;
+    box-shadow: 4px 4px 0 oklch(0.89 0.19 116);
+  }
+  .forge-mark:hover .forge-mark__icon { transform: rotate(-4deg) scale(1.04); }
+  .forge-mark__icon svg { @apply size-6; }
+  .forge-mark__word {
+    @apply block text-sm font-semibold leading-none tracking-[0.28em];
+  }
+  .app-nav { @apply ml-auto flex h-full items-stretch; }
+  .app-nav__link {
+    @apply relative flex items-center gap-2 px-3 text-[0.7rem] font-medium uppercase tracking-[0.12em] text-white/55 transition-colors sm:px-5;
+  }
+  .app-nav__link::after {
+    content: "";
+    @apply absolute bottom-0 left-1/2 h-[3px] w-0 -translate-x-1/2 bg-accent transition-all duration-300;
+  }
+  .app-nav__link:hover { @apply bg-white/[0.045] text-white; }
+  .app-nav__link--active { @apply bg-white/[0.06] text-white; }
+  .app-nav__link--active::after { @apply w-full; }
+  .app-nav__index { @apply hidden font-mono text-[0.55rem] text-primary sm:block; }
+  .app-main { @apply mx-auto w-full max-w-[88rem] flex-1 px-5 py-9 sm:px-8 sm:py-12; }
+  .app-footer {
+    @apply mx-auto mt-auto flex w-full max-w-[88rem] items-center justify-between border-t border-foreground/20 px-5 py-5 font-mono text-[0.62rem] uppercase tracking-[0.13em] text-muted-foreground sm:px-8;
+  }
+  .app-footer p { @apply flex items-center; }
+  .app-footer__stamp { @apply font-medium text-foreground; }
+  .app-footer__divider { @apply mx-3 h-3 w-px bg-foreground/25; }
+
+  .environment-hero {
+    @apply grid min-h-[28rem] lg:grid-cols-[1.35fr_0.65fr];
+  }
+  .environment-hero::before {
+    content: "";
+    @apply absolute left-0 top-0 h-1.5 w-36 bg-primary;
+  }
+  .environment-hero__copy {
+    @apply relative z-10 flex flex-col items-start justify-center p-7 sm:p-11 lg:p-14;
+  }
+  .environment-hero__copy::after {
+    content: "ENVIRONMENT COMPILER / LOCAL";
+    writing-mode: vertical-rl;
+    @apply absolute right-4 top-10 hidden font-mono text-[0.5rem] tracking-[0.25em] text-foreground/25 lg:block;
+  }
+  .environment-hero__eyebrow {
+    @apply max-w-lg text-xs font-medium uppercase tracking-[0.2em] text-muted-foreground;
+  }
+  .environment-hero__title {
+    @apply mt-3 whitespace-nowrap text-[clamp(2.15rem,6.7vw,6.9rem)] font-semibold leading-[0.85] tracking-[-0.075em] text-primary;
+    -webkit-text-stroke: 1px var(--foreground);
+    text-shadow: 4px 4px 0 var(--foreground);
+  }
+  .forge-cta {
+    @apply inline-flex items-center gap-4 bg-foreground px-5 py-3.5 text-[0.68rem] font-semibold uppercase tracking-[0.15em] text-background transition-all duration-200;
+    box-shadow: 5px 5px 0 var(--primary);
+  }
+  .forge-cta:hover {
+    @apply -translate-y-1 bg-primary text-primary-foreground;
+    box-shadow: 7px 7px 0 var(--foreground);
+  }
+  .forge-cta__plus {
+    @apply grid size-5 place-items-center border border-current text-base font-normal leading-none;
+  }
+  .environment-hero__telemetry {
+    @apply relative flex min-h-72 flex-col justify-between overflow-hidden border-t border-foreground/20 bg-foreground p-7 text-background lg:border-l lg:border-t-0 lg:p-9;
+    background-image:
+      linear-gradient(oklch(0.95 0.02 83 / 0.08) 1px, transparent 1px),
+      linear-gradient(90deg, oklch(0.95 0.02 83 / 0.08) 1px, transparent 1px),
+      radial-gradient(circle at 50% 35%, oklch(0.64 0.235 39 / 0.35), transparent 45%);
+    background-size: 24px 24px, 24px 24px, auto;
+  }
+  .environment-hero__telemetry::before {
+    content: "LIVE TELEMETRY";
+    @apply absolute right-5 top-5 font-mono text-[0.52rem] tracking-[0.22em] text-background/40;
+  }
+  .environment-hero__orb {
+    @apply relative mx-auto mt-4 grid size-40 place-items-center text-primary sm:size-48;
+  }
+  .environment-hero__orb svg { @apply size-24 drop-shadow-[0_0_20px_oklch(0.64_0.235_39/0.5)]; }
+  .environment-hero__orbit {
+    @apply absolute inset-2 rounded-full border border-dashed border-background/25;
+    animation: spin 22s linear infinite;
+  }
+  .environment-hero__orbit::after {
+    content: "";
+    @apply absolute left-1/2 top-[-3px] size-1.5 rounded-full bg-accent;
+  }
+  .environment-hero__orbit--two {
+    @apply inset-8 border-background/15;
+    animation-direction: reverse;
+    animation-duration: 13s;
+  }
+  .environment-stats { @apply grid grid-cols-3 border-t border-background/20; }
+  .environment-stats div { @apply flex flex-col gap-2 border-r border-background/20 px-3 pt-4 last:border-r-0; }
+  .environment-stats span { @apply font-mono text-[0.52rem] uppercase tracking-[0.15em] text-background/45; }
+  .environment-stats strong { @apply font-mono text-xl font-medium text-background; }
+  .inventory-heading { @apply mb-5 flex items-end justify-between border-b border-foreground/25 pb-3; }
+  .inventory-heading > div { @apply flex items-center gap-3; }
+  .inventory-heading__line { @apply h-0.5 w-8 bg-primary; }
+  .inventory-heading h2 { @apply text-xs font-semibold uppercase tracking-[0.18em]; }
+  .inventory-heading > span { @apply font-mono text-[0.6rem] tracking-[0.16em] text-muted-foreground; }
+  .environment-card::after {
+    content: "";
+    @apply pointer-events-none absolute right-0 top-0 size-8 border-b border-l border-foreground/10 bg-muted/30;
+    clip-path: polygon(100% 0, 100% 100%, 0 0);
+  }
+
   .card-shadow {
     box-shadow:
-      3px 3px 0 oklch(0.20 0.02 62 / 0.10),
-      0 8px 24px oklch(0.20 0.02 62 / 0.05);
+      4px 4px 0 oklch(0.20 0.02 62 / 0.13),
+      0 12px 28px oklch(0.20 0.02 62 / 0.06);
   }
   .card-shadow-hover {
     box-shadow:
@@ -131,11 +270,12 @@
 
   .forge-enter { animation: forge-enter 420ms cubic-bezier(.2,.8,.2,1) both; }
   .signal-chip {
-    @apply inline-flex items-center gap-2 border border-foreground/20 bg-accent px-2.5 py-1 text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-accent-foreground;
+    @apply inline-flex items-center gap-2 border border-foreground/70 bg-accent px-2.5 py-1 font-mono text-[0.62rem] font-semibold uppercase tracking-[0.17em] text-accent-foreground;
+    box-shadow: 2px 2px 0 var(--foreground);
   }
   .blueprint-panel {
-    @apply relative overflow-hidden border border-foreground/20 bg-card;
-    box-shadow: 4px 4px 0 oklch(0.20 0.02 62 / 0.12);
+    @apply relative overflow-hidden border border-foreground/30 bg-card;
+    box-shadow: 7px 7px 0 oklch(0.20 0.02 62 / 0.14);
   }
 
   /* Forge form input — use on <input> and <textarea> to avoid repetition */
@@ -172,4 +312,15 @@
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+@media (max-width: 640px) {
+  .app-header__rail { @apply h-[4.25rem] gap-2 px-4; }
+  .app-nav__link { @apply gap-1.5 px-2.5 text-[0.6rem]; }
+  .forge-mark__word { @apply text-xs; }
+  .forge-mark__icon { @apply size-9; }
+  .environment-hero__title {
+    text-shadow: 3px 3px 0 var(--foreground);
+  }
+  .app-footer { @apply px-5; }
 }
