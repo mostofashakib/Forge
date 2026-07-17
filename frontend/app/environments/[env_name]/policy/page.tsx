@@ -23,7 +23,10 @@ export default function PolicyPage() {
     setLoading(false);
   }, [envName]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => void load(), 0);
+    return () => window.clearTimeout(timer);
+  }, [load]);
 
   async function save() {
     setSaving(true);
