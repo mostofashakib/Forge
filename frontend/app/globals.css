@@ -520,6 +520,78 @@
   .new-env-modal__submit { @apply bg-primary px-5 py-3 text-xs font-semibold uppercase tracking-wider text-primary-foreground transition-all hover:-translate-y-0.5 disabled:opacity-40; box-shadow: 3px 3px 0 var(--accent); }
   .new-env-modal__cancel { @apply text-xs text-background/45 hover:text-background; }
 
+  .custom-builder { @apply mx-auto max-w-6xl space-y-6; }
+  .custom-builder__hero {
+    @apply grid overflow-hidden border border-foreground/80 bg-foreground text-background lg:grid-cols-[1fr_17rem];
+    box-shadow: 8px 8px 0 var(--primary), 0 24px 50px oklch(0.12 0.015 65 / 0.14);
+    background-image:
+      radial-gradient(circle at 72% 30%, oklch(0.64 0.235 39 / 0.22), transparent 27%),
+      linear-gradient(125deg, oklch(0.96 0.02 83 / 0.045), transparent 52%);
+  }
+  .custom-builder__hero > div { @apply relative p-7 sm:p-10; }
+  .custom-builder__back { @apply absolute right-6 top-6 font-mono text-[0.54rem] uppercase tracking-[0.16em] text-background/45 transition-colors hover:text-accent; }
+  .custom-builder__hero > div > span { @apply font-mono text-[0.55rem] font-semibold uppercase tracking-[0.22em] text-accent; }
+  .custom-builder__hero h1 { @apply mt-5 text-[clamp(2.5rem,6vw,5.4rem)] font-semibold leading-[0.8] tracking-[-0.075em]; }
+  .custom-builder__hero h1 em { @apply not-italic text-primary; }
+  .custom-builder__hero > div > p { @apply mt-6 max-w-2xl text-xs leading-5 text-background/55 sm:text-sm sm:leading-6; }
+  .custom-builder__hero aside { @apply flex flex-col justify-center border-t border-background/15 bg-black/15 p-7 lg:border-l lg:border-t-0; }
+  .custom-builder__hero aside > span { @apply font-mono text-[0.52rem] uppercase tracking-[0.18em] text-background/42; }
+  .custom-builder__hero aside strong { @apply mt-5 font-mono text-5xl font-medium tracking-[-0.08em]; }
+  .custom-builder__hero aside small { @apply ml-2 text-base font-normal text-background/30; }
+  .custom-builder__hero aside p { @apply mt-4 border-t border-background/15 pt-4 font-mono text-[0.53rem] uppercase tracking-wider text-background/48; }
+
+  .custom-builder__modes { @apply grid gap-4 md:grid-cols-2; }
+  .custom-builder__modes button { @apply grid grid-cols-[2rem_1fr_auto] items-center gap-3 border border-foreground/25 bg-card p-5 text-left transition-all; box-shadow: 4px 4px 0 oklch(0.20 0.02 62 / 0.11); }
+  .custom-builder__modes button:hover { @apply -translate-y-0.5 border-foreground/60; }
+  .custom-builder__modes button.is-active { @apply border-foreground bg-foreground text-background; box-shadow: 5px 5px 0 var(--accent); }
+  .custom-builder__modes button > span { @apply font-mono text-[0.58rem] text-primary; }
+  .custom-builder__modes strong { @apply block text-sm font-semibold; }
+  .custom-builder__modes small { @apply mt-1 block text-[0.68rem] leading-4 text-muted-foreground; }
+  .custom-builder__modes button.is-active small { @apply text-background/48; }
+  .custom-builder__modes button i { @apply not-italic text-primary; }
+  .custom-builder__form { @apply space-y-5; }
+
+  .research-launcher { @apply grid overflow-hidden border border-foreground/35 bg-card xl:grid-cols-[0.72fr_1.28fr]; box-shadow: 6px 6px 0 oklch(0.20 0.02 62 / 0.13); }
+  .research-launcher__intro { @apply relative overflow-hidden bg-foreground p-7 text-background sm:p-9; }
+  .research-launcher__intro::after { content: ""; @apply absolute -bottom-20 -left-16 size-56 rounded-full border border-dashed border-background/15; box-shadow: 0 0 0 34px oklch(0.95 0.02 83 / 0.025), 0 0 0 68px oklch(0.95 0.02 83 / 0.018); }
+  .research-launcher__intro > span { @apply font-mono text-[0.54rem] font-semibold uppercase tracking-[0.2em] text-accent; }
+  .research-launcher__intro h2 { @apply mt-6 text-3xl font-semibold leading-[0.92] tracking-[-0.05em] sm:text-4xl; }
+  .research-launcher__intro p { @apply relative z-10 mt-6 max-w-sm text-xs leading-6 text-background/52; }
+  .research-launcher__fields { @apply space-y-6 p-6 sm:p-8; }
+  .research-launcher__fields > label { @apply block; }
+  .research-launcher__fields > label > span { @apply mb-2 flex items-center justify-between text-xs font-medium; }
+  .research-launcher__fields label b, .manual-builder label b { @apply font-mono text-[0.5rem] font-normal uppercase tracking-wider text-muted-foreground; }
+  .research-url-input { @apply flex h-14 items-center border border-foreground/35 bg-background/50 transition-colors focus-within:border-primary; }
+  .research-url-input i { @apply grid h-full w-14 place-items-center border-r border-foreground/20 font-mono not-italic text-primary; }
+  .research-url-input input { @apply h-full min-w-0 flex-1 bg-transparent px-4 font-mono text-sm outline-none placeholder:text-muted-foreground/55 disabled:opacity-40; }
+  .research-launcher__fields textarea { @apply w-full resize-none border border-foreground/35 bg-background/50 p-4 text-sm leading-6 outline-none placeholder:text-muted-foreground/55 focus:border-primary disabled:opacity-40; }
+  .research-field-error, .research-field-preview { @apply mt-2 block font-mono text-[0.55rem]; }
+  .research-field-error { @apply text-red-700; }
+  .research-field-preview { @apply text-muted-foreground; }
+  .research-field-preview strong { @apply font-medium text-foreground; }
+  .research-pipeline { @apply grid grid-cols-2 border border-foreground/20 sm:grid-cols-4; }
+  .research-pipeline div { @apply flex min-h-20 flex-col justify-between border-b border-r border-foreground/15 p-3 last:border-r-0 sm:border-b-0; }
+  .research-pipeline span { @apply font-mono text-[0.52rem] text-primary; }
+  .research-pipeline strong { @apply text-[0.62rem] font-medium uppercase tracking-[0.08em]; }
+
+  .manual-builder { @apply space-y-5; }
+  .manual-builder > section { @apply grid border border-foreground/30 bg-card lg:grid-cols-[14rem_1fr]; box-shadow: 5px 5px 0 oklch(0.20 0.02 62 / 0.11); }
+  .manual-builder__heading { @apply flex gap-3 border-b border-foreground/20 bg-muted/25 p-5 lg:border-b-0 lg:border-r; }
+  .manual-builder__heading > span { @apply font-mono text-[0.58rem] text-primary; }
+  .manual-builder__heading h2 { @apply text-xs font-semibold uppercase tracking-[0.13em]; }
+  .manual-builder__heading p { @apply mt-2 text-[0.68rem] leading-5 text-muted-foreground; }
+  .manual-builder__fields { @apply space-y-5 p-5 sm:p-6; }
+  .manual-builder__fields--split { @apply grid gap-5 space-y-0 sm:grid-cols-2; }
+  .manual-builder__fields label { @apply block; }
+  .manual-builder__fields label > span, .manual-builder__label { @apply mb-2 flex items-center justify-between text-xs font-medium; }
+  .manual-builder__ttl { @apply grid grid-cols-4; }
+  .manual-builder__ttl button { @apply h-[2.625rem] border border-r-0 border-foreground/25 font-mono text-[0.62rem] text-muted-foreground transition-colors last:border-r disabled:opacity-40; }
+  .manual-builder__ttl button:hover { @apply border-foreground text-foreground; }
+  .manual-builder__ttl button.is-active { @apply border-foreground bg-foreground text-background; }
+  .custom-builder__submit { @apply flex w-full items-center justify-between bg-primary px-6 py-4 text-xs font-semibold uppercase tracking-[0.14em] text-primary-foreground transition-all disabled:cursor-not-allowed disabled:opacity-40; box-shadow: 5px 5px 0 var(--foreground); }
+  .custom-builder__submit:hover:not(:disabled) { @apply -translate-y-0.5 bg-foreground text-background; box-shadow: 7px 7px 0 var(--primary); }
+  .custom-builder__estimate { @apply text-center font-mono text-[0.55rem] leading-5 text-muted-foreground; }
+
   .card-shadow {
     box-shadow:
       4px 4px 0 oklch(0.20 0.02 62 / 0.13),
@@ -609,6 +681,11 @@
   .benchmark-notice { @apply items-start gap-5; }
   .new-env-card__body { @apply flex-col; }
   .new-env-heading p { @apply hidden; }
+  .custom-builder__back { @apply static mb-5 block; }
+  .custom-builder__modes button { @apply p-4; }
+  .research-pipeline div:nth-child(2) { @apply border-r-0; }
+  .research-pipeline div:nth-child(3) { @apply border-b-0; }
+  .manual-builder__fields--split { @apply grid-cols-1; }
 }
 
 @media (max-width: 1023px) {
