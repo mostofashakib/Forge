@@ -74,161 +74,175 @@ export default function BenchmarkRunPage() {
   const isRunning = phase === "running";
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Benchmark Run</h1>
-        <p className="text-sm text-muted-foreground mt-1">
-          Collect episodes across the task suite and compute environment quality metrics.
-        </p>
-      </div>
+    <div className="benchmark-run">
+      <header className="benchmark-run__hero">
+        <div className="benchmark-run__hero-copy">
+          <span className="benchmark-run__eyebrow">Evaluation protocol / 01</span>
+          <h1>RUN THE<br /><em>GAUNTLET.</em></h1>
+          <p>Collect episodes across the task suite and turn raw trajectories into quality signals.</p>
+        </div>
+        <div className="benchmark-run__readout" aria-label="Current run configuration">
+          <div><span>Domains</span><strong>{String(domains.length).padStart(2, "0")}</strong></div>
+          <div><span>Difficulty</span><strong>0{depth}</strong></div>
+          <div><span>Seeds / task</span><strong>{String(seeds).padStart(2, "0")}</strong></div>
+          <div className={`benchmark-run__state benchmark-run__state--${phase}`}>
+            <span>System state</span><strong><i />{phase}</strong>
+          </div>
+        </div>
+      </header>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
-        {/* Config panel */}
-        <div className="border rounded-lg p-4 space-y-4">
-          <h2 className="text-sm font-medium">Configuration</h2>
+      <div className="benchmark-workbench">
+        <section className="benchmark-config">
+          <div className="benchmark-panel__heading">
+            <div><span>01</span><h2>Run configuration</h2></div>
+            <p>Define the evaluation envelope</p>
+          </div>
 
-          <div>
-            <p className="text-xs text-muted-foreground mb-2">Domains</p>
-            <div className="flex flex-col gap-1.5">
+          <div className="benchmark-field benchmark-field--domains">
+            <div className="benchmark-field__label">
+              <span>Target domains</span>
+              <small>{domains.length} selected</small>
+            </div>
+            <div className="benchmark-domain-grid">
               {(["email", "project_mgmt"] as const).map((d) => (
-                <label key={d} className="flex items-center gap-2 text-sm cursor-pointer">
+                <label key={d} className="benchmark-domain">
                   <input
                     type="checkbox"
                     checked={domains.includes(d)}
                     disabled={isRunning}
                     onChange={(e) => toggleDomain(d, e.target.checked)}
-                    className="rounded"
                   />
-                  {d}
+                  <span className="benchmark-domain__check" aria-hidden="true">✓</span>
+                  <span>
+                    <strong>{d === "project_mgmt" ? "Project management" : "Email"}</strong>
+                    <small>{d === "project_mgmt" ? "Planning · delivery" : "Inbox · compose"}</small>
+                  </span>
                 </label>
               ))}
             </div>
           </div>
 
-          <div>
-            <div className="flex items-baseline justify-between mb-2">
-              <p className="text-xs text-muted-foreground">Max difficulty</p>
-              <span className="text-xs font-mono font-medium tabular-nums">{depth} / 5</span>
+          <div className="benchmark-field">
+            <div className="benchmark-field__label">
+              <span>Max difficulty</span>
+              <strong>{depth} / 5</strong>
             </div>
             <input
               type="range" min={1} max={5} value={depth} disabled={isRunning}
               onChange={(e) => setDepth(Number(e.target.value))}
-              className="w-full accent-primary"
+              className="benchmark-range"
             />
-            <div className="flex justify-between text-xs text-muted-foreground mt-1">
-              <span>1 — easy only</span>
-              <span>5 — all tasks</span>
+            <div className="benchmark-range__legend">
+              <span>01 / Foundation</span>
+              <span>05 / Full stress</span>
             </div>
-            <p className="text-xs text-muted-foreground/70 mt-1.5">
-              Includes tasks with difficulty ≤ {depth}
-            </p>
           </div>
 
-          <div>
-            <p className="text-xs text-muted-foreground mb-2">Seeds per task</p>
-            <input
-              type="number" min={1} max={20} value={seeds} disabled={isRunning}
-              onChange={(e) => setSeeds(Number(e.target.value))}
-              className="w-full border rounded-md px-3 py-1.5 text-sm bg-background"
-            />
-          </div>
-
-          <div>
-            <p className="text-xs text-muted-foreground mb-2">Output directory</p>
-            <input
-              type="text" value={outputDir} disabled={isRunning}
-              onChange={(e) => setOutputDir(e.target.value)}
-              className="w-full border rounded-md px-3 py-1.5 text-sm bg-background font-mono"
-            />
+          <div className="benchmark-field-row">
+            <label className="benchmark-field">
+              <span className="benchmark-field__label"><span>Seeds per task</span></span>
+              <input
+                type="number" min={1} max={20} value={seeds} disabled={isRunning}
+                onChange={(e) => setSeeds(Number(e.target.value))}
+                className="benchmark-input"
+              />
+            </label>
+            <label className="benchmark-field">
+              <span className="benchmark-field__label"><span>Output directory</span></span>
+              <input
+                type="text" value={outputDir} disabled={isRunning}
+                onChange={(e) => setOutputDir(e.target.value)}
+                className="benchmark-input benchmark-input--mono"
+              />
+            </label>
           </div>
 
           {phase === "idle" && (
             <button
               onClick={handleLaunch}
               disabled={domains.length === 0}
-              className="w-full bg-primary text-primary-foreground rounded-lg px-4 py-2 text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors"
+              className="benchmark-launch"
             >
-              Launch Benchmark Run
+              <span>Launch benchmark run</span><span aria-hidden="true">↗</span>
             </button>
           )}
           {isRunning && (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse shrink-0" />
-              Running…
+            <div className="benchmark-active-state">
+              <span className="benchmark-active-state__pulse" />
+              <span><strong>Evaluation in progress</strong><small>Worker stream is connected</small></span>
             </div>
           )}
           {phase === "done" && (
-            <p className="text-sm text-green-600 font-medium">Run complete ✓</p>
+            <p className="benchmark-complete-state">Run complete <span>✓</span></p>
           )}
-        </div>
+        </section>
 
-        {/* Log panel */}
-        <div className="border rounded-lg overflow-hidden flex flex-col">
-          <div className="px-3 py-2 border-b bg-muted/40 flex items-center justify-between">
-            <span className="text-xs font-medium text-muted-foreground">Worker logs</span>
+        <section className="benchmark-console">
+          <div className="benchmark-console__bar">
+            <div><i /><i /><i /></div>
+            <span>worker://benchmark/output</span>
             {isRunning && (
-              <span className="flex items-center gap-1 text-xs text-green-600">
-                <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
-                live
+              <span className="benchmark-console__live">
+                <i /> live
               </span>
             )}
           </div>
           <div
             ref={logRef}
-            className="flex-1 overflow-y-auto p-3 font-mono text-xs min-h-52 max-h-80 bg-muted/10 space-y-0.5"
+            className="benchmark-console__output scrollbar-thin"
           >
             {logs.length === 0 ? (
-              <p className="text-muted-foreground italic">Waiting for worker output…</p>
+              <div className="benchmark-console__idle">
+                <span>&gt;_</span>
+                <p>System armed.<br />Waiting for worker output<span className="animate-pulse">_</span></p>
+              </div>
             ) : (
               logs.map((line, i) => (
-                <p key={i} className="text-foreground/80 leading-5 whitespace-pre-wrap break-all">{line}</p>
+                <p key={i}><span>{String(i + 1).padStart(3, "0")}</span>{line}</p>
               ))
             )}
           </div>
           {phase !== "idle" && (
-            <div className="p-3 border-t space-y-1.5">
-              <div className="flex justify-between text-xs text-muted-foreground">
+            <div className="benchmark-console__progress">
+              <div>
                 <span>
                   {progress.completed} / {progress.total ?? "?"} episodes
                 </span>
-                <span className="font-medium text-foreground">
+                <strong>
                   {phase === "done" ? "100" : pct}%
-                </span>
+                </strong>
               </div>
-              <div className="h-2 w-full bg-muted rounded-full overflow-hidden">
+              <div className="benchmark-console__track">
                 <div
-                  className="h-full bg-primary rounded-full transition-all duration-500"
                   style={{ width: `${phase === "done" ? 100 : pct}%` }}
                 />
               </div>
             </div>
           )}
-        </div>
+        </section>
       </div>
 
       {phase === "done" && (
-        <div className="border border-green-200 bg-green-50 rounded-lg p-4 flex items-center justify-between">
+        <div className="benchmark-notice benchmark-notice--success">
           <div>
-            <p className="text-sm text-green-700 font-semibold">Benchmark run complete!</p>
-            <p className="text-xs text-green-600 mt-0.5">
+            <p>Benchmark run complete</p>
+            <span>
               Results saved to <code className="font-mono">{outputDir}/</code>
-            </p>
+            </span>
           </div>
-          <Link href="/benchmark/report" className="text-sm font-medium text-green-700 hover:underline">
+          <Link href="/benchmark/report">
             View Report →
           </Link>
         </div>
       )}
 
       {phase === "error" && error && (
-        <div className="border border-red-200 bg-red-50 rounded-lg p-4 space-y-1">
-          <p className="text-sm text-red-600 font-medium">Run failed</p>
-          <p className="text-xs text-red-500">{error}</p>
+        <div className="benchmark-notice benchmark-notice--error">
+          <div><p>Run failed</p><span>{error}</span></div>
           <button
             onClick={() => setPhase("idle")}
-            className="text-xs text-primary hover:underline mt-1 block"
           >
-            Try again
+            Reset run →
           </button>
         </div>
       )}
