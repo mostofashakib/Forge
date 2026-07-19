@@ -1,6 +1,6 @@
 from __future__ import annotations
 import asyncio
-from forge.envgen.agents.base import EnvGenAgent
+from forge.envgen.agents.base import EnvGenAgent, render_correction_context, with_correction
 from forge.envgen.artifact_bus import ArtifactBus
 from forge.envgen.context import EnvGenContext
 from forge.envgen.schemas import GeneratedFile
@@ -50,13 +50,19 @@ class RewardAgent(EnvGenAgent):
         self._client = client or get_client(max_tokens=envgen_config().fast_llm_tokens)
 
     async def run(self, ctx: EnvGenContext, bus: ArtifactBus) -> None:
-        if not ctx.reward_requirements.strip():
+        correction = render_correction_context(bus, self.agent_id)
+        if not ctx.reward_requirements.strip() and not correction:
             await bus.publish("reward_fn_code", _DEFAULT_REWARD)
             return
-        user = f"Reward requirements:\n{ctx.reward_requirements}"
+        requirements = ctx.reward_requirements.strip() or (
+            "(none provided; infer suitable reward logic from the environment "
+            "and the corrections below)"
+        )
+        user = f"Reward requirements:\n{requirements}"
         research = bus.get("rl_research")
         if research is not None:
             user += f"\n\nRESEARCHED RL CONTEXT:\n{research.as_prompt()}"
+        user = with_correction(bus, self.agent_id, user)
         loop = asyncio.get_event_loop()
         result: GeneratedFile = await loop.run_in_executor(
             None,

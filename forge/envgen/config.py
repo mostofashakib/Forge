@@ -11,6 +11,13 @@ def _integer(name: str, default: int) -> int:
     return value
 
 
+def _non_negative_integer(name: str, default: int) -> int:
+    value = int(os.environ.get(name, str(default)))
+    if value < 0:
+        raise ValueError(f"{name} must be non-negative")
+    return value
+
+
 def _number(name: str, default: float) -> float:
     value = float(os.environ.get(name, str(default)))
     if value <= 0:
@@ -37,6 +44,9 @@ class EnvGenConfig:
     specialist_items_per_section: int = 8
     generated_file_review_chars: int = 16_000
     state_bridge_input_chars: int = 2_000
+    # Bounded retries for the automatic reviewer repair loop. 0 restores the
+    # original hard-fail-on-first-rejection behavior.
+    max_repair_rounds: int = 2
 
     @classmethod
     def from_env(cls) -> EnvGenConfig:
@@ -56,6 +66,7 @@ class EnvGenConfig:
             specialist_items_per_section=_integer("FORGE_SPECIALIST_CONTEXT_ITEMS", 8),
             generated_file_review_chars=_integer("FORGE_REVIEW_FILE_CHARS", 16_000),
             state_bridge_input_chars=_integer("FORGE_STATE_BRIDGE_INPUT_CHARS", 2_000),
+            max_repair_rounds=_non_negative_integer("FORGE_ENVGEN_MAX_REPAIR_ROUNDS", 2),
         )
 
 
