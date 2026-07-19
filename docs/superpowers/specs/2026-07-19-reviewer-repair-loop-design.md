@@ -139,13 +139,14 @@ wiring.
 ### Downstream invalidation & re-run
 
 - `ArtifactBus.invalidate(names: Iterable[str])`: remove each value and reset its
-  `asyncio.Event` (clear + recreate) so any consumer that calls `wait_for`
+  `asyncio.Event` (drop it so the next `wait_for` recreates it) so any consumer
   blocks until the artifact is republished.
-- Executor change (`TaskExecutor.execute`): a task dependency that is **not**
-  present in the current plan's task set is assumed already satisfied on the bus
-  and is skipped rather than recreated. This lets `RepairLoop` execute a
-  sub-plan whose external dependencies are already published. `run_task`'s
-  per-call `running` dict already isolates one `execute` call from the next.
+- No executor change is needed. `GenerationPlan` rejects dependencies on tasks
+  outside the plan, so `RepairPlanner` produces a **self-contained** sub-plan:
+  each re-run task's dependencies are stripped to those also in the re-run set,
+  and its external dependencies are already published on the bus. `run_task`'s
+  per-call `running` dict already isolates one `execute` call from the next, so
+  `RepairLoop` simply calls `executor.execute(sub_plan, …)` per round.
 - Per round the loop: (a) publishes `correction:{agent_id}` for each target,
   (b) invalidates the outputs of every task in the re-run set (so the reviewers
   wait for fresh code), (c) `await executor.execute(sub_plan, agents, ctx, bus)`.
@@ -229,8 +230,8 @@ Unit tests, LLM specialists replaced by deterministic stubs.
   `RepairPlanner`, `RepairLoop`.
 - `forge/envgen/a2a.py` — new `MessageKind` values.
 - `forge/envgen/artifact_bus.py` — `invalidate()`.
-- `forge/envgen/executor.py` — skip out-of-plan dependencies.
-- `forge/envgen/agents/base.py` — `render_correction_context()` helper.
+- `forge/envgen/agents/base.py` — `render_correction_context()` and
+  `with_correction()` helpers.
 - `forge/envgen/agents/app_generator.py`, `telemetry.py`, `state_bridge.py`,
   `policy.py`, `reward.py` — fold correction context into prompts.
 - `forge/envgen/config.py` — `max_repair_rounds` + `FORGE_ENVGEN_MAX_REPAIR_ROUNDS`.

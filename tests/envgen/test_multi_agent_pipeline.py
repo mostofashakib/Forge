@@ -106,6 +106,32 @@ async def test_executor_uses_scoped_a2a_context_and_records_messages():
 
 
 @pytest.mark.asyncio
+async def test_executor_runs_selfcontained_subplan_against_prepopulated_bus():
+    # Simulates a repair re-run: only the consumer is re-executed, with its
+    # external producer dependency already satisfied on the bus and stripped
+    # from the sub-plan (as RepairPlanner produces it).
+    agents = [_Producer(), _Consumer()]
+    bus = ArtifactBus()
+    await bus.publish("source", "already-here")
+
+    subplan = GenerationPlan(
+        user_request="repair",
+        tasks=[AgentTask(
+            id="consumer",
+            agent_id="consumer",
+            description="consumer",
+            dependencies=[],  # external "producer" dep stripped by the planner
+            context_keys=["source"],
+            outputs=["result"],
+        )],
+    )
+
+    await TaskExecutor().execute(subplan, agents, _ctx(), bus)
+
+    assert bus.get("result") == "ALREADY-HERE"
+
+
+@pytest.mark.asyncio
 async def test_executor_tracks_and_normalizes_agent_failures():
     handler = GenerationErrorHandler()
     agents = [_FailingAgent()]

@@ -1,6 +1,6 @@
 from __future__ import annotations
 import asyncio
-from forge.envgen.agents.base import EnvGenAgent
+from forge.envgen.agents.base import EnvGenAgent, render_correction_context, with_correction
 from forge.envgen.artifact_bus import ArtifactBus
 from forge.envgen.context import EnvGenContext
 from forge.envgen.schemas import GeneratedFile
@@ -44,14 +44,20 @@ class PolicyAgent(EnvGenAgent):
         self._client = client or get_client(max_tokens=envgen_config().fast_llm_tokens)
 
     async def run(self, ctx: EnvGenContext, bus: ArtifactBus) -> None:
-        if not ctx.policy_requirements.strip():
+        correction = render_correction_context(bus, self.agent_id)
+        if not ctx.policy_requirements.strip() and not correction:
             await bus.publish("policy_dsl", _DEFAULT_POLICY)
             return
         action_names = [a.name for a in ctx.compiler_input.actions]
-        user = f"Actions: {action_names}\n\nPolicy requirements:\n{ctx.policy_requirements}"
+        requirements = ctx.policy_requirements.strip() or (
+            "(none provided; infer suitable policies from the actions and the "
+            "corrections below)"
+        )
+        user = f"Actions: {action_names}\n\nPolicy requirements:\n{requirements}"
         research = bus.get("rl_research")
         if research is not None:
             user += f"\n\nRESEARCHED RL CONTEXT:\n{research.as_prompt()}"
+        user = with_correction(bus, self.agent_id, user)
         loop = asyncio.get_event_loop()
         result: GeneratedFile = await loop.run_in_executor(
             None,

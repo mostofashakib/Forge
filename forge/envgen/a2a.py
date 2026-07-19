@@ -14,6 +14,10 @@ class MessageKind(StrEnum):
     TASK_FAILED = "task_failed"
     ARTIFACT_AVAILABLE = "artifact_available"
     REVIEW_COMPLETED = "review_completed"
+    REVIEW_REJECTED = "review_rejected"
+    CORRECTION_ASSIGNED = "correction_assigned"
+    CORRECTION_COMPLETED = "correction_completed"
+    REPAIR_EXHAUSTED = "repair_exhausted"
 
 
 @dataclass(frozen=True)
