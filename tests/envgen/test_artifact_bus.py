@@ -47,3 +47,31 @@ async def test_get_returns_value_or_default():
     await bus.publish("reward_fn_code", "fn")
     assert bus.get("reward_fn_code") == "fn"
     assert bus.get("missing", "default") == "default"
+
+
+@pytest.mark.asyncio
+async def test_invalidate_clears_value_and_reblocks_wait_for():
+    bus = ArtifactBus()
+    await bus.publish("app_code", {"main.py": "v1"})
+
+    bus.invalidate(["app_code"])
+    assert bus.get("app_code") is None
+
+    received: list = []
+
+    async def waiter():
+        received.append(await bus.wait_for("app_code"))
+
+    async def republisher():
+        await asyncio.sleep(0.01)
+        await bus.publish("app_code", {"main.py": "v2"})
+
+    await asyncio.gather(waiter(), republisher())
+    assert received == [{"main.py": "v2"}]
+
+
+@pytest.mark.asyncio
+async def test_invalidate_ignores_unknown_names():
+    bus = ArtifactBus()
+    bus.invalidate(["never_published"])  # must not raise
+    assert bus.get("never_published") is None

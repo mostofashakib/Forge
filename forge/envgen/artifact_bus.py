@@ -1,6 +1,6 @@
 from __future__ import annotations
 import asyncio
-from typing import Any, Callable, Awaitable, Mapping
+from typing import Any, Callable, Awaitable, Iterable, Mapping
 
 from forge.envgen.a2a import A2AProtocol, AgentMessage, MessageKind
 
@@ -43,6 +43,16 @@ class ArtifactBus:
 
     def get(self, name: str, default: Any = None) -> Any:
         return self._values.get(name, default)
+
+    def invalidate(self, names: Iterable[str]) -> None:
+        """Drop cached artifacts so consumers re-block until they are republished.
+
+        Used by the repair loop to force downstream specialists and the reviewers
+        to wait for freshly regenerated code instead of reading stale values.
+        """
+        for name in names:
+            self._values.pop(name, None)
+            self._events.pop(name, None)
 
     def scoped(
         self,
