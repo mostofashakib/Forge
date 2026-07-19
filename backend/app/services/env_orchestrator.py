@@ -21,6 +21,7 @@ from forge.paths import confined_path, confined_relative_path, validate_path_seg
 from forge.settings import generated_envs_root
 from forge.envgen.executor import TaskExecutor
 from forge.envgen.planning import PromptPlannerAgent
+from forge.envgen.repair import RepairLoop
 
 
 def enforce_generation_gates(bus: ArtifactBus) -> None:
@@ -95,7 +96,12 @@ class EnvironmentOrchestrator:
         else:
             plan = PromptPlannerAgent().create_plan(ctx, agents)
             await bus.publish("generation_plan", plan)
-            await TaskExecutor().execute(plan, agents, ctx, bus)
+            executor = TaskExecutor()
+            await executor.execute(plan, agents, ctx, bus)
+            # Route rejected findings back to their specialists and re-run within
+            # a bounded, circuit-broken loop. Raises GenerationReviewError if the
+            # generation cannot be repaired; otherwise both gates now approve.
+            await RepairLoop().run(plan, agents, ctx, bus, executor)
             enforce_generation_gates(bus)
         self._write_artifacts(env_name, bus)
 

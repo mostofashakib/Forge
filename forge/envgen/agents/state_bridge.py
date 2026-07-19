@@ -1,7 +1,7 @@
 from __future__ import annotations
 import asyncio
 from pydantic import BaseModel
-from forge.envgen.agents.base import EnvGenAgent
+from forge.envgen.agents.base import EnvGenAgent, with_correction
 from forge.envgen.artifact_bus import ArtifactBus
 from forge.envgen.context import EnvGenContext
 from forge.schema.state_schema import StateSchemaManifest
@@ -88,6 +88,7 @@ class StateBridgeAgent(EnvGenAgent):
                 "Remove or correct these fields in state_schema_manifest so the manifest "
                 "accurately reflects what the app actually exposes."
             )
+        user = with_correction(bus, self.agent_id, user)
         loop = asyncio.get_event_loop()
         result: StateBridgeOutput = await loop.run_in_executor(
             None,
