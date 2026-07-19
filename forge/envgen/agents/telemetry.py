@@ -1,6 +1,6 @@
 from __future__ import annotations
 import asyncio
-from forge.envgen.agents.base import EnvGenAgent
+from forge.envgen.agents.base import EnvGenAgent, with_correction
 from forge.envgen.artifact_bus import ArtifactBus
 from forge.envgen.context import EnvGenContext
 from forge.envgen.schemas import GeneratedApp
@@ -54,6 +54,7 @@ class TelemetryAgent(EnvGenAgent):
             f"env_name variable value: {ctx.env_name}\n\n"
             f"App code:\n{files_text}"
         )
+        user = with_correction(bus, self.agent_id, user)
         loop = asyncio.get_event_loop()
         result: GeneratedApp = await loop.run_in_executor(
             None,
