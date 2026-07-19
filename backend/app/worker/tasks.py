@@ -221,6 +221,7 @@ def build_sandbox_task(
                 "state_bridge_code": "State Bridge",
                 "policy_dsl":        "Policy Rules",
                 "reward_fn_code":    "Reward Function",
+                "correctness_report": "Correctness Reviewer",
                 "review_report":     "Quality Reviewer",
             }.get(artifact_name, artifact_name)
             publish({"log": f"[agent] {label} — done ✓"})
