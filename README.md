@@ -56,9 +56,10 @@ Premade environments ship with realistic seed data that resembles real products.
 ### Environment Creation
 
 - **4-option creation flow** — CLI, Browser, Custom, and Premade on the new-environment page
-- **Custom environment generator** — describe any app in plain English; optionally enable the user researcher with an original product name and URL, then a prompt planner creates a dependency-aware task graph for dedicated backend, UI, telemetry, state-bridge, policy, reward, and review agents
+- **Custom environment generator** — describe any app in plain English; optionally enable the user researcher with an original product name and URL, then a prompt planner creates a dependency-aware task graph for dedicated backend, UI, telemetry, state-bridge, policy, reward, correctness, and review agents
 - **Agent-to-Agent context protocol** — specialists exchange typed task and artifact messages while scoped channels expose only each task's declared inputs
 - **Reviewer quality gate** — static checks and semantic review verify syntax, required APIs, UI action coverage, RL artifacts, code quality, and the original user requirements before files are written
+- **Determinism correctness specialist** — a dedicated gate audits generated code for wall-clock access, unseeded randomness, and nondeterministic identifiers, requiring a counter-based virtual clock (`forge_now()`) and sequential IDs (`_next_id()`) before artifacts are written; after the container boots, a runtime validator proves `/forge/reset` restores the exact initial universe (rows, IDs, counters, database included) and that snapshot/restore round-trips, hard-failing the build on any drift
 - **Real-time build progress** — WebSocket stream shows agent completion, Docker build phase, and live worker logs
 - **Compiler review** — inspect and edit LLM-generated compiler input before the build starts
 - **Self-healing `/start`** — detects stale image tags, missing port bindings, and crash-looped containers; clears bad state and auto-recovers
@@ -89,16 +90,19 @@ User prompt + compiler input + optional original product research
           ├── PolicyAgent
           └── RewardAgent
                     │
-                    ▼
-              ReviewerAgent
-          static + semantic checks
+                    ├─→ EnvironmentCorrectnessAgent   determinism audit gate
+                    └─→ ReviewerAgent                 static + semantic checks
                     │
-             approved artifacts
+             approved artifacts → docker build/run
+                    │
+                    ▼
+            CorrectnessValidator (post-boot)
+      reset fidelity + snapshot/restore round-trip
 ```
 
 When enabled for a custom environment, `UserResearchAgent` reads the extracted application spec, the required original product name and URL, optional reference URLs, and a small web search when references are not provided. It synthesizes the target product's workflows, functionality, UI states, data, rules, RL observations, and edge cases. Raw pages are discarded inside the research task; backend, UI, RL, and review specialists receive only their relevant sections under a hard character budget. When disabled, the planner omits the research task and downstream specialists run with the application spec alone.
 
-`TaskExecutor` runs independent tasks concurrently and waits on declared dependencies. Each task receives a scoped artifact channel. The A2A protocol records assignment, completion, failure, review, and artifact-availability messages with correlation IDs, without copying large generated files into message payloads. The reviewer blocks artifact writes when generated code or requirement coverage fails. Local follow-up work, including reviewer-driven automatic repairs, is tracked in the git-ignored `TASKS.md`.
+`TaskExecutor` runs independent tasks concurrently and waits on declared dependencies. Each task receives a scoped artifact channel. The A2A protocol records assignment, completion, failure, review, and artifact-availability messages with correlation IDs, without copying large generated files into message payloads. The reviewer blocks artifact writes when generated code or requirement coverage fails. A dedicated correctness specialist runs alongside it and blocks writes when generated code is nondeterministic — wall-clock reads, unseeded randomness, nondeterministic IDs, or a `/forge/reset` that fails to re-initialize the virtual clock and ID counters — while exempting telemetry event-envelope timestamps that never reach `/forge/state`. Once the container is built and running, `CorrectnessValidator` exercises the live endpoints to prove reset fidelity (two resets and a mutate→reset both return the byte-identical pristine baseline) and a snapshot→mutate→restore round-trip before the environment is accepted; any drift hard-fails the build. Local follow-up work, including reviewer-driven automatic repairs, is tracked in the git-ignored `TASKS.md`.
 
 Generation prompts are grouped behind prompt catalog classes, and the shared LLM client appends an explicit Pydantic output contract to every structured call. `EnvGenConfig` centralizes model token budgets, research limits, context budgets, and reviewer excerpt sizes; each value can be changed through its `FORGE_ENVGEN_*`, `FORGE_RESEARCH_*`, `FORGE_SPECIALIST_*`, or `FORGE_REVIEW_*` environment variable. `GenerationErrorHandler` normalizes specialist failures and retains task/agent error records for orchestration and A2A diagnostics.
 
@@ -168,6 +172,7 @@ Environments are verified deterministic at creation and launch — same seed and
 
 - **Launch-time determinism check** — two identically-seeded rollouts are hashed (observations + rewards + termination flags); a mismatch raises `DeterminismError` and aborts the launch. Runs in the backend env loader, `forge run` / `forge export`, and `EnvBuilder.build()` (skip with `FORGE_SKIP_DETERMINISM_CHECK=1`)
 - **EnvBuilder + DeterminismConfig** — virtual clock, seeded RNG and UUIDs, canonical sorted-key JSON, float rejection (integers only), serialized transitions, network and filesystem guards inside the env, and fresh-universe startup (factory caches dropped every reset)
+- **Generated-app determinism contract** — custom LLM-generated apps must use a counter-based virtual clock (`forge_now()`) and sequential IDs (`_next_id()`) in place of wall-clock timestamps and random UUIDs; a static correctness specialist audits this before artifacts are written, and a post-boot `CorrectnessValidator` proves `/forge/reset` restores a byte-identical initial universe (rows, IDs, counters, DB included) and that snapshot/restore round-trips
 - **Replayable episodes** — every step records the tool call, emitted events, state diff, hashes, and reward; `replay_episode(env, seed, steps)` re-executes any recording and verifies every state hash and reward against it
 - **Flake-free UI** — premade UIs ship a CSS no-motion override and browser sessions force `prefers-reduced-motion` + injected no-animation styles
 - **SQLite as source of truth** — premade and generated apps persist state in SQLite; verification reads `/forge/state` (DB-backed), never the UI
@@ -327,10 +332,11 @@ forge/
   compiler/
     generators/        # Jinja2 compiler, package builder
   envgen/              # LLM orchestration, container runtime, episode/CLI/browser runners
-    agents/            # Backend, UI, assembly, telemetry, state, policy, reward, reviewer
+    agents/            # Backend, UI, assembly, telemetry, state, policy, reward, correctness, reviewer
     planning.py        # Typed task plans and dependency validation
     executor.py        # Dependency-aware specialist task execution
     a2a.py             # Typed Agent-to-Agent messages and scoped context permissions
+    correctness_validator.py  # Post-boot reset-fidelity + snapshot/restore validation
     telemetry/         # Telemetry client and collectors
     container.py       # Docker build, run, start/stop, normalisation, mirror fallback
     tiered_reward.py   # TieredRewardEngine with partial credit and multi-method scoring
