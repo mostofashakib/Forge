@@ -221,6 +221,7 @@ def build_sandbox_task(
                 "state_bridge_code": "State Bridge",
                 "policy_dsl":        "Policy Rules",
                 "reward_fn_code":    "Reward Function",
+                "correctness_report": "Correctness Reviewer",
                 "review_report":     "Quality Reviewer",
             }.get(artifact_name, artifact_name)
             publish({"log": f"[agent] {label} — done ✓"})
@@ -267,6 +268,29 @@ def build_sandbox_task(
         image_tag, container_id, port = await loop.run_in_executor(None, _docker_ops)
         publish({"log": f"[forge] container running on port {port} ✓"})
         _set_running(container_id, port, image_tag)
+
+        # ── CorrectnessValidator (hard gate: reset fidelity + snapshot/restore)
+        from forge.envgen.correctness_validator import (
+            CorrectnessValidator, CorrectnessValidationError,
+        )
+
+        base_url_c = f"http://localhost:{port}"
+        action_names = [a.name for a in compiler_input.actions]
+        publish({"log": "[forge] validating reset fidelity and snapshot/restore…"})
+        try:
+            c_result = await loop.run_in_executor(
+                None,
+                lambda: CorrectnessValidator(base_url=base_url_c).validate(action_names),
+            )
+        except Exception as _ce:  # container not ready / transport error
+            publish({"log": f"[forge] correctness validation could not run: {_ce}"})
+            c_result = None
+        if c_result is not None and not c_result.passed:
+            for finding in c_result.findings:
+                publish({"log": f"[forge] correctness FAIL [{finding.category}]: {finding.message}"})
+            raise CorrectnessValidationError(c_result)
+        if c_result is not None:
+            publish({"log": "[forge] correctness validation passed ✓"})
 
         # ── PostGenerationValidator ────────────────────────────────────────
         manifest_path = envs_root / env_name / "state_schema.json"

@@ -85,3 +85,44 @@ async def test_orchestrator_rejects_generated_path_traversal(tmp_path, monkeypat
             compiler_input=_compiler_input(),
         )
     assert not (tmp_path / "escape.py").exists()
+
+
+from forge.envgen.agents.reviewer import (
+    GenerationReview, GenerationReviewError, ReviewIssue, ReviewSeverity,
+)
+from backend.app.services.env_orchestrator import enforce_generation_gates
+
+
+def _approved() -> GenerationReview:
+    return GenerationReview(approved=True)
+
+
+def _rejected(category: str) -> GenerationReview:
+    return GenerationReview(
+        approved=False,
+        issues=[ReviewIssue(severity=ReviewSeverity.ERROR, category=category, message="bad")],
+    )
+
+
+@pytest.mark.asyncio
+async def test_gate_raises_when_correctness_report_rejects():
+    bus = ArtifactBus()
+    await bus.publish("review_report", _approved())
+    await bus.publish("correctness_report", _rejected("wall_clock"))
+    with pytest.raises(GenerationReviewError):
+        enforce_generation_gates(bus)
+
+
+@pytest.mark.asyncio
+async def test_gate_passes_when_both_reports_approve():
+    bus = ArtifactBus()
+    await bus.publish("review_report", _approved())
+    await bus.publish("correctness_report", _approved())
+    enforce_generation_gates(bus)  # does not raise
+
+
+@pytest.mark.asyncio
+async def test_gate_raises_when_review_report_missing():
+    bus = ArtifactBus()
+    with pytest.raises(RuntimeError):
+        enforce_generation_gates(bus)

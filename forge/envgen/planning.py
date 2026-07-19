@@ -116,6 +116,7 @@ class PromptPlannerAgent:
             "state_bridge": "Expose generated application state as an RL environment.",
             "policy": "Create policy constraints for the available actions.",
             "reward": "Create reward logic aligned with the requested RL behavior.",
+            "correctness_reviewer": "Audit generated code for determinism and reproducibility.",
             "reviewer": "Review requirement coverage and generated code quality.",
         }
         return descriptions.get(agent_id, f"Run the {agent_id} specialist for {ctx.env_name}.")
@@ -127,6 +128,11 @@ class PromptPlannerAgent:
                 "All required artifacts are present and non-empty.",
                 "Generated Python parses successfully.",
                 "The API, UI, actions, policy, reward, and RL bridge satisfy the user request.",
+            ]
+        if agent_id == "correctness_reviewer":
+            return [
+                "No wall-clock, unseeded randomness, or nondeterministic identifiers.",
+                "Determinism contract present; reset re-initializes clock and id counters.",
             ]
         if agent_id == "ui_builder":
             return [f"The UI represents the {ctx.compiler_input.domain} domain.",
