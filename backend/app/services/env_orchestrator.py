@@ -9,6 +9,7 @@ from forge.envgen.agents.app_generator import (
     BackendBuilderAgent,
     UIBuilderAgent,
 )
+from forge.envgen.agents.correctness import EnvironmentCorrectnessAgent
 from forge.envgen.agents.reviewer import GenerationReview, GenerationReviewError, ReviewerAgent
 from forge.envgen.agents.telemetry import TelemetryAgent
 from forge.envgen.agents.state_bridge import StateBridgeAgent
@@ -20,6 +21,18 @@ from forge.paths import confined_path, confined_relative_path, validate_path_seg
 from forge.settings import generated_envs_root
 from forge.envgen.executor import TaskExecutor
 from forge.envgen.planning import PromptPlannerAgent
+
+
+def enforce_generation_gates(bus: ArtifactBus) -> None:
+    """Raise if the reviewer or correctness specialist rejected the generation."""
+    review: GenerationReview | None = bus.get("review_report")
+    if review is None:
+        raise RuntimeError("Reviewer did not publish a review report")
+    if not review.approved:
+        raise GenerationReviewError(review)
+    correctness: GenerationReview | None = bus.get("correctness_report")
+    if correctness is not None and not correctness.approved:
+        raise GenerationReviewError(correctness)
 
 
 class EnvironmentOrchestrator:
@@ -70,6 +83,7 @@ class EnvironmentOrchestrator:
             StateBridgeAgent(),
             PolicyAgent(),
             RewardAgent(),
+            EnvironmentCorrectnessAgent(),
             ReviewerAgent(),
         ]
 
@@ -82,11 +96,7 @@ class EnvironmentOrchestrator:
             plan = PromptPlannerAgent().create_plan(ctx, agents)
             await bus.publish("generation_plan", plan)
             await TaskExecutor().execute(plan, agents, ctx, bus)
-            review: GenerationReview | None = bus.get("review_report")
-            if review is None:
-                raise RuntimeError("Reviewer did not publish a review report")
-            if not review.approved:
-                raise GenerationReviewError(review)
+            enforce_generation_gates(bus)
         self._write_artifacts(env_name, bus)
 
     @staticmethod
