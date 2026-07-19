@@ -1,7 +1,7 @@
 from __future__ import annotations
 import asyncio
 import time
-from forge.envgen.agents.base import EnvGenAgent
+from forge.envgen.agents.base import EnvGenAgent, with_correction
 from forge.envgen.artifact_bus import ArtifactBus
 from forge.envgen.context import EnvGenContext
 from forge.envgen.schemas import AppPlan, GeneratedFile
@@ -316,6 +316,7 @@ class BackendBuilderAgent(EnvGenAgent):
         research = bus.get("backend_research")
         if research is not None:
             app_context += f"\n\nRESEARCHED PRODUCT CONTEXT:\n{research.as_prompt()}"
+        app_context = with_correction(bus, self.agent_id, app_context)
 
         await bus.log(
             f"[backend-builder] Starting — "
@@ -458,6 +459,7 @@ class UIBuilderAgent(EnvGenAgent):
         research = bus.get("ui_research")
         if research is not None:
             app_context += f"\n\nRESEARCHED PRODUCT CONTEXT:\n{research.as_prompt()}"
+        app_context = with_correction(bus, self.agent_id, app_context)
 
         await bus.log("[ui-builder] Pass 1/2: HTML structure and CSS…")
         html_css = await self._call(AppGeneratorPrompts.HTML_CSS, app_context)
