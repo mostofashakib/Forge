@@ -1,5 +1,5 @@
 import pytest
-from forge.envgen.agents.app_generator import AppGeneratorAgent
+from forge.envgen.agents.app_generator import AppGeneratorAgent, AppGeneratorPrompts
 from forge.envgen.artifact_bus import ArtifactBus
 from forge.envgen.context import EnvGenContext
 from forge.envgen.schemas import AppPlan, FilePlan, GeneratedFile
@@ -80,3 +80,19 @@ async def test_app_generator_files_contain_generated_content():
 
     files = bus.get("app_code")
     assert files["main.py"] == content
+
+
+def test_backend_prompt_mandates_determinism_contract():
+    prompt = AppGeneratorPrompts.BACKEND
+    # Counter-based logical clock
+    assert "_FORGE_CLOCK" in prompt
+    assert "forge_now()" in prompt
+    # Sequential identifiers
+    assert "_ID_COUNTERS" in prompt
+    assert "_next_id(" in prompt
+    # Reset must re-initialize both counters
+    assert "reset" in prompt.lower()
+    assert "re-initialize" in prompt.lower() or "reinitialize" in prompt.lower()
+    # Wall-clock / random ids are banned
+    assert "utcnow" in prompt.lower()
+    assert "uuid" in prompt.lower()
