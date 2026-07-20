@@ -72,8 +72,10 @@ def test_load_forge_env_raises_on_nondeterministic_env(envs_dir):
         load_forge_env("det_bad_env", telemetry=None)
 
 
-def test_load_forge_env_skips_check_when_env_var_set(envs_dir, monkeypatch):
-    _write_env(envs_dir, "det_skip_env", _NONDETERMINISTIC_WRAPPER)
+def test_determinism_check_cannot_be_bypassed_by_env_var(envs_dir, monkeypatch):
+    # The check is mandatory: setting the (now-removed) bypass flag must NOT
+    # let a nondeterministic env load.
+    _write_env(envs_dir, "det_no_bypass_env", _NONDETERMINISTIC_WRAPPER)
     monkeypatch.setenv("FORGE_SKIP_DETERMINISM_CHECK", "1")
-    env = load_forge_env("det_skip_env", telemetry=None)
-    assert env is not None
+    with pytest.raises(DeterminismError):
+        load_forge_env("det_no_bypass_env", telemetry=None)
