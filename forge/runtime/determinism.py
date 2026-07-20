@@ -1,6 +1,5 @@
 from __future__ import annotations
 import hashlib
-import os
 from dataclasses import dataclass, field
 
 from forge.runtime.canonical import canonical_hash
@@ -8,8 +7,6 @@ from forge.runtime.errors import DeterminismError
 from forge.runtime.policy import seeded_random_policy
 
 __all__ = ["DeterminismError", "DeterminismReport", "run_determinism_check"]
-
-SKIP_ENV_VAR = "FORGE_SKIP_DETERMINISM_CHECK"
 
 
 @dataclass
@@ -19,7 +16,6 @@ class DeterminismReport:
     observation_hash: str
     actions: list[dict] = field(default_factory=list)
     total_reward: float = 0.0
-    skipped: bool = False
 
 
 def _rollout(
@@ -81,12 +77,10 @@ def run_determinism_check(
     raises DeterminismError if the hashes differ. Leaves the env in a stepped
     state — callers must reset() before normal use.
 
-    Setting FORGE_SKIP_DETERMINISM_CHECK=1 skips the check everywhere it is
-    wired (env loader, CLI, EnvBuilder) and returns a report with skipped=True.
+    The check is mandatory: it is wired into the env loader, CLI, and EnvBuilder
+    and cannot be bypassed. A generated environment that is not reproducible
+    fails to load.
     """
-    if os.environ.get(SKIP_ENV_VAR) == "1":
-        return DeterminismReport(passed=True, seed=seed, observation_hash="", skipped=True)
-
     first_hashes, taken, first_total = _rollout(env, seed, num_steps, actions)
     second_hashes, _, _second_total = _rollout(env, seed, num_steps, taken if actions is None else actions)
 
