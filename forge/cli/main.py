@@ -93,8 +93,7 @@ def _verify_determinism(env_instance, seed: int) -> None:
     except DeterminismError as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(1)
-    if not report.skipped:
-        typer.echo(f"Determinism check passed (obs hash {report.observation_hash[:16]})")
+    typer.echo(f"Determinism check passed (obs hash {report.observation_hash[:16]})")
 
 
 @app.command()
@@ -690,7 +689,7 @@ def benchmark_run(
         cfg_ep = EpisodeConfig(base_url=f"http://localhost:{port}", objective=task.objective)
         agent = make_container_agent("random", seed=seed)
         with ContainerEpisodeRunner(cfg_ep, manifest=manifest) as runner:
-            result = runner.run_episode(agent, jsonl_path=jsonl_path)
+            result = runner.run_episode(agent, jsonl_path=jsonl_path, seed=seed)
         typer.echo(f"  {task.name} seed={seed}  reward={result.total_reward:.3f}  reason={result.termination_reason}")
 
     typer.echo(f"[benchmark] collecting episodes (domains={domain_list} depth={depth} seeds={seeds})…")

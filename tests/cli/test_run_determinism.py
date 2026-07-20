@@ -74,11 +74,13 @@ def test_run_fails_on_nondeterministic_env(cli_root):
     assert "not deterministic" in result.output.lower()
 
 
-def test_run_skips_check_when_env_var_set(cli_root, monkeypatch):
-    _write_env(cli_root, "cli_det_skip", "__import__('time').time_ns()")
+def test_determinism_check_cannot_be_bypassed_by_env_var(cli_root, monkeypatch):
+    # Mandatory check: the removed bypass flag must not rescue a bad env.
+    _write_env(cli_root, "cli_det_no_bypass", "__import__('time').time_ns()")
     monkeypatch.setenv("FORGE_SKIP_DETERMINISM_CHECK", "1")
-    result = runner.invoke(app, ["run", "--env", "cli_det_skip", "--steps", "3"])
-    assert result.exit_code == 0
+    result = runner.invoke(app, ["run", "--env", "cli_det_no_bypass", "--steps", "3"])
+    assert result.exit_code != 0
+    assert "not deterministic" in result.output.lower()
 
 
 def test_export_fails_on_nondeterministic_env(cli_root):
