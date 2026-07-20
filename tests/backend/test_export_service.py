@@ -97,6 +97,36 @@ def test_sft_pairs_passed_only(db_with_episodes, tmp_path, monkeypatch):
     assert len(lines) == 6
 
 
+def test_write_trajectories_for_unknown_env_is_empty(db_with_episodes, tmp_path):
+    # Negative/boundary: an env with no matching episodes must export nothing,
+    # not the rows belonging to a different env.
+    _write_trajectories("no_such_env", db_with_episodes, tmp_path)
+    out = tmp_path / "trajectories.jsonl"
+    content = out.read_text().strip() if out.exists() else ""
+    assert content == ""
+
+
+def test_sft_pairs_exclude_failed_episodes(db_with_episodes, tmp_path, monkeypatch):
+    # False-positive guard: failed episodes (i=1,3) must NOT contribute SFT
+    # pairs even though they exist in the same env.
+    monkeypatch.setattr("backend.app.services.export_service.BASE_DIR", tmp_path)
+    job = ExportJob(
+        id="ex_sftneg01",
+        env_name="test_env",
+        formats=json.dumps(["sft_pairs"]),
+        status="pending",
+        created_at=datetime.now(timezone.utc),
+    )
+    db_with_episodes.add(job)
+    db_with_episodes.commit()
+    run_export("ex_sftneg01", db_with_episodes)
+    db_with_episodes.refresh(job)
+    lines = (Path(job.output_path) / "sft_pairs.jsonl").read_text().strip().split("\n")
+    # Only the 2 passed episodes (6 steps) qualify — not all 4 (12 steps).
+    assert len(lines) != 12
+    assert len(lines) == 6
+
+
 def test_preference_pairs(db_with_episodes, tmp_path, monkeypatch):
     monkeypatch.setattr("backend.app.services.export_service.BASE_DIR", tmp_path)
     job = ExportJob(
