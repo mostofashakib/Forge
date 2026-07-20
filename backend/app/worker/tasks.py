@@ -274,7 +274,7 @@ def build_sandbox_task(
         publish({"log": f"[forge] container running on port {port} ✓"})
         _set_running(container_id, port, image_tag)
 
-        # ── CorrectnessValidator (hard gate: reset fidelity + snapshot/restore)
+        # ── CorrectnessValidator (hard gate: reset fidelity + snapshot/restore + seed control)
         from forge.envgen.correctness_validator import (
             CorrectnessValidator, CorrectnessValidationError,
         )
@@ -792,7 +792,7 @@ def run_benchmark_task(
             cfg_ep = EpisodeConfig(base_url=f"http://localhost:{port}", objective=task.objective)
             agent = make_container_agent("random", seed=seed)
             with ContainerEpisodeRunner(cfg_ep, manifest=manifest) as runner:
-                result = runner.run_episode(agent, jsonl_path=jsonl_path)
+                result = runner.run_episode(agent, jsonl_path=jsonl_path, seed=seed)
 
             completed += 1
             publish({"log": f"  {task.name} seed={seed}  reward={result.total_reward:.3f}  reason={result.termination_reason}"})

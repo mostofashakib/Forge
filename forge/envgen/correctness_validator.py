@@ -9,6 +9,11 @@ from forge.schema.state_schema import StateSchemaManifest
 
 logger = logging.getLogger(__name__)
 
+# Two distinct non-default seeds used to prove seed control: same seed → same
+# state, different seed → different state.
+_SEED_A = 101
+_SEED_B = 202
+
 
 @dataclass
 class CorrectnessFinding:
@@ -30,7 +35,8 @@ class CorrectnessValidationError(RuntimeError):
 
 
 class CorrectnessValidator:
-    """Proves reset fidelity and snapshot/restore round-trips on a live container."""
+    """Proves reset fidelity, snapshot/restore round-trips, and seed control on a
+    live container."""
 
     def __init__(self, base_url: str, http_timeout: float = 10.0) -> None:
         self._base_url = base_url.rstrip("/")
@@ -49,6 +55,9 @@ class CorrectnessValidator:
 
             def reset() -> None:
                 client.post("/forge/reset").raise_for_status()
+
+            def reset_seeded(seed: int) -> None:
+                client.post("/forge/reset", json={"seed": seed}).raise_for_status()
 
             def mutate() -> None:
                 for name in action_names:
@@ -91,5 +100,27 @@ class CorrectnessValidator:
                             "snapshot_restore",
                             f"Restored state is missing declared field {fname!r}",
                         ))
+
+            # ── Seed control ──────────────────────────────────────────────
+            # The same seed must reproduce an identical starting state, and
+            # distinct seeds must produce different-but-reproducible ones.
+            reset_seeded(_SEED_A)
+            seed_a_first = state()
+            reset_seeded(_SEED_A)
+            seed_a_second = state()
+            if seed_a_first != seed_a_second:
+                findings.append(CorrectnessFinding(
+                    "seed_control",
+                    f"The same seed ({_SEED_A}) produced different starting states",
+                ))
+            reset_seeded(_SEED_B)
+            seed_b = state()
+            if seed_b == seed_a_first:
+                findings.append(CorrectnessFinding(
+                    "seed_control",
+                    f"Different seeds ({_SEED_A} vs {_SEED_B}) produced identical "
+                    "starting state — the seed is ignored",
+                ))
+            reset()  # leave the env at its baseline for callers
 
         return CorrectnessValidationResult(passed=not findings, findings=findings)
