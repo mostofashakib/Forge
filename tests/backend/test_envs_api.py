@@ -46,6 +46,39 @@ def test_list_envs_returns_env_names(client, tmp_path, monkeypatch):
     assert "other_env" in names
 
 
+def _insert_sandbox(env_name, status, expires_at):
+    from backend.app import database
+    from backend.app.models import SandboxEnvironment
+    db = database.get_session_factory()()
+    try:
+        db.add(SandboxEnvironment(id=env_name, status=status, ttl_days=30, expires_at=expires_at))
+        db.commit()
+    finally:
+        db.close()
+
+
+def test_list_envs_excludes_deleted_and_expired_sandbox_dirs(client, tmp_path, monkeypatch):
+    """A generated env directory whose sandbox is expired/time-expired must not
+    appear in inventory; an orphan dir with no sandbox row still shows."""
+    from datetime import datetime, timezone, timedelta
+    envs_dir = tmp_path / "generated_envs"
+    for name in ("active_env", "expired_env", "lapsed_env", "orphan_env"):
+        (envs_dir / name).mkdir(parents=True)
+    monkeypatch.setenv("FORGE_GENERATED_ENVS_DIR", str(envs_dir))
+
+    future = datetime.now(timezone.utc) + timedelta(days=1)
+    past = datetime.now(timezone.utc) - timedelta(days=1)
+    _insert_sandbox("active_env", "running", future)
+    _insert_sandbox("expired_env", "expired", past)
+    _insert_sandbox("lapsed_env", "running", past)  # time-expired, not yet swept
+
+    names = client.get("/api/envs/").json()
+    assert "active_env" in names
+    assert "orphan_env" in names  # compiled but never sandboxed — still valid inventory
+    assert "expired_env" not in names
+    assert "lapsed_env" not in names
+
+
 def test_get_config_returns_yaml(client, tmp_path, monkeypatch, env_with_config):
     response = client.get("/api/envs/my_env/config")
     assert response.status_code == 200
