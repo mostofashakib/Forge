@@ -62,7 +62,11 @@ class ContainerEnvBase(gymnasium.Env):
 
     def reset(self, seed=None, options=None) -> tuple[dict, dict]:
         super().reset(seed=seed)
-        response = self.client.post(f"{self.base_url}/forge/reset")
+        # Thread the seed to the app so the same seed reproduces the same
+        # starting universe and different seeds yield different-but-reproducible
+        # ones. An unseeded reset resets to the app's fixed baseline.
+        json_body = {"seed": seed} if seed is not None else None
+        response = self.client.post(f"{self.base_url}/forge/reset", json=json_body)
         response.raise_for_status()
         return self._observe(), {}
 

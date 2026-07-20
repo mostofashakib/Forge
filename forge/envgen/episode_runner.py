@@ -168,8 +168,11 @@ class ContainerEpisodeRunner:
         resp.raise_for_status()
         return resp.json()
 
-    def _reset(self) -> dict:
-        self._http.post("/forge/reset")
+    def _reset(self, seed: int | None = None) -> dict:
+        # Thread the seed so the app rebuilds a reproducible, seed-specific
+        # starting universe; an unseeded reset restores the fixed baseline.
+        body = {"seed": seed} if seed is not None else None
+        self._http.post("/forge/reset", json=body)
         return self._get_state()
 
     def _discover_actions(self) -> list[dict]:
@@ -233,6 +236,7 @@ class ContainerEpisodeRunner:
         agent: ContainerAgentBase,
         episode_id: str | None = None,
         jsonl_path: Path | None = None,
+        seed: int | None = None,
     ) -> EpisodeResult:
         if episode_id is None:
             episode_id = f"cep_{secrets.token_hex(6)}"
@@ -254,7 +258,7 @@ class ContainerEpisodeRunner:
 
         # Reset the environment
         try:
-            state = self._reset()
+            state = self._reset(seed=seed)
         except Exception as exc:
             logger.error("[%s] reset failed: %s", episode_id, exc)
             result.termination_reason = f"reset_failed: {exc}"
@@ -399,7 +403,11 @@ class ContainerEpisodeRunner:
             logger.info(
                 "[runner] episode %d/%d  id=%s", i + 1, num_episodes, episode_id
             )
-            result = self.run_episode(agent, episode_id=episode_id, jsonl_path=jsonl_path)
+            # Each episode gets a distinct, reproducible seed so rollouts cover
+            # different starting universes deterministically.
+            result = self.run_episode(
+                agent, episode_id=episode_id, jsonl_path=jsonl_path, seed=seed_start + i
+            )
             results.append(result)
         return results
 

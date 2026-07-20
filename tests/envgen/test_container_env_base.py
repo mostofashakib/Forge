@@ -36,6 +36,36 @@ def test_reset_calls_forge_reset_and_returns_state():
     assert info == {}
 
 
+def _reset_body_capture():
+    """Handler that records the JSON body posted to /forge/reset."""
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/forge/reset":
+            captured["body"] = json.loads(request.content) if request.content else None
+            return httpx.Response(200, json={"ok": True})
+        if request.url.path == "/forge/state":
+            return httpx.Response(200, json={"todos": {}})
+        return httpx.Response(404, json={"error": "no such endpoint"})
+
+    return handler, captured
+
+
+def test_reset_forwards_seed_to_forge_reset():
+    handler, captured = _reset_body_capture()
+    env = make_env(handler)
+    env.reset(seed=1234)
+    assert captured["body"] == {"seed": 1234}
+
+
+def test_reset_without_seed_sends_no_seed():
+    # An unseeded reset must not pin the app to a seed — it resets to baseline.
+    handler, captured = _reset_body_capture()
+    env = make_env(handler)
+    env.reset()
+    assert captured["body"] in (None, {})
+
+
 def test_step_posts_action_type_endpoint_and_observes():
     state = {}
     env = make_env(app_handler(state))
