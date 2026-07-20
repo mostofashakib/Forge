@@ -36,7 +36,9 @@ def client(tmp_path, monkeypatch):
     return TestClient(app)
 
 
-def _add_sandbox(client, env_name: str, status: str = "running") -> None:
+def _add_sandbox(
+    client, env_name: str, status: str = "running", expires_at: datetime | None = None
+) -> None:
     """Directly insert a SandboxEnvironment row (bypasses the POST endpoint)."""
     from backend.app import database
     db: Session = database.get_session_factory()()
@@ -45,7 +47,7 @@ def _add_sandbox(client, env_name: str, status: str = "running") -> None:
             id=env_name,
             status=status,
             ttl_days=30,
-            expires_at=datetime.now(timezone.utc) + timedelta(days=30),
+            expires_at=expires_at or (datetime.now(timezone.utc) + timedelta(days=30)),
         ))
         db.commit()
     finally:
@@ -260,6 +262,31 @@ def test_list_sandboxes_excludes_deleted(client):
     assert "active_env" in ids
     assert "dead_env" not in ids
     assert "old_env" not in ids
+
+
+def test_list_sandboxes_excludes_time_expired_before_sweep(client):
+    """A row past its expires_at must not show in inventory even if the periodic
+    cleanup sweep has not yet flipped its status to 'expired'."""
+    past = datetime.now(timezone.utc) - timedelta(days=1)
+    _add_sandbox(client, "active_env", status="running")
+    _add_sandbox(client, "lapsed_env", status="running", expires_at=past)
+
+    resp = client.get("/api/sandbox/")
+    assert resp.status_code == 200
+    ids = [s["id"] for s in resp.json()]
+    assert "active_env" in ids
+    assert "lapsed_env" not in ids
+
+
+def test_capacity_excludes_time_expired_before_sweep(client):
+    """A time-expired row must not count toward the active capacity either."""
+    past = datetime.now(timezone.utc) - timedelta(days=1)
+    _add_sandbox(client, "active_env", status="running")
+    _add_sandbox(client, "lapsed_env", status="running", expires_at=past)
+
+    resp = client.get("/api/sandbox/capacity")
+    assert resp.status_code == 200
+    assert resp.json()["active_count"] == 1
 
 
 def test_delete_sandbox_removes_record(client, tmp_path):
