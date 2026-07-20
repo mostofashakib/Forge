@@ -480,7 +480,15 @@ def test_stop_sandbox_surfaces_container_failure(client):
 
     assert response.status_code == 500
     assert "Failed to stop container" in response.json()["detail"]
-    assert client.get("/api/sandbox/stop_failure").json()["status"] == "running"
+    # The failed stop must not have persisted a "stopped" status. Read the row
+    # directly rather than via GET, which reconciles against the live Docker
+    # daemon and would independently demote a now-missing container to
+    # "stopped" when Docker happens to be running.
+    verify_db: Session = database.get_session_factory()()
+    try:
+        assert verify_db.get(SandboxEnvironment, "stop_failure").status == "running"
+    finally:
+        verify_db.close()
 
 
 def test_logs_endpoint_returns_container_output(client):
