@@ -645,6 +645,55 @@ def diagnose(
     typer.echo("")
 
 
+@app.command()
+def train(
+    data_dir: Path = typer.Option(..., "--data", help="Directory containing exported graded rollouts"),
+    base_model: str = typer.Option(..., "--base-model", help="Base policy checkpoint to update"),
+    output: Path = typer.Option(Path("forge_policy"), "--output", "-o", help="Checkpoint output directory"),
+    objective: str = typer.Option("grpo", "--objective", help="Training objective: grpo | dpo"),
+    max_steps: int = typer.Option(500, "--max-steps"),
+) -> None:
+    """Train Forge's own policy from its own graded rollouts (GRPO / DPO).
+
+    Consumes `grpo_rollouts.parquet` (GRPO) or `preference_pairs.jsonl` (DPO)
+    exported from graded episodes and writes a policy checkpoint the runtime
+    agents can load. Requires trl + transformers on a GPU node.
+    """
+    from forge.training.trainer import (
+        NoTrainingSignalError,
+        PolicyTrainer,
+        TrainingConfig,
+        TrainingObjective,
+    )
+    from forge.training.dataset import MalformedExportError
+
+    try:
+        obj = TrainingObjective(objective.lower())
+    except ValueError:
+        typer.echo(f"Error: unknown objective {objective!r}; use 'grpo' or 'dpo'", err=True)
+        raise typer.Exit(2)
+
+    try:
+        result = PolicyTrainer().train(TrainingConfig(
+            data_dir=data_dir, base_model=base_model, output_dir=output,
+            objective=obj, max_steps=max_steps,
+        ))
+    except NoTrainingSignalError as exc:
+        typer.echo(f"No training signal: {exc}", err=True)
+        raise typer.Exit(1)
+    except MalformedExportError as exc:
+        typer.echo(f"Malformed export: {exc}", err=True)
+        raise typer.Exit(1)
+    except (RuntimeError, NotImplementedError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(1)
+
+    typer.echo(
+        f"Trained {result.objective} policy on {result.num_examples} examples "
+        f"(mean reward {result.mean_reward:.3f}) → {result.checkpoint_path}"
+    )
+
+
 # ── Benchmark sub-app ──────────────────────────────────────────────────────
 
 benchmark_app = typer.Typer(name="benchmark", help="Benchmark Forge environments against established RL benchmarks.", no_args_is_help=True)
