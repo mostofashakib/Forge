@@ -108,6 +108,19 @@ def test_backend_prompt_mandates_state_management_class():
     assert "STATE.reset_state()" in prompt
 
 
+def test_backend_prompt_mandates_seeded_reset():
+    prompt = AppGeneratorPrompts.BACKEND
+    lower = prompt.lower()
+    # /forge/reset accepts an optional seed in the request body.
+    assert '"seed"' in prompt or "'seed'" in prompt
+    # A seeded reset delegates to STATE.seed_state(seed); unseeded → baseline.
+    assert "STATE.seed_state(seed)" in prompt
+    # seed_state must draw from a seeded RNG so distinct seeds diverge but the
+    # same seed reproduces.
+    assert "random.Random(seed)" in prompt
+    assert "same seed" in lower and "different seed" in lower
+
+
 def test_backend_prompt_mandates_typed_dict_returns():
     prompt = AppGeneratorPrompts.BACKEND.lower()
     assert "typed" in prompt
