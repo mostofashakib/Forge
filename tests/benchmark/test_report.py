@@ -48,3 +48,13 @@ def test_report_all_metrics_in_csv(tmp_path):
     content = (tmp_path / "env_quality.csv").read_text()
     for col in ["env_name", "state_coverage_score", "reward_density", "dead_end_rate", "action_diversity"]:
         assert col in content
+
+
+def test_report_with_no_metrics_writes_empty_quality(tmp_path):
+    # Boundary/false-positive guard: an empty metrics list must produce an empty
+    # summary, not crash and not fabricate rows.
+    cfg = ReportConfig(output_dir=tmp_path)
+    report = BenchmarkReport(cfg)
+    report.write_env_quality([])
+    data = json.loads((tmp_path / "summary.json").read_text())
+    assert data["env_quality"] == []

@@ -50,6 +50,10 @@ def test_full_pipeline_generates_importable_package():
         assert (pkg_dir / "gym_wrapper.py").exists()
         assert (pkg_dir / "transitions" / "increment.py").exists()
         assert (pkg_dir / "verifiers" / "reach_target.py").exists()
+        # False-positive guard: the builder must not emit artifacts for actions
+        # or tasks the input never declared.
+        assert not (pkg_dir / "transitions" / "decrement.py").exists()
+        assert not (pkg_dir / "verifiers" / "nonexistent_task.py").exists()
 
 
 def test_full_pipeline_validation_runner_executes():

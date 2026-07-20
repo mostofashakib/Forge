@@ -61,6 +61,18 @@ def test_decorators_return_original_function():
     assert my_fn(None, None, None) == "hello"
 
 
+def test_unregistered_action_is_absent():
+    # False-positive guard: only explicitly-decorated names appear — the
+    # registry never fabricates an entry for an action nobody registered.
+    clear_registry()
+    @override_transition("only_this")
+    def fn(s, a, c):
+        pass
+    reg = get_registry()
+    assert "never_registered" not in reg["transitions"]
+    assert "only_this" not in reg["verifiers"]
+
+
 def test_get_registry_returns_copy():
     clear_registry()
     @override_transition("w")
