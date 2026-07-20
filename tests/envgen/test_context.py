@@ -1,3 +1,6 @@
+import pytest
+from pydantic import ValidationError
+
 from forge.envgen.context import EnvGenContext
 from forge.envgen.schemas import GeneratedApp, GeneratedFile, FileContent
 from forge.extraction.schemas import CompilerInput
@@ -24,3 +27,17 @@ def test_generated_app_serializes():
 def test_generated_file_serializes():
     f = GeneratedFile(content="def compute_reward(): pass")
     assert "compute_reward" in f.content
+
+
+def test_file_content_rejects_missing_required_fields():
+    # Negative: a FileContent without its required fields must be rejected, not
+    # silently constructed with empty defaults.
+    with pytest.raises(ValidationError):
+        FileContent()
+
+
+def test_generated_app_with_no_files_is_empty():
+    # False-positive guard: an app declared with no files stays empty — the
+    # schema must not backfill a placeholder file.
+    app = GeneratedApp(files=[])
+    assert app.files == []

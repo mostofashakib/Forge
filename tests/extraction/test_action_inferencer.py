@@ -18,3 +18,10 @@ def test_action_inferencer_returns_action_list():
     actions = inferencer.extract("A ticketing system", entities=[])
     assert len(actions) == 1
     assert actions[0].name == "close_ticket"
+
+
+def test_empty_llm_result_yields_no_actions():
+    # False-positive guard: when the model finds no actions, the inferencer must
+    # return an empty list — never fabricate a phantom action.
+    client = MockLLMClient({"ActionExtractionResult": ActionExtractionResult(actions=[])})
+    assert ActionInferencer(client).extract("nothing actionable", entities=[]) == []
