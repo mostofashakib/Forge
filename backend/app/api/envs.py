@@ -3,7 +3,9 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 from forge.settings import generated_envs_root
-from fastapi import APIRouter, Depends, HTTPException
+from forge.paths import confined_path
+from forge.envgen.source_bundle import SourceBundleError, build_source_bundle
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from backend.app.database import get_db
@@ -59,6 +61,25 @@ def update_config(env_name: str, payload: ConfigPayload) -> ConfigPayload:
 def get_env_stats(env_name: str, db: Session = Depends(get_db)):
     _validate_env_name(env_name)
     return episode_service.get_stats(env_name, db)
+
+
+@router.get("/{env_name}/download")
+def download_env_source(env_name: str) -> Response:
+    """Download a generated environment as a standalone, runnable source zip."""
+    _validate_env_name(env_name)
+    try:
+        env_dir = confined_path(_envs_root(), env_name)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid environment name")
+    try:
+        data = build_source_bundle(env_dir, env_name)
+    except SourceBundleError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return Response(
+        content=data,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{env_name}.zip"'},
+    )
 
 
 @router.delete("/{env_name}", status_code=204)
