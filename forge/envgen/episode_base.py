@@ -35,9 +35,13 @@ class BaseEpisodeResult:
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     completed_at: datetime | None = None
 
+    def _step_to_dict(self, step) -> dict:
+        """One step as a JSON-serializable dict; override when steps aren't dicts."""
+        return step
+
     def _step_dicts(self) -> list[dict]:
-        """Steps as JSON-serializable dicts; override when steps aren't dicts."""
-        return self.steps
+        """Steps as JSON-serializable dicts."""
+        return [self._step_to_dict(step) for step in self.steps]
 
     def summary(self) -> dict:
         return {
@@ -58,6 +62,43 @@ class BaseEpisodeResult:
     def write_jsonl(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(self.to_jsonl(), encoding="utf-8")
+
+
+class TrajectoryWriter:
+    """Appends step records to a JSONL file as they happen.
+
+    Writing each step immediately (and flushing) means a run that crashes or is
+    killed mid-episode still leaves a durable, replayable partial trace — unlike
+    ``write_jsonl``, which persists the whole trajectory only once the episode
+    finishes. The episode summary is appended on ``close()`` (including when the
+    episode exits via an exception), so the file always ends with a summary line.
+    """
+
+    def __init__(self, path: Path, result: BaseEpisodeResult) -> None:
+        self._result = result
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._fh = path.open("w", encoding="utf-8")
+        self._closed = False
+
+    def record(self, step) -> None:
+        self._fh.write(json.dumps(self._result._step_to_dict(step)) + "\n")
+        self._fh.flush()
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self._fh.write(json.dumps(self._result.summary()) + "\n")
+            self._fh.flush()
+        finally:
+            self._fh.close()
+
+    def __enter__(self) -> "TrajectoryWriter":
+        return self
+
+    def __exit__(self, *_exc) -> None:
+        self.close()
 
 
 class TerminationMonitor:
