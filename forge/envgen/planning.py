@@ -114,6 +114,7 @@ class PromptPlannerAgent:
             "app_assembler": "Combine backend and UI outputs without changing either concern.",
             "telemetry": "Instrument state-changing API operations for episode telemetry.",
             "state_bridge": "Expose generated application state as an RL environment.",
+            "scenario_builder": "Design diverse, product-grounded initial-state scenarios with distractors, ordering-sensitivity, and conflicting information.",
             "policy": "Create policy constraints for the available actions.",
             "reward": "Create reward logic aligned with the requested RL behavior.",
             "correctness_reviewer": "Audit generated code for determinism and reproducibility.",
@@ -137,4 +138,10 @@ class PromptPlannerAgent:
         if agent_id == "ui_builder":
             return [f"The UI represents the {ctx.compiler_input.domain} domain.",
                     "Every declared action is available through the interface."]
+        if agent_id == "scenario_builder":
+            return [
+                "At least two scenarios with distinct, reproducible seeds.",
+                "Distractors, an ordering-sensitive case, and conflicting information all appear.",
+                "Each scenario declares required/forbidden actions and an expected answer.",
+            ]
         return [f"Outputs are complete and usable for: {ctx.description}"]
