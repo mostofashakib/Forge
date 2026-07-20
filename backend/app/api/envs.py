@@ -1,15 +1,17 @@
 # backend/app/api/envs.py
 from __future__ import annotations
 import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 from forge.settings import generated_envs_root
 from forge.paths import confined_path
 from forge.envgen.source_bundle import SourceBundleError, build_source_bundle
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from backend.app.database import get_db
-from backend.app.models import CompileJob
+from backend.app.models import CompileJob, SandboxEnvironment
 from backend.app.services import episode_service
 from forge.extraction.schemas import CompilerInput
 
@@ -29,12 +31,34 @@ class ConfigPayload(BaseModel):
     yaml: str
 
 
+def _inactive_env_names(db: Session) -> set[str]:
+    """Names of environments whose sandbox is deleted, expired, or past its TTL.
+
+    These must not appear in active inventory even though their generated source
+    directory still exists on disk (the expiry sweep tears down the container but
+    leaves the files, and only runs periodically)."""
+    rows = (
+        db.query(SandboxEnvironment.id)
+        .filter(
+            or_(
+                SandboxEnvironment.status.in_(["deleted", "expired"]),
+                SandboxEnvironment.expires_at <= datetime.now(timezone.utc),
+            )
+        )
+        .all()
+    )
+    return {row.id for row in rows}
+
+
 @router.get("/", response_model=list[str])
-def list_envs() -> list[str]:
+def list_envs(db: Session = Depends(get_db)) -> list[str]:
     root = _envs_root()
     if not root.exists():
         return []
-    return sorted(p.name for p in root.iterdir() if p.is_dir())
+    inactive = _inactive_env_names(db)
+    return sorted(
+        p.name for p in root.iterdir() if p.is_dir() and p.name not in inactive
+    )
 
 
 @router.get("/{env_name}/config", response_model=ConfigPayload)

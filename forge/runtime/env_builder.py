@@ -187,6 +187,42 @@ class EnvBuilder:
         self._verifiers[verifier_id] = fn
         return self
 
+    def with_composed_verifier(
+        self, task, scenario=None, judge_client: Callable | None = None
+    ) -> "EnvBuilder":
+        """Register a multi-tiered verifier composed for ``task`` under its name.
+
+        Wraps :class:`~forge.runtime.verifier_composer.VerifierComposer`: the
+        task's success/failure conditions and the scenario ground truth are
+        mapped onto the state, invariant, trajectory, judge, and negative tiers.
+        """
+        from forge.runtime.verifier_composer import VerifierComposer
+
+        verifier = VerifierComposer().compose(
+            task, scenario=scenario, judge_client=judge_client, verifier_id=task.name
+        )
+        return self.with_verifier(task.name, verifier)
+
+    def with_scenario_scoring(
+        self, mode, weights: dict | None = None, task_name: str | None = None
+    ) -> "EnvBuilder":
+        """Score episodes binary (pass/fail) or partial (weighted per-tier).
+
+        Registers a reward function that turns the episode's verifier result
+        into a :class:`RewardBreakdown` via the composer's scoring policy.
+        """
+        from forge.runtime.reward import RewardBreakdown
+        from forge.runtime.verifier_composer import VerifierComposer
+
+        composer = VerifierComposer()
+
+        def reward_fn(state, trajectory, verifier_results, task):
+            if not verifier_results:
+                return RewardBreakdown(total_reward=0.0, components=[])
+            return composer.score(verifier_results[0], mode, weights)
+
+        return self.with_reward(reward_fn, task_name=task_name)
+
     def with_reward(self, fn: Callable, task_name: str | None = None) -> "EnvBuilder":
         if task_name is None:
             self._default_reward = fn

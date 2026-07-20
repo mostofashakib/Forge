@@ -88,12 +88,21 @@ class SandboxCapacityResponse(BaseModel):
     limit: int
 
 
+def _active_criteria() -> list:
+    """Predicate for a genuinely active sandbox.
+
+    A sandbox is inactive if it was deleted/expired *or* its TTL has already
+    lapsed — even when the periodic cleanup sweep has not yet flipped its
+    status, a time-expired environment must never appear in active inventory.
+    """
+    return [
+        SandboxEnvironment.status.notin_(["deleted", "expired"]),
+        SandboxEnvironment.expires_at > datetime.now(timezone.utc),
+    ]
+
+
 def _active_sandbox_count(db: Session) -> int:
-    return (
-        db.query(SandboxEnvironment)
-        .filter(SandboxEnvironment.status.notin_(["deleted", "expired"]))
-        .count()
-    )
+    return db.query(SandboxEnvironment).filter(*_active_criteria()).count()
 
 
 def _remove_undispatched_sandbox(db: Session, sandbox: SandboxEnvironment) -> None:
@@ -209,7 +218,7 @@ async def create_sandbox(request: CreateSandboxRequest, db: Session = Depends(ge
 def list_sandboxes(db: Session = Depends(get_db)):
     return (
         db.query(SandboxEnvironment)
-        .filter(SandboxEnvironment.status.notin_(["deleted", "expired"]))
+        .filter(*_active_criteria())
         .order_by(SandboxEnvironment.created_at.desc())
         .all()
     )
