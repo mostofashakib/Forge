@@ -55,6 +55,7 @@ __pycache__/
 
 # visual companion brainstorm sessions
 .superpowers/
+superpowers/
 
 # generated environments
 generated_envs/*
