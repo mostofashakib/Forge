@@ -11,6 +11,7 @@ from forge.envgen.episode_base import (
     BaseEpisodeConfig,
     BaseEpisodeResult,
     TerminationMonitor,
+    TrajectoryWriter,
 )
 from forge.envgen.objective import ObjectiveScorer
 from forge.runtime.interaction import BrowserUse, BrowserUseSchema
@@ -119,6 +120,9 @@ class BrowserEpisodeRunner:
             return result
 
         monitor = TerminationMonitor(self._cfg)
+        # Persist each step as it happens so a crash mid-episode still leaves a
+        # durable, replayable partial trace.
+        writer = TrajectoryWriter(jsonl_path, result) if jsonl_path is not None else None
 
         try:
             with sync_playwright() as pw:
@@ -163,6 +167,8 @@ class BrowserEpisodeRunner:
                         "reward": score,
                     }
                     result.steps.append(step_record)
+                    if writer is not None:
+                        writer.record(step_record)
                     result.final_objective_score = score
 
                     logger.info(
@@ -185,6 +191,6 @@ class BrowserEpisodeRunner:
         result.completed_at = datetime.now(timezone.utc)
         if result.steps:
             result.total_reward = result.total_reward / len(result.steps)
-        if jsonl_path is not None:
-            result.write_jsonl(jsonl_path)
+        if writer is not None:
+            writer.close()
         return result

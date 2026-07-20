@@ -76,6 +76,24 @@ class BrowserContractViolation(InvalidActionError):
     default_code = "BROWSER_CONTRACT_VIOLATION"
 
 
+class MCPContractViolation(InvalidActionError):
+    """MCP tool call breaking the MCPUseSchema contract."""
+
+    default_code = "MCP_CONTRACT_VIOLATION"
+
+
+class RESTContractViolation(InvalidActionError):
+    """REST call breaking the RESTUseSchema contract."""
+
+    default_code = "REST_CONTRACT_VIOLATION"
+
+
+class ORPCContractViolation(InvalidActionError):
+    """oRPC procedure call breaking the ORPCUseSchema contract."""
+
+    default_code = "ORPC_CONTRACT_VIOLATION"
+
+
 class ResetRequiredError(ForgeError, RuntimeError):
     """Environment used before reset() established an episode."""
 
