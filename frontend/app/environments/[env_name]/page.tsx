@@ -299,6 +299,15 @@ export default async function EnvironmentHubPage({
             status={sandbox?.status ?? ""}
             hasSandbox={hasSandbox}
           />
+          <a
+            href={`${API_BASE}/api/envs/${env_name}/download`}
+            className="inline-flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-lg border border-border/60 hover:bg-muted/40 transition-colors"
+            download
+            title="Download this environment as a standalone, runnable source zip"
+          >
+            <ExportIcon />
+            Download source
+          </a>
           </div>
         </div>
 
