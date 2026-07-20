@@ -17,6 +17,11 @@ _NONDET_ID_ROOTS = ("secrets",)
 # Functions whose bodies are telemetry envelopes — exempt from the audit.
 _TELEMETRY_EMITTERS = {"emit_event", "emit", "_emit_event", "record_event"}
 
+# Authoring contract: the state-management class must expose both of these.
+_STATE_METHODS = ("reset_state", "seed_state")
+# HTTP verbs whose decorators mark a function as a route handler.
+_ROUTE_VERBS = {"get", "post", "put", "patch", "delete"}
+
 
 def _dotted(node: ast.AST) -> str:
     if isinstance(node, ast.Attribute):
@@ -132,6 +137,117 @@ def audit_determinism(files: dict[str, str]) -> list[ReviewIssue]:
     return issues
 
 
+def _is_route_handler(node: ast.AST) -> bool:
+    """A function decorated with an HTTP-verb route decorator (``@app.post(...)``)."""
+    if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        return False
+    for deco in node.decorator_list:
+        target = deco.func if isinstance(deco, ast.Call) else deco
+        if isinstance(target, ast.Attribute) and target.attr in _ROUTE_VERBS:
+            return True
+    return False
+
+
+def _handler_returns(fn: ast.AST) -> list[ast.Return]:
+    """Return statements owned by ``fn`` itself — not by any nested def/lambda."""
+    found: list[ast.Return] = []
+
+    def visit(node: ast.AST) -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+                continue  # a nested scope's returns are not this handler's
+            if isinstance(child, ast.Return):
+                found.append(child)
+                continue  # the returned expression itself is not walked
+            visit(child)
+
+    visit(fn)
+    return found
+
+
+def _returns_bare_string(ret: ast.Return) -> bool:
+    value = ret.value
+    if isinstance(value, ast.Constant) and isinstance(value.value, str):
+        return True
+    return isinstance(value, ast.JoinedStr)  # f-string
+
+
+def _state_class_status(files: dict[str, str]) -> tuple[bool, bool]:
+    """Return (a class exposes both contract methods, seed_state takes a seed)."""
+    has_class = seed_ok = False
+    for source in files.values():
+        try:
+            tree = ast.parse(source)
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ClassDef):
+                continue
+            methods = {
+                m.name: m
+                for m in node.body
+                if isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef))
+            }
+            if not all(name in methods for name in _STATE_METHODS):
+                continue
+            has_class = True
+            seed_fn = methods["seed_state"]
+            params = [a.arg for a in seed_fn.args.posonlyargs + seed_fn.args.args]
+            # A seed-driven builder needs a parameter beyond ``self``.
+            if len(params) > 1 or seed_fn.args.kwonlyargs or seed_fn.args.kwarg:
+                seed_ok = True
+    return has_class, seed_ok
+
+
+def audit_authoring_contract(files: dict[str, str]) -> list[ReviewIssue]:
+    """Enforce the generated-environment authoring contract (TASKS.md #9).
+
+    1. State is centralized in a single class exposing ``reset_state()`` and a
+       seed-driven ``seed_state(seed)``.
+    2. Every route handler returns a typed dict — never a bare string/f-string,
+       on the success path or the error path.
+    """
+    issues: list[ReviewIssue] = []
+
+    has_class, seed_ok = _state_class_status(files)
+    if not has_class:
+        issues.append(ReviewIssue(
+            severity=ReviewSeverity.ERROR, category="state_class_missing",
+            message=(
+                "No state-management class exposing reset_state() and seed_state(seed); "
+                "centralize state in one class with both methods"
+            ),
+            artifact="main.py",
+        ))
+    elif not seed_ok:
+        issues.append(ReviewIssue(
+            severity=ReviewSeverity.ERROR, category="seed_state_signature",
+            message="seed_state must accept a seed argument so the universe is reproducible",
+            artifact="main.py",
+        ))
+
+    for label, source in files.items():
+        if not source or not source.strip():
+            continue
+        try:
+            tree = ast.parse(source)
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if not _is_route_handler(node):
+                continue
+            if any(_returns_bare_string(r) for r in _handler_returns(node)):
+                issues.append(ReviewIssue(
+                    severity=ReviewSeverity.ERROR, category="untyped_return",
+                    message=(
+                        f"Route handler {node.name!r} returns a bare string; return a "
+                        "typed dict (errors too, e.g. {'ok': False, 'error': ...})"
+                    ),
+                    artifact=label,
+                ))
+    return issues
+
+
 class EnvironmentCorrectnessAgent(EnvGenAgent):
     """Static determinism/reproducibility gate for generated code."""
 
@@ -154,7 +270,7 @@ class EnvironmentCorrectnessAgent(EnvGenAgent):
         files["state_bridge_code"] = state_bridge
         files["reward_fn_code"] = reward_fn
 
-        issues = audit_determinism(files)
+        issues = audit_determinism(files) + audit_authoring_contract(files)
         report = GenerationReview(
             approved=not any(i.severity == ReviewSeverity.ERROR for i in issues),
             requirements_checked=[
@@ -162,6 +278,8 @@ class EnvironmentCorrectnessAgent(EnvGenAgent):
                 "No nondeterministic identifiers",
                 "No unseeded randomness",
                 "Determinism contract present and reset re-initializes it",
+                "State centralized in a class with reset_state()/seed_state(seed)",
+                "Route handlers return typed dicts, never bare strings",
             ],
             issues=issues,
         )

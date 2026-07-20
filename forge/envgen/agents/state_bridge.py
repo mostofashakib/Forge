@@ -48,6 +48,10 @@ _SYSTEM = (
     "active filters, selected items, and pagination cursors. Mark a field volatile=true if it "
     "changes without any user action (e.g. timestamps). List derived_from action endpoint names "
     "for fields that are only populated after calling a specific action.\n\n"
+    "STATE CONTRACT — the manifest is the single, authoritative description of the state\n"
+    "the backend's state-management class owns. Define every entity's fields, their types,\n"
+    "and their relationships here so it aligns 1:1 with the backend EnvState class and the\n"
+    "actual /forge/state response — no field in one place that is absent in the other.\n\n"
     "Return both artifacts. Call the extract tool with the result."
 )
 

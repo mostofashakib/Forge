@@ -96,3 +96,21 @@ def test_backend_prompt_mandates_determinism_contract():
     # Wall-clock / random ids are banned
     assert "utcnow" in prompt.lower()
     assert "uuid" in prompt.lower()
+
+
+def test_backend_prompt_mandates_state_management_class():
+    prompt = AppGeneratorPrompts.BACKEND
+    # A single centralized state class with the two contract methods.
+    assert "reset_state" in prompt
+    assert "seed_state" in prompt
+    assert "seed_state(self, seed" in prompt  # seed-driven, reproducible
+    # Reset delegates to the class rather than inlining query logic per endpoint.
+    assert "STATE.reset_state()" in prompt
+
+
+def test_backend_prompt_mandates_typed_dict_returns():
+    prompt = AppGeneratorPrompts.BACKEND.lower()
+    assert "typed" in prompt
+    # Both success and error paths must be dicts, never bare strings.
+    assert "never a bare string" in prompt
+    assert '"error"' in prompt or "'error'" in prompt
