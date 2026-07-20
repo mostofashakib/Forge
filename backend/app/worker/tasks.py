@@ -20,6 +20,7 @@ def run_episode_task(self, rollout_job_id: str, episode_index: int, seed: int) -
     """Run a single episode for a RolloutJob. Returns episode_id."""
     from backend.app.services.episode_collector import EpisodeDataCollector
     from forge.runtime.agents.factory import make_agent
+    from forge.runtime.agent_logger import AgentRunLogger, run_logged_episode
     from backend.app.database import get_session_factory
 
     SessionLocal = get_session_factory()
@@ -66,11 +67,15 @@ def run_episode_task(self, rollout_job_id: str, episode_index: int, seed: int) -
             env = load_forge_env(env_name, telemetry)
             agent = make_agent(agent_id)
 
-            obs, _ = env.reset(seed=seed)
-            terminated = truncated = False
-            while not (terminated or truncated):
-                action = agent.act(obs, env.action_types)
-                obs, _, terminated, truncated, _ = env.step(action)
+            # Drive the episode through the run logger so the full trace (LLM
+            # calls, actions, and state changes) is captured. The trace is
+            # persisted in `finally` so an aborted run still leaves a partial one.
+            run_logger = AgentRunLogger(run_id=episode_id)
+            trace_path = jsonl_path.with_name(f"{episode_id}.trace.jsonl")
+            try:
+                run_logged_episode(env, agent, run_logger, seed=seed)
+            finally:
+                trace_path.write_text(run_logger.to_jsonl())
             # ForgeEnv.step() calls telemetry.complete_episode() on termination
 
         except Exception as exc:
