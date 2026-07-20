@@ -33,6 +33,16 @@ def forge_reset():
     _FORGE_CLOCK = 0
     _ID_COUNTERS.clear()
     seed()
+
+
+class EnvState:
+    """Centralized state store satisfying the authoring contract."""
+
+    def seed_state(self, seed_value: int) -> None:
+        seed()
+
+    def reset_state(self) -> None:
+        forge_reset()
 '''
 
 
@@ -121,3 +131,39 @@ async def test_agent_rejects_wall_clock_app():
     report = bus.get("correctness_report")
     assert report.approved is False
     assert "wall_clock" in {i.category for i in report.issues}
+
+
+@pytest.mark.asyncio
+async def test_agent_rejects_app_without_a_state_class():
+    # _COMPLIANT_MAIN minus the EnvState class — determinism is fine, but the
+    # authoring contract (centralized state class) is not satisfied.
+    without_class = _COMPLIANT_MAIN.split("class EnvState:")[0]
+    bus = ArtifactBus()
+    await bus.publish("app_code", {"main.py": without_class, "ui.html": "<html></html>"})
+    await bus.publish("instrumented_code", {"main.py": without_class})
+    await bus.publish("state_bridge_code", "class E:\n    pass\n")
+    await bus.publish("reward_fn_code", "def compute_reward(*a):\n    return 0.0\n")
+    await EnvironmentCorrectnessAgent().run(_ctx(), bus)
+    report = bus.get("correctness_report")
+    assert report.approved is False
+    assert "state_class_missing" in {i.category for i in report.issues}
+
+
+@pytest.mark.asyncio
+async def test_agent_rejects_app_with_a_string_returning_endpoint():
+    bad = _COMPLIANT_MAIN + (
+        "\nfrom fastapi import FastAPI\n"
+        "app = FastAPI()\n\n"
+        "@app.post('/close_ticket')\n"
+        "def close_ticket():\n"
+        "    return 'closed'\n"
+    )
+    bus = ArtifactBus()
+    await bus.publish("app_code", {"main.py": bad, "ui.html": "<html></html>"})
+    await bus.publish("instrumented_code", {"main.py": bad})
+    await bus.publish("state_bridge_code", "class E:\n    pass\n")
+    await bus.publish("reward_fn_code", "def compute_reward(*a):\n    return 0.0\n")
+    await EnvironmentCorrectnessAgent().run(_ctx(), bus)
+    report = bus.get("correctness_report")
+    assert report.approved is False
+    assert "untyped_return" in {i.category for i in report.issues}
