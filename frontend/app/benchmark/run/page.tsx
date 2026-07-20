@@ -1,12 +1,20 @@
 "use client";
-import { useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { API_BASE, wsBase } from "@/lib/api";
+import { Toast } from "@/components/Toast";
 
 type Phase = "idle" | "running" | "done" | "error";
 
+function prettyEnv(name: string): string {
+  const spaced = name.replace(/[_-]+/g, " ").trim();
+  return spaced ? spaced.charAt(0).toUpperCase() + spaced.slice(1) : name;
+}
+
 export default function BenchmarkRunPage() {
-  const [domains, setDomains] = useState<string[]>(["email", "project_mgmt"]);
+  const [domains, setDomains] = useState<string[]>([]);
+  const [envs, setEnvs] = useState<string[]>([]);
+  const [envsLoading, setEnvsLoading] = useState(true);
   const [depth, setDepth] = useState(5);
   const [seeds, setSeeds] = useState(5);
   const [outputDir, setOutputDir] = useState("benchmark_results");
@@ -17,13 +25,54 @@ export default function BenchmarkRunPage() {
     total: null,
   });
   const [error, setError] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
+
+  const loadEnvs = useCallback(async () => {
+    try {
+      const signal = AbortSignal.timeout(8000);
+      const [fileRes, sandboxRes] = await Promise.all([
+        fetch(`${API_BASE}/api/envs/`, { signal }),
+        fetch(`${API_BASE}/api/sandbox/`, { signal }),
+      ]);
+      if (!fileRes.ok || !sandboxRes.ok) {
+        throw new Error(`Backend request failed (${fileRes.status}/${sandboxRes.status})`);
+      }
+      const [fileEnvs, sandboxes]: [string[], { id: string }[]] = await Promise.all([
+        fileRes.json(),
+        sandboxRes.json(),
+      ]);
+      const names = Array.from(
+        new Set([...fileEnvs, ...sandboxes.map((s) => s.id)])
+      ).sort();
+      setEnvs(names);
+      // Keep only still-active selections after a refresh.
+      setDomains((prev) => prev.filter((d) => names.includes(d)));
+    } catch {
+      setEnvs([]);
+    } finally {
+      setEnvsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const t = window.setTimeout(loadEnvs, 0);
+    return () => window.clearTimeout(t);
+  }, [loadEnvs]);
 
   function toggleDomain(domain: string, checked: boolean) {
     setDomains((prev) => checked ? [...prev, domain] : prev.filter((d) => d !== domain));
   }
 
   async function handleLaunch() {
+    if (envs.length === 0) {
+      setToast("You need an active environment before running a benchmark.");
+      return;
+    }
+    if (domains.length === 0) {
+      setToast("Select at least one environment to run the benchmark.");
+      return;
+    }
     setPhase("running");
     setLogs([]);
     setProgress({ completed: 0, total: null });
@@ -43,7 +92,7 @@ export default function BenchmarkRunPage() {
         return;
       }
       ({ run_id } = await res.json());
-    } catch (e) {
+    } catch {
       setPhase("error");
       setError("Could not reach the backend — is it running?");
       return;
@@ -82,7 +131,7 @@ export default function BenchmarkRunPage() {
           <p>Collect episodes across the task suite and turn raw trajectories into quality signals.</p>
         </div>
         <div className="benchmark-run__readout" aria-label="Current run configuration">
-          <div><span>Domains</span><strong>{String(domains.length).padStart(2, "0")}</strong></div>
+          <div><span>Environments</span><strong>{String(domains.length).padStart(2, "0")}</strong></div>
           <div><span>Difficulty</span><strong>0{depth}</strong></div>
           <div><span>Seeds / task</span><strong>{String(seeds).padStart(2, "0")}</strong></div>
           <div className={`benchmark-run__state benchmark-run__state--${phase}`}>
@@ -100,26 +149,35 @@ export default function BenchmarkRunPage() {
 
           <div className="benchmark-field benchmark-field--domains">
             <div className="benchmark-field__label">
-              <span>Target domains</span>
+              <span>Target environments</span>
               <small>{domains.length} selected</small>
             </div>
-            <div className="benchmark-domain-grid">
-              {(["email", "project_mgmt"] as const).map((d) => (
-                <label key={d} className="benchmark-domain">
-                  <input
-                    type="checkbox"
-                    checked={domains.includes(d)}
-                    disabled={isRunning}
-                    onChange={(e) => toggleDomain(d, e.target.checked)}
-                  />
-                  <span className="benchmark-domain__check" aria-hidden="true">✓</span>
-                  <span>
-                    <strong>{d === "project_mgmt" ? "Project management" : "Email"}</strong>
-                    <small>{d === "project_mgmt" ? "Planning · delivery" : "Inbox · compose"}</small>
-                  </span>
-                </label>
-              ))}
-            </div>
+            {envsLoading ? (
+              <p className="benchmark-domain-empty">Loading active environments…</p>
+            ) : envs.length === 0 ? (
+              <p className="benchmark-domain-empty">
+                No active environments yet.{" "}
+                <Link href="/environments/new">Create one</Link> to run a benchmark.
+              </p>
+            ) : (
+              <div className="benchmark-domain-grid">
+                {envs.map((d) => (
+                  <label key={d} className="benchmark-domain">
+                    <input
+                      type="checkbox"
+                      checked={domains.includes(d)}
+                      disabled={isRunning}
+                      onChange={(e) => toggleDomain(d, e.target.checked)}
+                    />
+                    <span className="benchmark-domain__check" aria-hidden="true">✓</span>
+                    <span>
+                      <strong>{prettyEnv(d)}</strong>
+                      <small>Active environment</small>
+                    </span>
+                  </label>
+                ))}
+              </div>
+            )}
           </div>
 
           <div className="benchmark-field">
@@ -160,7 +218,7 @@ export default function BenchmarkRunPage() {
           {phase === "idle" && (
             <button
               onClick={handleLaunch}
-              disabled={domains.length === 0}
+              disabled={envsLoading}
               className="benchmark-launch"
             >
               <span>Launch benchmark run</span><span aria-hidden="true">↗</span>
@@ -246,6 +304,8 @@ export default function BenchmarkRunPage() {
           </button>
         </div>
       )}
+
+      {toast && <Toast message={toast} onDismiss={() => setToast(null)} />}
     </div>
   );
 }
