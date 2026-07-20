@@ -58,3 +58,12 @@ def test_validation_result_has_test_counts():
         runner = ValidationRunner(generated_envs_root=output_dir)
         result = runner.run(pkg_dir)
         assert result.total_tests >= 0
+
+
+def test_validation_runner_on_missing_package_does_not_pass():
+    # Negative: pointing the runner at a package directory that does not exist
+    # must yield a non-passing result, not a false green.
+    with tempfile.TemporaryDirectory() as tmpdir:
+        runner = ValidationRunner(generated_envs_root=Path(tmpdir))
+        result = runner.run(Path(tmpdir) / "nonexistent_pkg")
+        assert result.passed is False

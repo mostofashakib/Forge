@@ -21,6 +21,13 @@ def test_extractor_returns_entity_list():
     assert entities[0].name == "ticket"
 
 
+def test_empty_llm_result_yields_no_entities():
+    # False-positive guard: an empty extraction must stay empty, not invent a
+    # default entity.
+    client = MockLLMClient({"EntityExtractionResult": EntityExtractionResult(entities=[])})
+    assert EntityExtractor(client).extract("no entities here") == []
+
+
 def test_extractor_passes_prompt_to_llm():
     calls = []
 
