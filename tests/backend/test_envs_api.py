@@ -73,3 +73,48 @@ def test_get_config_rejects_path_traversal(client):
     response = client.get("/api/envs/../etc/passwd/config")
     # FastAPI will either reject the path or return 400/404
     assert response.status_code in (400, 404, 422)
+
+
+# ---------------------------------------------------------------------------
+# Source-bundle download
+# ---------------------------------------------------------------------------
+import io
+import zipfile
+
+
+def _make_downloadable_env(envs_dir: Path, name: str) -> None:
+    d = envs_dir / name
+    (d / "app").mkdir(parents=True)
+    (d / "app" / "main.py").write_text("app = object()\n")
+    (d / "app" / "requirements.txt").write_text("fastapi\n")
+    (d / "app" / "Dockerfile").write_text("FROM python:3.12-slim\n")
+    (d / "reward_fn.py").write_text("def compute_reward(*a): return 0.0\n")
+
+
+def test_download_env_source_returns_zip(client, tmp_path):
+    _make_downloadable_env(tmp_path / "generated_envs", "dl_env")
+    resp = client.get("/api/envs/dl_env/download")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "application/zip"
+    assert 'filename="dl_env.zip"' in resp.headers["content-disposition"]
+    names = set(zipfile.ZipFile(io.BytesIO(resp.content)).namelist())
+    assert "dl_env/app/main.py" in names
+    assert "dl_env/README.md" in names
+    assert "dl_env/docker-compose.yml" in names
+
+
+def test_download_missing_env_returns_404(client):
+    resp = client.get("/api/envs/does_not_exist/download")
+    assert resp.status_code == 404
+
+
+def test_download_incomplete_env_returns_404(client, tmp_path):
+    # An env dir with no app/main.py cannot be bundled into a runnable package.
+    (tmp_path / "generated_envs" / "empty_env" / "app").mkdir(parents=True)
+    resp = client.get("/api/envs/empty_env/download")
+    assert resp.status_code == 404
+
+
+def test_download_rejects_traversal_name(client):
+    resp = client.get("/api/envs/foo..bar/download")
+    assert resp.status_code == 400
