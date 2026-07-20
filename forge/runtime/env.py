@@ -5,7 +5,15 @@ from forge.runtime.action import ActionValidator
 from forge.runtime.context import RuntimeContext
 from forge.runtime.diff import compute_diff
 from forge.runtime.errors import ResetRequiredError
-from forge.runtime.interaction import BrowserUse, ComputerUse, ToolUse, ToolUseSchema
+from forge.runtime.interaction import (
+    BrowserUse,
+    ComputerUse,
+    MCPUse,
+    ORPCUse,
+    RESTUse,
+    ToolUse,
+    ToolUseSchema,
+)
 from forge.runtime.reward import RewardEngine
 from forge.runtime.snapshot import EnvironmentSpec, InvalidActionError, StepSnapshot, ToolSpec
 from forge.runtime.state import StateStore
@@ -40,6 +48,9 @@ class ForgeEnv(gym.Env):
         tool_specs: list[ToolSpec] | None = None,
         computer_use: ComputerUse | None = None,
         browser_use: BrowserUse | None = None,
+        mcp_use: MCPUse | None = None,
+        rest_use: RESTUse | None = None,
+        orpc_use: ORPCUse | None = None,
     ) -> None:
         super().__init__()
         self.env_spec = env_spec
@@ -55,6 +66,9 @@ class ForgeEnv(gym.Env):
         self._tool_use: ToolUse | None = None
         self.computer_use = computer_use
         self.browser_use = browser_use
+        self.mcp_use = mcp_use
+        self.rest_use = rest_use
+        self.orpc_use = orpc_use
 
         self.observation_space = gym.spaces.Dict({})
         self.action_space = gym.spaces.Dict({})
@@ -98,13 +112,30 @@ class ForgeEnv(gym.Env):
         return self._tool_use
 
     def capabilities(self) -> list[str]:
-        """Interaction modes the agent has access to in this environment."""
+        """Interaction modes the agent has access to in this environment.
+
+        Every env has ``tool_use``; the rest are present only when attached, so
+        an env exposes exactly the modalities its domain needs (MCP tools, REST
+        endpoints, oRPC procedures, OS shell, browser).
+        """
         modes = ["tool_use"]
-        if self.computer_use is not None:
-            modes.append("computer_use")
-        if self.browser_use is not None:
-            modes.append("browser_use")
+        for cap in (self.mcp_use, self.rest_use, self.orpc_use, self.computer_use, self.browser_use):
+            if cap is not None:
+                modes.append(cap.name)
         return modes
+
+    def capability_surface(self) -> dict[str, list[ToolSpec]]:
+        """Every action the agent can take, grouped by interaction modality.
+
+        The full tool surface across modalities: core tool calls plus any
+        attached MCP tools, REST endpoints, oRPC procedures, OS primitives, and
+        browser primitives — each rendered as ``ToolSpec`` entries.
+        """
+        surface: dict[str, list[ToolSpec]] = {"tool_use": self.tool_surface()}
+        for cap in (self.mcp_use, self.rest_use, self.orpc_use, self.computer_use, self.browser_use):
+            if cap is not None:
+                surface[cap.name] = cap.schema.tool_specs()
+        return surface
 
     def reset(
         self, seed: int | None = None, options: dict | None = None
