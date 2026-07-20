@@ -654,19 +654,22 @@ app.add_typer(benchmark_app)
 
 @benchmark_app.command("run")
 def benchmark_run(
-    domains: str = typer.Option("email,project_mgmt", "--domains", help="Comma-separated domain names"),
+    domains: str = typer.Option(..., "--domains", help="Comma-separated generated environment names"),
     depth: int = typer.Option(5, "--depth", help="Max task depth (1–5)"),
     seeds: int = typer.Option(5, "--seeds", help="Number of seeds per task"),
     output: Path = typer.Option(Path("benchmark_results"), "--output", "-o"),
 ) -> None:
-    """Collect episodes across the task suite and compute env quality metrics."""
+    """Collect episodes for the selected environments and compute env quality metrics."""
     from forge.benchmark.data_collector import DataCollector, CollectionConfig
+    from forge.benchmark.compiled_tasks import CompiledTaskProvider, db_compiler_input_loader
     from forge.benchmark.env_quality import compute_env_quality
     from forge.benchmark.report import BenchmarkReport, ReportConfig
+    from backend.app.database import get_session_factory
 
-    domain_list = [d.strip() for d in domains.split(",")]
+    domain_list = [d.strip() for d in domains.split(",") if d.strip()]
     cfg = CollectionConfig(domains=domain_list, depth=depth, seeds=seeds, output_dir=output / "data")
-    collector = DataCollector(cfg)
+    provider = CompiledTaskProvider(loader=db_compiler_input_loader(get_session_factory()))
+    collector = DataCollector(cfg, task_provider=provider)
     envs_root = Path(os.environ.get("FORGE_GENERATED_ENVS_DIR", "generated_envs"))
 
     def run_episode(task, seed, jsonl_path):
