@@ -13,6 +13,7 @@ from forge.envgen.agents.correctness import EnvironmentCorrectnessAgent
 from forge.envgen.agents.reviewer import GenerationReview, GenerationReviewError, ReviewerAgent
 from forge.envgen.agents.telemetry import TelemetryAgent
 from forge.envgen.agents.state_bridge import StateBridgeAgent
+from forge.envgen.agents.scenario_builder import ScenarioBuilderAgent
 from forge.envgen.agents.policy import PolicyAgent
 from forge.envgen.agents.reward import RewardAgent
 from forge.envgen.research import UserResearchAgent
@@ -82,6 +83,7 @@ class EnvironmentOrchestrator:
             AppAssemblyAgent(),
             TelemetryAgent(),
             StateBridgeAgent(),
+            ScenarioBuilderAgent(),
             PolicyAgent(),
             RewardAgent(),
             EnvironmentCorrectnessAgent(),
@@ -145,3 +147,9 @@ class EnvironmentOrchestrator:
         manifest = bus.get("state_schema_manifest")
         if manifest is not None:
             (pkg_dir / "state_schema.json").write_text(manifest.model_dump_json())
+
+        scenario_suite = bus.get("scenario_suite")
+        if scenario_suite is not None:
+            (custom_dir / "scenarios.json").write_text(
+                scenario_suite.model_dump_json(indent=2)
+            )
