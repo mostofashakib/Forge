@@ -16,8 +16,8 @@ def load_forge_env(env_name: str, telemetry):
     build_fn = getattr(module, f"build_{env_name}_env")
     env = build_fn()
     # Verify before telemetry injection so check steps are never recorded.
-    # Raises DeterminismError if two identically-seeded rollouts diverge;
-    # honors FORGE_SKIP_DETERMINISM_CHECK internally.
+    # Mandatory and non-bypassable: raises DeterminismError if two
+    # identically-seeded rollouts diverge.
     run_determinism_check(env)
     env._telemetry = telemetry
     return env
