@@ -15,6 +15,7 @@ from forge.envgen.episode_base import (
     BaseEpisodeConfig,
     BaseEpisodeResult,
     TerminationMonitor,
+    TrajectoryWriter,
 )
 from forge.envgen.objective import ObjectiveScorer
 from forge.schema.state_schema import StateSchemaManifest
@@ -71,23 +72,20 @@ class EpisodeResult(BaseEpisodeResult):
     config: EpisodeConfig
     steps: list[StepRecord] = field(default_factory=list)
 
-    def _step_dicts(self) -> list[dict]:
-        return [
-            {
-                "step_index": step.step_index,
-                "state_before": step.state_before,
-                "action": step.action,
-                "state_after": step.state_after,
-                "reward": step.reward,
-                "objective_score": step.objective_score,
-                "state_hash_before": step.state_hash_before,
-                "state_hash_after": step.state_hash_after,
-                "terminated": step.terminated,
-                "truncated": step.truncated,
-                "termination_reason": step.termination_reason,
-            }
-            for step in self.steps
-        ]
+    def _step_to_dict(self, step) -> dict:
+        return {
+            "step_index": step.step_index,
+            "state_before": step.state_before,
+            "action": step.action,
+            "state_after": step.state_after,
+            "reward": step.reward,
+            "objective_score": step.objective_score,
+            "state_hash_before": step.state_hash_before,
+            "state_hash_after": step.state_hash_after,
+            "terminated": step.terminated,
+            "truncated": step.truncated,
+            "termination_reason": step.termination_reason,
+        }
 
     def summary(self) -> dict:
         return {**super().summary(), "episode_id": self.episode_id}
@@ -266,7 +264,21 @@ class ContainerEpisodeRunner:
             return result
 
         monitor = TerminationMonitor(cfg)
+        # Write each step as it happens so a crash mid-episode still leaves a
+        # durable, replayable partial trace (not just an all-or-nothing dump).
+        writer = TrajectoryWriter(jsonl_path, result) if jsonl_path is not None else None
 
+        try:
+            self._run_steps(
+                agent, cfg, result, monitor, available_actions, episode_id, writer, state
+            )
+        finally:
+            if writer is not None:
+                writer.close()
+
+        return result
+
+    def _run_steps(self, agent, cfg, result, monitor, available_actions, episode_id, writer, state):
         for step_idx in range(cfg.max_steps):
             state_hash_before = self._normalizer.hash(state)
 
@@ -347,6 +359,8 @@ class ContainerEpisodeRunner:
                 termination_reason=termination_reason if (terminated or truncated) else None,
             )
             result.steps.append(step)
+            if writer is not None:
+                writer.record(step)
             result.total_reward += reward
             result.final_objective_score = obj_score
 
@@ -375,11 +389,6 @@ class ContainerEpisodeRunner:
         # Normalize total_reward to 0–1 (average objective score across steps)
         if result.steps:
             result.total_reward = result.total_reward / len(result.steps)
-
-        if jsonl_path is not None:
-            result.write_jsonl(jsonl_path)
-
-        return result
 
     # ------------------------------------------------------------------
     # Multi-episode rollout

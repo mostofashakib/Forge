@@ -9,6 +9,7 @@ from forge.envgen.episode_base import (
     BaseEpisodeConfig,
     BaseEpisodeResult,
     TerminationMonitor,
+    TrajectoryWriter,
 )
 from forge.envgen.objective import ObjectiveScorer
 from forge.runtime.interaction import ComputerUse, ComputerUseSchema
@@ -120,83 +121,90 @@ class CliEpisodeRunner:
         monitor = TerminationMonitor(self._cfg)
         early_termination: str | None = None
         computer_use = self.computer_use()
+        # Persist each step as it happens so a crash mid-episode still leaves a
+        # durable, replayable partial trace.
+        writer = TrajectoryWriter(jsonl_path, result) if jsonl_path is not None else None
 
-        for step_idx in range(self._cfg.max_steps):
-            state = self._state(end_state_spec)
+        try:
+            for step_idx in range(self._cfg.max_steps):
+                state = self._state(end_state_spec)
 
-            try:
-                command = agent.act(state=state, objective=self._cfg.objective)
-            except Exception as exc:
-                logger.warning("[cli-ep] step %d: agent.act failed: %s", step_idx, exc)
-                command = "echo 'agent error'"
+                try:
+                    command = agent.act(state=state, objective=self._cfg.objective)
+                except Exception as exc:
+                    logger.warning("[cli-ep] step %d: agent.act failed: %s", step_idx, exc)
+                    command = "echo 'agent error'"
 
-            try:
-                exec_result = computer_use.execute({"action_type": "exec", "command": command})
-            except InvalidActionError as exc:
-                exec_result = {"command": command, "stdout": "", "stderr": exc.detail, "exit_code": -1}
-            self._history.append(exec_result)
+                try:
+                    exec_result = computer_use.execute({"action_type": "exec", "command": command})
+                except InvalidActionError as exc:
+                    exec_result = {"command": command, "stdout": "", "stderr": exc.detail, "exit_code": -1}
+                self._history.append(exec_result)
 
-            score_state = {
-                "command": command,
-                "output": exec_result["stdout"][:500],
-                "exit_code": exec_result["exit_code"],
-                "step": step_idx + 1,
-            }
-            # Per-step score remains useful as a live signal in the UI even
-            # though the FINAL reward now comes from the tiered grader.
-            score = self._scorer.score(score_state, self._cfg.objective)
+                score_state = {
+                    "command": command,
+                    "output": exec_result["stdout"][:500],
+                    "exit_code": exec_result["exit_code"],
+                    "step": step_idx + 1,
+                }
+                # Per-step score remains useful as a live signal in the UI even
+                # though the FINAL reward now comes from the tiered grader.
+                score = self._scorer.score(score_state, self._cfg.objective)
 
-            step_record = {
-                "step_index": step_idx,
-                "command": command,
-                "stdout": exec_result["stdout"],
-                "stderr": exec_result["stderr"],
-                "exit_code": exec_result["exit_code"],
-                "objective_score": score,
-                "reward": score,
-            }
-            result.steps.append(step_record)
-            result.final_objective_score = score
+                step_record = {
+                    "step_index": step_idx,
+                    "command": command,
+                    "stdout": exec_result["stdout"],
+                    "stderr": exec_result["stderr"],
+                    "exit_code": exec_result["exit_code"],
+                    "objective_score": score,
+                    "reward": score,
+                }
+                result.steps.append(step_record)
+                if writer is not None:
+                    writer.record(step_record)
+                result.final_objective_score = score
 
+                logger.info(
+                    "[cli-ep] step %02d/%d  cmd=%r  score=%.2f  exit=%d",
+                    step_idx + 1, self._cfg.max_steps, command[:50], score,
+                    exec_result["exit_code"],
+                )
+
+                # Tier 2: kill the episode if the agent is looping or stuck failing.
+                loop_termination = loop_detector.observe(
+                    command, exec_result["exit_code"], exec_result["stdout"]
+                )
+                if loop_termination is not None:
+                    early_termination = loop_termination
+                    result.termination_reason = loop_termination
+                    break
+
+                reason = monitor.observe(score)
+                if reason is not None:
+                    result.termination_reason = reason
+                    break
+            else:
+                result.termination_reason = "max_steps"
+
+            # Tier 3: grade the trajectory and replace the per-step running sum
+            # with the tiered final reward.
+            grade: TrajectoryGrade = self._reward_engine.grade(
+                objective=self._cfg.objective,
+                spec=end_state_spec,
+                history=self._history,
+                container_id=self._cfg.container_id,
+                early_termination=early_termination,
+            )
+            result.grade = grade.to_dict()
+            result.total_reward = grade.final_reward
+            result.completed_at = datetime.now(timezone.utc)
             logger.info(
-                "[cli-ep] step %02d/%d  cmd=%r  score=%.2f  exit=%d",
-                step_idx + 1, self._cfg.max_steps, command[:50], score,
-                exec_result["exit_code"],
+                "[cli-ep] graded: pass_rate=%.2f efficiency=%.2f partial=%.2f → reward=%.2f (%s)",
+                grade.test_pass_rate, grade.efficiency_factor, grade.partial_credit,
+                grade.final_reward, grade.reasoning,
             )
-
-            # Tier 2: kill the episode if the agent is looping or stuck failing.
-            loop_termination = loop_detector.observe(
-                command, exec_result["exit_code"], exec_result["stdout"]
-            )
-            if loop_termination is not None:
-                early_termination = loop_termination
-                result.termination_reason = loop_termination
-                break
-
-            reason = monitor.observe(score)
-            if reason is not None:
-                result.termination_reason = reason
-                break
-        else:
-            result.termination_reason = "max_steps"
-
-        # Tier 3: grade the trajectory and replace the per-step running sum
-        # with the tiered final reward.
-        grade: TrajectoryGrade = self._reward_engine.grade(
-            objective=self._cfg.objective,
-            spec=end_state_spec,
-            history=self._history,
-            container_id=self._cfg.container_id,
-            early_termination=early_termination,
-        )
-        result.grade = grade.to_dict()
-        result.total_reward = grade.final_reward
-        result.completed_at = datetime.now(timezone.utc)
-        logger.info(
-            "[cli-ep] graded: pass_rate=%.2f efficiency=%.2f partial=%.2f → reward=%.2f (%s)",
-            grade.test_pass_rate, grade.efficiency_factor, grade.partial_credit,
-            grade.final_reward, grade.reasoning,
-        )
-        if jsonl_path is not None:
-            result.write_jsonl(jsonl_path)
+        finally:
+            if writer is not None:
+                writer.close()
         return result
