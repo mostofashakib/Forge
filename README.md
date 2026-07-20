@@ -10,7 +10,7 @@ Forge lets you spin up isolated, observable app environments — Gmail-like emai
 
 1. **Creates sandboxed app environments** — Docker containers running real apps (or realistic replicas) with full state access
 2. **Runs agents inside them** — Random, scripted, or LLM-powered agents interact with the app via a clean API
-3. **Records and rewards every step** — Policy enforcement, multi-method reward scoring, and trajectory logging at each step
+3. **Records and rewards every step** — Policy enforcement, multi-method reward scoring, and a unified per-run trace (LLM calls, actions, state changes, verifier decisions) written durably so any run is replayable — even one that crashed mid-episode
 4. **Exports training data** — SFT pairs, DPO preference pairs, GRPO rollouts, failure datasets, and more
 5. **Benchmarks environment quality** — Runs a task suite across domains and scores coverage, reward density, dead-end rate, and action diversity
 
@@ -87,6 +87,7 @@ User prompt + compiler input + optional original product research
           │
           ├── BackendBuilderAgent ─┐
           ├── UIBuilderAgent ──────┴─→ AppAssemblyAgent → TelemetryAgent → StateBridgeAgent
+          ├── ScenarioBuilderAgent    (realistic seeded scenarios via seed_state)
           ├── PolicyAgent
           └── RewardAgent
                     │
@@ -120,6 +121,8 @@ Agent execution and data collection are separate layers. Runtime agents choose a
 ### Observability & Replay
 
 - **Live event feed** — real-time observability panel streamed from the running container
+- **Unified per-run trace** — `AgentRunLogger` records the agent's LLM layer (prompt, chosen tool call, response) alongside every action, result, and state change as one ordered, step-correlated trace; persisted per run even when the run aborts mid-flight
+- **Per-run loss analysis** — `LossAnalyzer` classifies why a run failed into a fixed seven-mode taxonomy (instruction-following, hallucination, tool-sequencing, early-stopping, context-loss, reward-hacking, surface-overfitting) from the run trace and verifier result, emits a per-run report with evidence and confidence, and aggregates modes across runs. A clean, correct run yields no failure modes
 - **Episode replay** — re-run any recorded episode step-by-step from stored trajectory
 - **Branch replay** — fork from any step index and try alternate action sequences
 - **Failure clustering** — groups failed episodes by trajectory diff similarity
@@ -151,29 +154,36 @@ Six built-in verifier types compose into a `RewardBreakdown` returned on every s
 
 **Layered verification** — `LayeredVerifier` composes five layers into one verdict: final-state checks, invariant milestone checks (none skipped, correct order), trajectory checks (necessary tool calls made, no unnecessary ones), LLM-as-judge rubrics for creative tasks, and negative checks for unintended side effects.
 
+**Per-environment verifier composition** — `VerifierComposer` builds a configured `LayeredVerifier` for each task from its declared success/failure conditions and scenario ground truth, mapping them onto the five tiers (the LLM judge stays off by default). It then scores an episode's result into a `RewardBreakdown` under either mode: **binary** (full credit only when every tier passes) or **partial** (weighted per-tier mean, so a partially-correct trajectory earns graded credit). A right answer reached by an unauthorized side effect or the wrong tool order still fails.
+
 **Reward-hacking audit** — `RewardHackingAuditor` is a separate audit agent that asks whether a passing verdict was *earned*: it flags passes with skipped milestones, suspiciously short episodes, redundant call patterns, and supports a pluggable LLM audit client. `RewardHackingAuditor.for_verifier(...)` inherits the milestone list straight from a `LayeredVerifier`.
 
 ### Interaction Contracts
 
-Every environment declares which capabilities the agent has access to — `tool_use`, `computer_use`, `browser_use`, or any combination via `env.capabilities()`. Each capability validates actions against its schema *before* anything touches the environment, so a hallucinated tool or out-of-bounds click never executes:
+Every environment declares which capabilities the agent has access to — the actions an agent can take, across every interaction modality — via `env.capabilities()`. Each capability validates actions against its schema *before* anything touches the environment, so a hallucinated tool, unknown endpoint, or out-of-bounds click never executes. Not every environment needs every modality; each advertises only the ones it attaches:
 
-| Capability | Interacts with | Schema enforces |
-|---|---|---|
-| **ToolUse** | API endpoints / functions of the environment | tool exists, required params present, param types match |
-| **ComputerUse** | The VM / OS (Linux, macOS, Windows) | allowed primitives (`exec`, `screenshot`), non-empty commands |
-| **BrowserUse** | The browser | allowed primitives (`click`, `type`, `press`, `navigate`, `scroll`), viewport bounds |
+| Capability | Interacts with | Action shape | Schema enforces |
+|---|---|---|---|
+| **ToolUse** | API endpoints / functions of the environment | `{"type", …}` | tool exists, required params present, param types match |
+| **MCPUse** | MCP server tools | `{"tool", "arguments"}` | tool exists, required arguments present and typed |
+| **RESTUse** | HTTP endpoints | `{"method", "path", "input"}` | method+path is a declared endpoint, required params present |
+| **ORPCUse** | Typed RPC procedures | `{"procedure", "input"}` | procedure exists, required input present and typed |
+| **ComputerUse** | The VM / OS (Linux, macOS, Windows) | `{"action_type", …}` | allowed primitives (`exec`, `screenshot`), non-empty commands |
+| **BrowserUse** | The browser | `{"action_type", …}` | allowed primitives (`click`, `type`, `press`, `navigate`, `scroll`), viewport bounds |
 
-- Every `ForgeEnv` exposes ToolUse (`env.tool_use.execute(...)` is a schema-validated `step()`); attach the others with `EnvBuilder.with_computer_use(...)` / `.with_browser_use(...)`
+- Every `ForgeEnv` exposes ToolUse (`env.tool_use.execute(...)` is a schema-validated `step()`); attach the others with `EnvBuilder.with_mcp_use(...)` / `.with_rest_use(...)` / `.with_orpc_use(...)` / `.with_computer_use(...)` / `.with_browser_use(...)`
+- `env.capability_surface()` returns `{modality: [ToolSpec]}` — the full set of actions the agent can take, grouped by modality, so every attached interface is discoverable through one tool surface
 - CLI environments grant ComputerUse (`os="linux"`); browser environments route every agent action through BrowserUse
 
 ### Determinism
 
 Environments are verified deterministic at creation and launch — same seed and same trajectory always produce the same observations *and* the same score:
 
-- **Launch-time determinism check** — two identically-seeded rollouts are hashed (observations + rewards + termination flags); a mismatch raises `DeterminismError` and aborts the launch. Runs in the backend env loader, `forge run` / `forge export`, and `EnvBuilder.build()` (skip with `FORGE_SKIP_DETERMINISM_CHECK=1`)
+- **Launch-time determinism check (mandatory)** — two identically-seeded rollouts are hashed (observations + rewards + termination flags); a mismatch raises `DeterminismError` and aborts the launch. Runs in the backend env loader, `forge run` / `forge export`, and `EnvBuilder.build()`. The check is non-bypassable — a non-reproducible environment fails to load
 - **EnvBuilder + DeterminismConfig** — virtual clock, seeded RNG and UUIDs, canonical sorted-key JSON, float rejection (integers only), serialized transitions, network and filesystem guards inside the env, and fresh-universe startup (factory caches dropped every reset)
-- **Generated-app determinism contract** — custom LLM-generated apps must use a counter-based virtual clock (`forge_now()`) and sequential IDs (`_next_id()`) in place of wall-clock timestamps and random UUIDs; a static correctness specialist audits this before artifacts are written, and a post-boot `CorrectnessValidator` proves `/forge/reset` restores a byte-identical initial universe (rows, IDs, counters, DB included) and that snapshot/restore round-trips
-- **Replayable episodes** — every step records the tool call, emitted events, state diff, hashes, and reward; `replay_episode(env, seed, steps)` re-executes any recording and verifies every state hash and reward against it
+- **Seed control** — the seed threads end to end (`reset(seed)` → `POST /forge/reset {"seed": …}` → `STATE.seed_state(seed)`), so the same seed reproduces the same starting universe and a different seed produces a different-but-reproducible one; an unseeded reset restores the fixed baseline
+- **Generated-app determinism contract** — custom LLM-generated apps must use a counter-based virtual clock (`forge_now()`) and sequential IDs (`_next_id()`) in place of wall-clock timestamps and random UUIDs, and build the universe from a `random.Random(seed)`; a static correctness specialist audits this before artifacts are written, and a post-boot `CorrectnessValidator` proves `/forge/reset` restores a byte-identical initial universe (rows, IDs, counters, DB included), that snapshot/restore round-trips, and that the same seed reproduces identical state while distinct seeds diverge — hard-failing the build on any violation
+- **Replayable episodes** — every step records the tool call, emitted events, state diff, hashes, and reward; `replay_episode(env, seed, steps)` re-executes any recording and verifies every state hash and reward against it. Container/CLI/browser trajectories are written incrementally (each step flushed as it happens), so a run that crashes mid-episode still leaves a durable, replayable partial trace
 - **Flake-free UI** — premade UIs ship a CSS no-motion override and browser sessions force `prefers-reduced-motion` + injected no-animation styles
 - **SQLite as source of truth** — premade and generated apps persist state in SQLite; verification reads `/forge/state` (DB-backed), never the UI
 - **Enforced separation of concerns** — architecture tests keep environment, agents, verifiers, and training code from importing across boundaries
@@ -212,22 +222,34 @@ Seven export formats from the per-environment **Export Dataset** page:
 | **Rewards** | `rewards.jsonl` | Analysis, custom reward models |
 | **Verifier Results** | `verifier_results.jsonl` | Debugging, custom reward models |
 
+### Policy Training
+
+Closing the RL loop, `forge train` turns Forge's *own* graded experience into a policy update — distinct from the benchmark, which zero-shot *evaluates* a base model. It consumes the exports above and produces a loadable checkpoint:
+
+- **GRPO** over `grpo_rollouts.parquet` — rewards are mapped to group-relative advantages `(r − mean) / (std + eps)` across rollouts that share a prompt
+- **DPO** over `preference_pairs.jsonl` — chosen/rejected labels are kept only where the chosen trajectory was graded strictly higher
+
+The reward→signal mapping is a deterministic function of the grades already assigned, and a graded set with **no relative signal** (all rollouts scored the same, or every preference pair a tie) raises `NoTrainingSignalError` and writes no checkpoint — the training backend is never invoked. The heavy backend gates on `trl` + `transformers` and expects a GPU node. A finished run writes a `policy_checkpoint.json` manifest that runtime agents load via `forge.training.checkpoint.load_policy_agent`, so the same policy can collect → grade → export → train → reload.
+
+```bash
+forge train \
+  --data <export_dir> \             # dir holding grpo_rollouts.parquet / preference_pairs.jsonl
+  --base-model Qwen/Qwen2.5-3B \
+  --output policy_checkpoint \
+  --objective grpo                  # grpo | dpo
+```
+
 ---
 
 ## Benchmark
 
-Benchmark runs a fixed task suite across your environments, collects episodes, and scores each environment on four quality metrics. Results are accessible from the **Benchmark** section in the top nav.
+Benchmark runs your selected environments against **their own compiled tasks**, collects episodes, and scores each environment on four quality metrics. Results are accessible from the **Benchmark** section in the top nav.
 
 ### Task Suite
 
-Two domains, 10 tasks total, difficulty 1–5:
+Each benchmarked environment is run against the tasks it was compiled with — `CompiledTaskProvider` resolves them from the environment's compiler input (its `TaskTemplate`s) and maps them onto the benchmark's task shape. There is no fixed built-in suite; an environment with no compiled tasks is skipped rather than falling back to a curated one. Grading is unchanged — each generated environment is scored inside the container episode runner by its own reward function and verifiers.
 
-| Domain | Tasks |
-|---|---|
-| `email` | Read & star, reply & label, bulk archive, multi-step reply+label, conditional filter & schedule send |
-| `project_mgmt` | View & mark done, create & assign, filter & set deadline, find blocked & reassign, cross-project dependency |
-
-The `--depth` / **Max difficulty** slider is a ceiling: only tasks with `difficulty ≤ depth` are included. Depth 1 runs easiest tasks only; depth 5 runs all tasks.
+The `--depth` / **Max difficulty** slider is a ceiling: only tasks with `difficulty ≤ depth` are included (difficulty is derived from how much a task asserts). Depth 1 runs the simplest tasks only; depth 5 runs all of them.
 
 ### Quality Metrics
 
@@ -246,7 +268,7 @@ The responsive Next.js control surface uses an industrial foundry visual system 
 
 | Page | What it does |
 |---|---|
-| **Run** | Configure domains, max difficulty (1–5), seeds per task, and output dir; launch with live log streaming and a progress bar |
+| **Run** | Select which active environments to benchmark, max difficulty (1–5), seeds per task, and output dir; launch with live log streaming and a progress bar. A snackbar prompts you if no environment is available or selected |
 | **Report** | Table of quality metrics per environment for the most recent completed run; CSV download |
 | **Transfer** | Stub — fine-tune a base model on collected data (GPU node required) |
 | **Eval** | Stub — evaluate a fine-tuned checkpoint zero-shot on WebArena / WorkArena (eval harness required) |
@@ -255,7 +277,7 @@ The responsive Next.js control surface uses an industrial foundry visual system 
 
 ```bash
 forge benchmark run \
-  --domains email,project_mgmt \
+  --domains my_env,other_env \      # comma-separated generated environment names
   --depth 5 \
   --seeds 5 \
   --output benchmark_results
@@ -328,11 +350,17 @@ Browser / API Client
 ```
 forge/
   runtime/             # Gymnasium env, state, trajectory, verifiers, agents
+    interaction.py     # Capability contracts: tool / MCP / REST / oRPC / computer / browser use
+    verifier_composer.py  # Per-task LayeredVerifier composition + binary/partial scoring
+    agent_logger.py    # Unified per-run trace (LLM calls + actions + state changes)
+    loss_analysis.py   # Per-run failure-mode taxonomy + cross-run aggregation
+    reward_hacking.py  # RewardHackingAuditor
+    clustering.py      # FailureClusterer
   extraction/          # LLM pipeline, PII redactor, schemas
   compiler/
     generators/        # Jinja2 compiler, package builder
   envgen/              # LLM orchestration, container runtime, episode/CLI/browser runners
-    agents/            # Backend, UI, assembly, telemetry, state, policy, reward, correctness, reviewer
+    agents/            # Backend, UI, assembly, telemetry, state, scenario, policy, reward, correctness, reviewer
     planning.py        # Typed task plans and dependency validation
     executor.py        # Dependency-aware specialist task execution
     a2a.py             # Typed Agent-to-Agent messages and scoped context permissions
@@ -342,13 +370,20 @@ forge/
     tiered_reward.py   # TieredRewardEngine with partial credit and multi-method scoring
     ml_reward.py       # SentenceEmbeddingScorer, NGramScorer (ROUGE-L / BLEU)
   benchmark/
-    task_suite.py      # Task registry: 2 domains, 10 tasks, difficulty 1–5
+    task_suite.py      # Benchmark Task shape (resolved from each env's compiled tasks)
+    compiled_tasks.py  # CompiledTaskProvider: an env's TaskTemplates → benchmark tasks
     data_collector.py  # Episode collection loop
     env_quality.py     # EnvQualityMetrics: coverage, reward density, dead-end rate, diversity
     report.py          # BenchmarkReport: paper-ready figures and summary tables
     transfer_pipeline.py  # Fine-tune stub (GPU required)
     _fine_tune.py      # fine_tune_model() entry point
     _eval.py           # evaluate_on_suite() entry point (eval harness required)
+  training/            # Close the RL loop: train a policy from graded rollouts
+    dataset.py         # Load grpo_rollouts.parquet / preference_pairs.jsonl exports
+    reward_mapping.py  # Reward → GRPO advantage / DPO label (deterministic, no-signal guard)
+    trainer.py         # PolicyTrainer: prepare signal → backend → PolicyCheckpoint
+    checkpoint.py      # PolicyCheckpoint manifest + load_policy_agent()
+    _backends.py       # GRPO/DPO backends gated on trl + transformers (GPU node)
   customization/       # Environment customisation helpers
   schema/              # StateSchemaManifest and related schemas
   cli/
@@ -479,8 +514,14 @@ forge replay <episode_id>            # Replay a recorded episode (ep_* or cep_*)
 forge validate <env_name>            # Smoke-test a compiled environment
 forge diagnose <env_name>            # Analyse episode quality across all runs
 
+forge train \
+  --data <export_dir> \              # dir with grpo_rollouts.parquet / preference_pairs.jsonl
+  --base-model Qwen/Qwen2.5-3B \
+  --output policy_checkpoint \
+  --objective grpo                   # grpo | dpo — train a policy from graded rollouts
+
 forge benchmark run \
-  --domains email,project_mgmt \
+  --domains my_env,other_env \       # comma-separated generated environment names
   --depth 5 \                        # max difficulty (1=easy only, 5=all tasks)
   --seeds 5                          # episodes per task
 forge benchmark report               # generate summary tables from collected results
