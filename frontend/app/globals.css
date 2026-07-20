@@ -401,6 +401,8 @@
   .benchmark-field__label small { @apply font-mono text-[0.55rem] font-normal uppercase tracking-wider text-muted-foreground; }
   .benchmark-field__label strong { @apply font-mono text-xs text-primary; }
   .benchmark-domain-grid { @apply grid gap-2 sm:grid-cols-2; }
+  .benchmark-domain-empty { @apply border border-dashed border-foreground/25 bg-background/40 p-4 text-xs text-muted-foreground; }
+  .benchmark-domain-empty a { @apply font-medium text-primary underline underline-offset-2; }
   .benchmark-domain { @apply relative flex cursor-pointer items-center gap-3 border border-foreground/20 bg-background/40 p-3 transition-all; }
   .benchmark-domain:hover { @apply border-foreground/45; }
   .benchmark-domain:has(input:checked) { @apply border-foreground bg-foreground text-background; box-shadow: 3px 3px 0 var(--primary); }

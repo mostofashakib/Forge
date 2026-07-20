@@ -743,10 +743,24 @@ def run_benchmark_task(
         from forge.benchmark.env_quality import compute_env_quality
         from forge.benchmark.report import BenchmarkReport, ReportConfig
 
+        from backend.app.database import get_session_factory
+        from forge.benchmark.compiled_tasks import (
+            CompiledTaskProvider,
+            db_compiler_input_loader,
+        )
+
         output_path = _Path(output_dir)
         cfg = CollectionConfig(domains=domains, depth=depth, seeds=seeds, output_dir=output_path / "data")
-        collector = DataCollector(cfg)
+        # Each selected environment is benchmarked against its own compiled tasks.
+        task_provider = CompiledTaskProvider(
+            loader=db_compiler_input_loader(get_session_factory())
+        )
+        collector = DataCollector(cfg, task_provider=task_provider)
         envs_root = generated_envs_root()
+
+        for domain in domains:
+            if not task_provider.tasks_for(domain=domain, depth=depth):
+                publish({"log": f"  [skip] '{domain}' has no tasks at depth {depth} — compile/select an environment with tasks"})
 
         checkpoint = CollectionCheckpoint(output_dir=output_path / "data")
         pending = collector._pending_runs(checkpoint)
