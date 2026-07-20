@@ -14,6 +14,12 @@ from forge.runtime.interaction import (
     BrowserUseSchema,
     ComputerUse,
     ComputerUseSchema,
+    MCPUse,
+    MCPUseSchema,
+    ORPCUse,
+    ORPCUseSchema,
+    RESTUse,
+    RESTUseSchema,
 )
 from forge.runtime.reward import RewardEngine
 from forge.runtime.snapshot import EnvironmentSpec, ToolParam, ToolSpec
@@ -165,6 +171,9 @@ class EnvBuilder:
         self._config = DeterminismConfig()
         self._computer_use: ComputerUse | None = None
         self._browser_use: BrowserUse | None = None
+        self._mcp_use: MCPUse | None = None
+        self._rest_use: RESTUse | None = None
+        self._orpc_use: ORPCUse | None = None
 
     def with_initial_state(self, factory: InitialStateFactory) -> "EnvBuilder":
         self._factory = factory
@@ -252,6 +261,21 @@ class EnvBuilder:
         self._browser_use = BrowserUse(schema=schema or BrowserUseSchema(), executor=executor)
         return self
 
+    def with_mcp_use(self, executor: Callable, schema: MCPUseSchema) -> "EnvBuilder":
+        """Attach an MCP capability (validated calls to an MCP server's tools)."""
+        self._mcp_use = MCPUse(schema=schema, executor=executor)
+        return self
+
+    def with_rest_use(self, executor: Callable, schema: RESTUseSchema) -> "EnvBuilder":
+        """Attach a REST capability (validated calls to HTTP endpoints)."""
+        self._rest_use = RESTUse(schema=schema, executor=executor)
+        return self
+
+    def with_orpc_use(self, executor: Callable, schema: ORPCUseSchema) -> "EnvBuilder":
+        """Attach an oRPC capability (validated calls to typed RPC procedures)."""
+        self._orpc_use = ORPCUse(schema=schema, executor=executor)
+        return self
+
     def build(self, verify: bool = True, verify_seed: int = 42) -> ForgeEnv:
         if self._factory is None:
             raise EnvironmentBuildError(
@@ -290,6 +314,9 @@ class EnvBuilder:
             tool_specs=list(self._tool_specs.values()),
             computer_use=self._computer_use,
             browser_use=self._browser_use,
+            mcp_use=self._mcp_use,
+            rest_use=self._rest_use,
+            orpc_use=self._orpc_use,
         )
         if verify:
             run_determinism_check(env, seed=verify_seed)
