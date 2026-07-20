@@ -105,6 +105,26 @@ class LayeredVerifier:
 
         return self.add_trajectory_check("required_actions", check)
 
+    def require_action_sequence(self, action_types: list[str]) -> "LayeredVerifier":
+        """Trajectory: the listed tool calls all occurred, in the given relative order.
+
+        Order-sensitive counterpart to :meth:`require_actions`: a right answer
+        reached by calling the tools in the wrong order fails. Intervening
+        actions are allowed; only the relative order of the listed calls matters.
+        """
+
+        def check(state, trajectory, task):
+            taken = [step.action.get("type") for step in trajectory.steps]
+            cursor = iter(taken)
+            for expected in action_types:
+                if not any(actual == expected for actual in cursor):
+                    return False, (
+                        f"required actions not in order {action_types}; got {taken}"
+                    )
+            return True, None
+
+        return self.add_trajectory_check("action_sequence", check)
+
     def forbid_actions(self, action_types: list[str]) -> "LayeredVerifier":
         """Trajectory: none of the listed tool calls were made."""
 
