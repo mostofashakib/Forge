@@ -4,8 +4,6 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-from forge.benchmark.task_suite import TaskSuite
-
 logger = logging.getLogger(__name__)
 
 _CHECKPOINT_FILE = "checkpoint.json"
@@ -43,14 +41,17 @@ class CollectionCheckpoint:
 
 
 class DataCollector:
-    def __init__(self, config: CollectionConfig) -> None:
+    def __init__(self, config: CollectionConfig, task_provider) -> None:
         self._cfg = config
-        self._suite = TaskSuite()
+        # A task provider exposes ``tasks_for(domain, depth) -> list[Task]``.
+        # Resolves each environment's own compiled tasks
+        # (see forge.benchmark.compiled_tasks.CompiledTaskProvider).
+        self._provider = task_provider
 
     def _pending_runs(self, checkpoint: CollectionCheckpoint) -> list[dict]:
         runs = []
         for domain in self._cfg.domains:
-            tasks = self._suite.tasks_for(domain=domain, depth=self._cfg.depth)
+            tasks = self._provider.tasks_for(domain=domain, depth=self._cfg.depth)
             for task in tasks:
                 for seed in range(self._cfg.seeds):
                     if not checkpoint.is_done(domain, task.name, seed):

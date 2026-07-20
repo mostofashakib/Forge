@@ -26,7 +26,7 @@ router = APIRouter(prefix="/api/benchmark", tags=["benchmark"])
 
 
 class CreateBenchmarkRunRequest(BaseModel):
-    domains: list[str] = Field(default_factory=lambda: ["email", "project_mgmt"], min_length=1)
+    domains: list[str] = Field(..., min_length=1)
     depth: int = Field(default=5, ge=1, le=5)
     seeds: int = Field(default=5, ge=1, le=100)
     output_dir: str = Field(default="benchmark_results", min_length=1, max_length=255)
