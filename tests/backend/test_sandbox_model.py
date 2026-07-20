@@ -26,4 +26,8 @@ def test_sandbox_environment_create_and_query():
         assert fetched.reward_requirements is None
         assert fetched.container_id is None
         assert fetched.container_port is None
+        # Negative: querying an id that was never inserted returns nothing,
+        # rather than silently resolving to the row above.
+        assert not db.get(SandboxEnvironment, "unknown_env")
+        assert "unknown_env" not in {row.id for row in db.query(SandboxEnvironment).all()}
     Base.metadata.drop_all(engine)

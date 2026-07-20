@@ -53,6 +53,23 @@ def test_pipeline_returns_compiler_input():
     assert len(result.tasks) == 1
 
 
+def test_pipeline_with_empty_extractions_yields_empty_input():
+    # False-positive guard: when every stage returns nothing, the assembled
+    # CompilerInput must be empty across the board, not partially fabricated.
+    from forge.extraction.schemas import CompilerInput
+    client = MockLLMClient({
+        "EntityExtractionResult": EntityExtractionResult(entities=[]),
+        "ActionExtractionResult": ActionExtractionResult(actions=[]),
+        "PolicyExtractionResult": PolicyExtractionResult(policies=[]),
+        "TaskExtractionResult": TaskExtractionResult(tasks=[]),
+    })
+    result = ExtractionPipeline(client).run(prompt="void", project_name="p", domain="d")
+    assert isinstance(result, CompilerInput)
+    assert result.entities == []
+    assert result.actions == []
+    assert result.tasks == []
+
+
 def test_pipeline_passes_entities_to_action_inferencer():
     captured = {}
 

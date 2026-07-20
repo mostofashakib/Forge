@@ -22,3 +22,10 @@ def test_task_generator_returns_task_list():
     tasks = gen.extract("Resolve tickets", entities=[], actions=[], policies=[])
     assert len(tasks) == 1
     assert tasks[0].name == "resolve_ticket"
+
+
+def test_empty_llm_result_yields_no_tasks():
+    # False-positive guard: no extracted tasks must yield an empty list, never a
+    # fabricated placeholder task.
+    client = MockLLMClient({"TaskExtractionResult": TaskExtractionResult(tasks=[])})
+    assert TaskGenerator(client).extract("idle", entities=[], actions=[], policies=[]) == []
