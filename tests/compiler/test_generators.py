@@ -69,6 +69,15 @@ def test_transition_generator_produces_one_file_per_action():
     assert "copy.deepcopy(state)" in code
 
 
+def test_transition_generator_emits_no_file_for_undeclared_action():
+    # False-positive guard: only declared actions get a transition file — the
+    # generator must not invent one for an action the input never declared.
+    from forge.compiler.generators.transition import TransitionGenerator
+    files = TransitionGenerator().generate(_counter_input())
+    assert "decrement" not in files
+    assert "delete" not in files
+
+
 def test_verifier_generator_produces_one_file_per_task():
     from forge.compiler.generators.verifier import VerifierGenerator
     files = VerifierGenerator().generate(_counter_input())
