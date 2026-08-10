@@ -61,6 +61,7 @@ superpowers/
 generated_envs/*
 !generated_envs/.gitkeep
 forge.db
+dump.rdb
 
 # IDE
 .vscode/
