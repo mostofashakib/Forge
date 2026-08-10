@@ -11,6 +11,8 @@ import logging
 from pathlib import Path
 from typing import Literal
 
+from forge.reward_presets import RewardPreset
+
 _ENVS_ROOT = Path("generated_envs")
 _VALID_SCORING_METHODS = ("llm", "embeddings", "rouge", "bleu")
 
@@ -34,10 +36,34 @@ def _load_scoring_methods(env_name: str) -> list[str]:
     return ["llm"]
 
 
+def _load_reward_preset(env_name: str) -> str:
+    path = _reward_config_path(env_name)
+    if path.exists():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            return RewardPreset(
+                data.get("reward_preset", RewardPreset.FULL_LAYERED_PARTIAL)
+            ).value
+        except Exception:
+            pass
+    return RewardPreset.FULL_LAYERED_PARTIAL.value
+
+
 def _save_scoring_methods(env_name: str, methods: list[str]) -> None:
     path = _reward_config_path(env_name)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"scoring_methods": methods}), encoding="utf-8")
+    data = {"reward_preset": _load_reward_preset(env_name), "scoring_methods": methods}
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+
+def _save_reward_preset(env_name: str, preset: RewardPreset) -> None:
+    path = _reward_config_path(env_name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = {
+        "reward_preset": preset.value,
+        "scoring_methods": _load_scoring_methods(env_name),
+    }
+    path.write_text(json.dumps(data), encoding="utf-8")
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -57,6 +83,7 @@ class UpdateRequirementsRequest(BaseModel):
     policy_requirements: str | None = None
     reward_requirements: str | None = None
     scoring_methods: list[str] | None = None
+    reward_preset: RewardPreset | None = None
 
 
 class EvaluationRunRequest(BaseModel):
@@ -323,6 +350,7 @@ def get_evaluate(env_name: str, db: Session = Depends(get_db)):
         "policy_requirements": sb.policy_requirements or "",
         "reward_requirements": sb.reward_requirements or "",
         "scoring_methods": _load_scoring_methods(env_name),
+        "reward_preset": _load_reward_preset(env_name),
     }
 
 
@@ -349,6 +377,8 @@ def update_evaluate(
         if not body.scoring_methods:
             raise HTTPException(status_code=422, detail="At least one scoring method required.")
         _save_scoring_methods(env_name, body.scoring_methods)
+    if body.reward_preset is not None:
+        _save_reward_preset(env_name, body.reward_preset)
     db.commit()
     return {"status": "saved"}
 

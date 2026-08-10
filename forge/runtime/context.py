@@ -17,6 +17,17 @@ class SimClock:
 
 
 @dataclass
+class WallClock:
+    """Real clock used only by the explicit determinism-off experiment."""
+
+    def now(self) -> datetime:
+        return datetime.now(timezone.utc)
+
+    def advance(self, seconds: int = 1) -> None:
+        return None
+
+
+@dataclass
 class IDGenerator:
     _counters: dict[str, int] = field(default_factory=dict)
 
@@ -39,15 +50,27 @@ class SeededUUIDGenerator:
         return str(uuid.UUID(int=self._rng.getrandbits(128), version=4))
 
 
+class RandomUUIDGenerator:
+    def next(self) -> str:
+        return str(uuid.uuid4())
+
+
 @dataclass
 class RuntimeContext:
     seed: int
+    deterministic: bool = True
     actor_id: str = "agent"
-    clock: SimClock = field(default_factory=SimClock)
+    clock: SimClock | WallClock = field(init=False)
     id_generator: IDGenerator = field(default_factory=IDGenerator)
     rng: random.Random = field(init=False)
-    uuid_generator: SeededUUIDGenerator = field(init=False)
+    uuid_generator: SeededUUIDGenerator | RandomUUIDGenerator = field(init=False)
 
     def __post_init__(self) -> None:
-        self.rng = random.Random(self.seed)
-        self.uuid_generator = SeededUUIDGenerator(self.seed)
+        if self.deterministic:
+            self.clock = SimClock()
+            self.rng = random.Random(self.seed)
+            self.uuid_generator = SeededUUIDGenerator(self.seed)
+        else:
+            self.clock = WallClock()
+            self.rng = random.Random()
+            self.uuid_generator = RandomUUIDGenerator()

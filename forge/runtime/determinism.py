@@ -77,9 +77,9 @@ def run_determinism_check(
     raises DeterminismError if the hashes differ. Leaves the env in a stepped
     state — callers must reset() before normal use.
 
-    The check is mandatory: it is wired into the env loader, CLI, and EnvBuilder
-    and cannot be bypassed. A generated environment that is not reproducible
-    fails to load.
+    Callers run this check by default. The explicit ``FORGE_DETERMINISM=off``
+    experiment path skips it so repeated same-seed trajectories can quantify
+    the value of deterministic clocks and RNGs.
     """
     first_hashes, taken, first_total = _rollout(env, seed, num_steps, actions)
     second_hashes, _, _second_total = _rollout(env, seed, num_steps, taken if actions is None else actions)

@@ -19,7 +19,7 @@ from forge.envgen.agents.reward import RewardAgent
 from forge.envgen.research import UserResearchAgent
 from forge.extraction.schemas import CompilerInput
 from forge.paths import confined_path, confined_relative_path, validate_path_segment
-from forge.settings import generated_envs_root
+from forge.settings import determinism_enabled, generated_envs_root
 from forge.envgen.executor import TaskExecutor
 from forge.envgen.planning import PromptPlannerAgent
 from forge.envgen.repair import RepairLoop
@@ -86,7 +86,7 @@ class EnvironmentOrchestrator:
             ScenarioBuilderAgent(),
             PolicyAgent(),
             RewardAgent(),
-            EnvironmentCorrectnessAgent(),
+            *([EnvironmentCorrectnessAgent()] if determinism_enabled() else []),
             ReviewerAgent(),
         ]
 

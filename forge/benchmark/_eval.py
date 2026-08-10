@@ -13,6 +13,8 @@ from typing import Callable
 from forge.benchmark.compiled_tasks import CompiledTaskProvider, db_compiler_input_loader
 from forge.benchmark.task_suite import Task
 from forge.experiments import ExperimentConfig, RunResult
+from forge.reward_presets import reward_preset_spec
+from forge.settings import determinism_enabled
 from forge.training.checkpoint import MANIFEST_NAME, PolicyCheckpoint, load_policy_agent
 
 
@@ -77,29 +79,48 @@ def evaluate_on_suite(
             loader=db_compiler_input_loader(get_session_factory())
         )
     if episode_runner is None:
-        episode_runner = _container_episode_runner(checkpoint_dir)
+        episode_runner = _container_episode_runner(
+            checkpoint_dir, config.reward_preset
+        )
 
     outcomes: list[EpisodeOutcome] = []
+    reward_groups: list[list[float]] = []
     output_root = Path(runs_dir) / resolved_run_id / "eval"
     for env_name in config.heldout_envs:
         tasks = task_provider.tasks_for(domain=env_name, depth=depth)
         if not tasks:
             raise ValueError(f"held-out environment has no compiled tasks: {env_name}")
         for task in tasks:
-            episode_path = output_root / env_name / task.name / f"seed_{selected_seed}.jsonl"
-            outcomes.append(episode_runner(task, selected_seed, episode_path))
+            task_rewards: list[float] = []
+            for repeat in range(config.determinism_repeats):
+                episode_path = (
+                    output_root / env_name / task.name
+                    / f"seed_{selected_seed}_repeat_{repeat}.jsonl"
+                )
+                outcome = episode_runner(task, selected_seed, episode_path)
+                if (
+                    reward_preset_spec(config.reward_preset).auditor_enabled
+                    and outcome.reward_hacking
+                ):
+                    outcome = EpisodeOutcome(
+                        passed=False, reward=0.0, reward_hacking=True
+                    )
+                outcomes.append(outcome)
+                task_rewards.append(outcome.reward)
+            reward_groups.append(task_rewards)
 
     if not outcomes:
         raise ValueError("the held-out split produced no evaluation episodes")
 
     pass_rate = sum(outcome.passed for outcome in outcomes) / len(outcomes)
     hacking_rate = sum(outcome.reward_hacking for outcome in outcomes) / len(outcomes)
-    rewards = [outcome.reward for outcome in outcomes]
-    reward_variance = pvariance(rewards) if len(rewards) > 1 else 0.0
+    task_variances = [pvariance(rewards) for rewards in reward_groups]
+    reward_variance = sum(task_variances) / len(task_variances)
 
     result_record = RunResult(
         config=config.model_dump(mode="json"),
         seed=selected_seed,
+        determinism="on" if determinism_enabled() else "off",
         heldout_pass_rate=pass_rate,
         reward_hacking_rate=hacking_rate,
         reward_variance=reward_variance,
@@ -109,7 +130,8 @@ def evaluate_on_suite(
         **result_record.model_dump(),
         "run_id": resolved_run_id,
         "result_path": str(result_path),
-        "num_eval_tasks": len(outcomes),
+        "num_eval_tasks": len(reward_groups),
+        "num_eval_episodes": len(outcomes),
         # Compatibility for existing report consumers.
         "task_completion_rate": pass_rate,
     }
@@ -165,7 +187,7 @@ class _PolicyContainerAdapter:
         return {"endpoint": endpoint, "payload": payload}
 
 
-def _container_episode_runner(checkpoint_dir: Path) -> EpisodeRunner:
+def _container_episode_runner(checkpoint_dir: Path, reward_preset) -> EpisodeRunner:
     from forge.envgen.episode_runner import ContainerEpisodeRunner, EpisodeConfig
     from forge.schema.state_schema import StateSchemaManifest
     from forge.settings import generated_envs_root
@@ -199,9 +221,13 @@ def _container_episode_runner(checkpoint_dir: Path) -> EpisodeRunner:
                 policy, jsonl_path=jsonl_path, seed=seed
             )
         passed = result.termination_reason == "success"
+        preset = reward_preset_spec(reward_preset)
+        reward = 1.0 if preset.binary_final_state and passed else result.total_reward
+        if preset.binary_final_state and not passed:
+            reward = 0.0
         return EpisodeOutcome(
             passed=passed,
-            reward=result.total_reward,
+            reward=reward,
             reward_hacking=_has_reward_hacking_pattern(result, passed),
         )
 

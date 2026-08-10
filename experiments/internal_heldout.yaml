@@ -4,6 +4,7 @@ train_envs:
   - crm_train
 heldout_envs:
   - calendar_heldout
-reward_preset: balanced
+reward_preset: full_layered_partial
 base_model: Qwen/Qwen2.5-3B-Instruct
 seeds: [0, 1, 2]
+determinism_repeats: 2

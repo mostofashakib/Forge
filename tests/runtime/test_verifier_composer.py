@@ -202,6 +202,39 @@ def test_partial_and_binary_disagree_on_a_partially_correct_result():
     assert comp.score(result, ScoringMode.PARTIAL).total_reward > 0.0
 
 
+def test_binary_final_state_ignores_trajectory_and_scores_binary():
+    task = _task(
+        success=[SuccessCondition(type="state_check", expression="done == True")]
+    )
+    composer = VerifierComposer("binary_final_state")
+    verifier = composer.compose(task, scenario=_ordered_scenario())
+    result = verifier({"done": True}, _traj(_step(0, "wrong")), {})
+    assert result.passed is True
+    assert composer.score(result).total_reward == 1.0
+
+
+def test_judge_only_uses_task_description_as_default_rubric():
+    task = _task(success=[SuccessCondition(type="state_check", expression="done == True")])
+    composer = VerifierComposer("judge_only")
+    verifier = composer.compose(
+        task, judge_client=lambda rubric, state, trajectory, metadata: (0.8, rubric)
+    )
+    result = verifier({"done": False}, _traj(), {})
+    assert [check.name for check in result.checks] == ["judge:task_outcome"]
+    assert composer.score(result).total_reward == pytest.approx(0.8)
+
+
+def test_full_no_auditor_keeps_layers_but_disables_auditor():
+    composer = VerifierComposer("full_no_auditor")
+    assert composer.auditor_enabled is False
+    assert VerifierComposer("full_layered_partial").auditor_enabled is True
+    verifier = VerifierComposer().compose(
+        _task(success=[SuccessCondition(type="state_check", expression="ok == True")])
+    )
+    assert composer.auditor_for(verifier) is None
+    assert VerifierComposer().auditor_for(verifier) is not None
+
+
 # ── Per-environment composition ───────────────────────────────────────────
 
 

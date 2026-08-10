@@ -3,7 +3,7 @@ import importlib
 import sys
 
 from forge.runtime.determinism import run_determinism_check
-from forge.settings import generated_envs_root
+from forge.settings import determinism_enabled, generated_envs_root
 
 
 def load_forge_env(env_name: str, telemetry):
@@ -16,8 +16,7 @@ def load_forge_env(env_name: str, telemetry):
     build_fn = getattr(module, f"build_{env_name}_env")
     env = build_fn()
     # Verify before telemetry injection so check steps are never recorded.
-    # Mandatory and non-bypassable: raises DeterminismError if two
-    # identically-seeded rollouts diverge.
-    run_determinism_check(env)
+    if determinism_enabled():
+        run_determinism_check(env)
     env._telemetry = telemetry
     return env

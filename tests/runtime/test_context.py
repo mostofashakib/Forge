@@ -44,3 +44,10 @@ def test_same_seed_produces_same_clock_sequence():
         ctx1.clock.advance()
         ctx2.clock.advance()
     assert ctx1.clock.now() == ctx2.clock.now()
+
+
+def test_determinism_off_context_uses_wall_clock_and_unseeded_ids():
+    ctx1 = RuntimeContext(seed=42, deterministic=False)
+    ctx2 = RuntimeContext(seed=42, deterministic=False)
+    assert ctx1.uuid_generator.next() != ctx2.uuid_generator.next()
+    assert type(ctx1.clock).__name__ == "WallClock"
