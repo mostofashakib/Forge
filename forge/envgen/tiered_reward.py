@@ -45,6 +45,7 @@ from pydantic import BaseModel, Field
 
 from forge.extraction.llm_client import LLMClient, get_client
 from forge.envgen.config import envgen_config
+from forge.reward_presets import RewardPreset, reward_preset_spec
 
 logger = logging.getLogger(__name__)
 
@@ -255,6 +256,7 @@ class TieredRewardPrompts:
 
 @dataclass
 class TieredRewardConfig:
+    reward_preset: RewardPreset | str = RewardPreset.FULL_LAYERED_PARTIAL
     # Lower bound on the efficiency multiplier: even a very inefficient agent
     # that nonetheless succeeds should not see its reward zeroed out by step
     # count alone. 0.5 means "at most 2× penalty for inefficiency".
@@ -273,6 +275,25 @@ class TieredRewardConfig:
     # "bleu"       — BLEU n-gram precision
     partial_credit_methods: list[str] = field(default_factory=lambda: ["llm"])
 
+    def __post_init__(self) -> None:
+        self.reward_preset = RewardPreset(self.reward_preset)
+
+    @property
+    def auditor_enabled(self) -> bool:
+        return reward_preset_spec(self.reward_preset).auditor_enabled
+
+    @classmethod
+    def from_preset(
+        cls,
+        preset: RewardPreset | str,
+        *,
+        partial_credit_methods: list[str] | None = None,
+    ) -> "TieredRewardConfig":
+        return cls(
+            reward_preset=RewardPreset(preset),
+            partial_credit_methods=partial_credit_methods or ["llm"],
+        )
+
 
 class TieredRewardEngine:
     """Three-tier grader — spec generation, loop detection, trajectory grading."""
@@ -286,6 +307,10 @@ class TieredRewardEngine:
             max_tokens=envgen_config().grading_llm_tokens
         )
         self._cfg = config or TieredRewardConfig()
+
+    @property
+    def auditor_enabled(self) -> bool:
+        return self._cfg.auditor_enabled
 
     # -- Tier 1: planning ---------------------------------------------------
 
@@ -335,6 +360,7 @@ class TieredRewardEngine:
         no meaningful progress, so don't waste an LLM call on it.
         """
         actual_steps = len(history)
+        preset = reward_preset_spec(self._cfg.reward_preset)
 
         if early_termination in ("loop_detected", "stuck_failing"):
             return TrajectoryGrade(
@@ -349,12 +375,43 @@ class TieredRewardEngine:
                 early_termination=early_termination,
             )
 
+        if preset.judge_only:
+            judge_score = min(
+                1.0,
+                self._grade_partial_combined(objective, spec, history) / 0.4,
+            )
+            return TrajectoryGrade(
+                final_reward=judge_score,
+                test_pass_rate=0.0,
+                efficiency_factor=1.0,
+                partial_credit=judge_score,
+                test_results=[],
+                reasoning=f"Judge-only score = {judge_score:.2f}.",
+                expected_steps=spec.expected_steps,
+                actual_steps=actual_steps,
+                early_termination=None,
+            )
+
         # Run the assertions. If the LLM produced no assertions (planner
         # fallback), pass_rate stays 0 and we lean entirely on partial credit.
         test_results = self._run_assertions(spec.assertions, container_id)
         passed = sum(1 for r in test_results if r.passed)
         total = len(test_results) or 1
         pass_rate = passed / total if test_results else 0.0
+
+        if preset.binary_final_state:
+            value = 1.0 if test_results and pass_rate == 1.0 else 0.0
+            return TrajectoryGrade(
+                final_reward=value,
+                test_pass_rate=pass_rate,
+                efficiency_factor=1.0,
+                partial_credit=0.0,
+                test_results=test_results,
+                reasoning="Binary final-state assertions passed." if value else "Binary final-state assertions failed.",
+                expected_steps=spec.expected_steps,
+                actual_steps=actual_steps,
+                early_termination=None,
+            )
 
         efficiency = self._efficiency(spec.expected_steps, actual_steps)
 

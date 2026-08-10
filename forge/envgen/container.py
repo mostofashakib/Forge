@@ -533,6 +533,7 @@ class ContainerRuntime:
             nano_cpus=_CPU_LIMIT,
             pids_limit=_PID_LIMIT,
             init=True,
+            environment={"FORGE_DETERMINISM": os.environ.get("FORGE_DETERMINISM", "on")},
         )
         return container.id, 0
 
@@ -549,6 +550,7 @@ class ContainerRuntime:
                 "PUID": "1000",
                 "PGID": "1000",
                 "TZ": "UTC",
+                "FORGE_DETERMINISM": os.environ.get("FORGE_DETERMINISM", "on"),
                 # Expose CDP so agents can connect and control the browser programmatically.
                 "CHROME_CLI": "--remote-debugging-port=9222 --remote-debugging-address=0.0.0.0 --no-sandbox",
             },
@@ -569,7 +571,11 @@ class ContainerRuntime:
             name=self._container_name(env_name),
             detach=True,
             ports={"8000/tcp": _loopback_port()},
-            environment={"REDIS_URL": self._redis_url, "FORGE_ENV_NAME": env_name},
+            environment={
+                "REDIS_URL": self._redis_url,
+                "FORGE_ENV_NAME": env_name,
+                "FORGE_DETERMINISM": os.environ.get("FORGE_DETERMINISM", "on"),
+            },
             labels={"forge.env": env_name, "forge.managed": "true"},
             # `on-failure` with a small retry cap, NOT `unless-stopped`:
             # a buggy LLM-generated app that crashes on boot would otherwise

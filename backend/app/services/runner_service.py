@@ -104,7 +104,9 @@ async def _run_episode(
             jsonl_path=jsonl_path,
         )
         env = load_forge_env(env_name, telemetry)
-        policy = RandomPolicy(env.action_types, seed=seed)
+        from forge.settings import experiment_seed
+
+        policy = RandomPolicy(env.action_types, seed=experiment_seed(seed))
 
         obs, info = env.reset(seed=seed)
         terminated = truncated = False

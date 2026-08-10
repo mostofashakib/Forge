@@ -1,5 +1,6 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING, Protocol
+import uuid
 import gymnasium as gym
 from forge.runtime.action import ActionValidator
 from forge.runtime.context import RuntimeContext
@@ -20,6 +21,7 @@ from forge.runtime.state import StateStore
 from forge.runtime.trajectory import TrajectoryStore
 from forge.runtime.transition import TransitionEngine
 from forge.runtime.verifier import VerifierEngine
+from forge.settings import determinism_enabled
 
 from forge.runtime.policy_engine import PolicyEngine
 from forge.runtime.observation_filter import ObservationFilter
@@ -51,6 +53,7 @@ class ForgeEnv(gym.Env):
         mcp_use: MCPUse | None = None,
         rest_use: RESTUse | None = None,
         orpc_use: ORPCUse | None = None,
+        deterministic: bool | None = None,
     ) -> None:
         super().__init__()
         self.env_spec = env_spec
@@ -69,6 +72,9 @@ class ForgeEnv(gym.Env):
         self.mcp_use = mcp_use
         self.rest_use = rest_use
         self.orpc_use = orpc_use
+        self._deterministic = (
+            determinism_enabled() if deterministic is None else deterministic
+        )
 
         self.observation_space = gym.spaces.Dict({})
         self.action_space = gym.spaces.Dict({})
@@ -140,12 +146,20 @@ class ForgeEnv(gym.Env):
     def reset(
         self, seed: int | None = None, options: dict | None = None
     ) -> tuple[dict, dict]:
-        super().reset(seed=seed)
-        actual_seed = seed if seed is not None else int(self.np_random.integers(0, 2**31))
+        super().reset(seed=seed if self._deterministic else None)
+        actual_seed = (
+            seed
+            if self._deterministic and seed is not None
+            else int(self.np_random.integers(0, 2**31))
+        )
         opts = options or {}
 
-        self._ctx = RuntimeContext(seed=actual_seed)
-        self._episode_id = f"ep_{actual_seed:08x}"
+        self._ctx = RuntimeContext(seed=actual_seed, deterministic=self._deterministic)
+        self._episode_id = (
+            f"ep_{actual_seed:08x}"
+            if self._deterministic
+            else f"ep_{uuid.uuid4().hex[:12]}"
+        )
         initial_state = self._factory.create(self._ctx, opts)
         self._state_store = StateStore(initial_state)
         self._traj_store = TrajectoryStore(self._episode_id)

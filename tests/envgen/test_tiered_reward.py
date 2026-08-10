@@ -287,3 +287,46 @@ def test_grade_no_assertions_in_spec_uses_llm_only():
 
     assert grade.partial_credit == pytest.approx(0.1)
     assert grade.final_reward == pytest.approx(0.1)
+
+
+def test_binary_final_state_preset_disables_partial_and_efficiency():
+    engine = TieredRewardEngine(
+        client=MagicMock(),
+        config=TieredRewardConfig.from_preset("binary_final_state"),
+    )
+    spec = EndStateSpec(
+        summary="x", expected_steps=1,
+        assertions=[{"description": "done", "command": "check"}],
+    )
+    history = [{"command": "slow"}] * 20
+    with patch(
+        "forge.envgen.tiered_reward.subprocess.run",
+        return_value=MagicMock(returncode=0, stdout="", stderr=""),
+    ):
+        grade = engine.grade("obj", spec, history, container_id="cid")
+    assert grade.final_reward == 1.0
+    assert grade.efficiency_factor == 1.0
+
+
+def test_judge_only_preset_skips_assertions_and_normalizes_score():
+    from forge.envgen.tiered_reward import _PartialCreditLLM
+
+    client = MagicMock()
+    client.extract.return_value = _PartialCreditLLM(score=0.2, reasoning="half")
+    engine = TieredRewardEngine(
+        client=client,
+        config=TieredRewardConfig.from_preset("judge_only"),
+    )
+    spec = EndStateSpec(
+        summary="x", expected_steps=1,
+        assertions=[{"description": "done", "command": "check"}],
+    )
+    with patch("forge.envgen.tiered_reward.subprocess.run") as run_assertion:
+        grade = engine.grade("obj", spec, [{"command": "x"}], container_id="cid")
+    run_assertion.assert_not_called()
+    assert grade.final_reward == pytest.approx(0.5)
+
+
+def test_tiered_reward_presets_expose_auditor_switch():
+    assert TieredRewardConfig.from_preset("full_layered_partial").auditor_enabled
+    assert not TieredRewardConfig.from_preset("full_no_auditor").auditor_enabled

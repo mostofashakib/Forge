@@ -169,7 +169,9 @@ class ContainerEpisodeRunner:
     def _reset(self, seed: int | None = None) -> dict:
         # Thread the seed so the app rebuilds a reproducible, seed-specific
         # starting universe; an unseeded reset restores the fixed baseline.
-        body = {"seed": seed} if seed is not None else None
+        from forge.settings import determinism_enabled
+
+        body = {"seed": seed} if seed is not None and determinism_enabled() else None
         self._http.post("/forge/reset", json=body)
         return self._get_state()
 

@@ -274,28 +274,32 @@ def build_sandbox_task(
         publish({"log": f"[forge] container running on port {port} ✓"})
         _set_running(container_id, port, image_tag)
 
-        # ── CorrectnessValidator (hard gate: reset fidelity + snapshot/restore + seed control)
+        # ── CorrectnessValidator (default-on; disabled only for the ablation)
         from forge.envgen.correctness_validator import (
             CorrectnessValidator, CorrectnessValidationError,
         )
 
-        base_url_c = f"http://localhost:{port}"
-        action_names = [a.name for a in compiler_input.actions]
-        publish({"log": "[forge] validating reset fidelity and snapshot/restore…"})
-        try:
-            c_result = await loop.run_in_executor(
-                None,
-                lambda: CorrectnessValidator(base_url=base_url_c).validate(action_names),
-            )
-        except Exception as _ce:  # container not ready / transport error
-            publish({"log": f"[forge] correctness validation could not run: {_ce}"})
-            c_result = None
-        if c_result is not None and not c_result.passed:
-            for finding in c_result.findings:
-                publish({"log": f"[forge] correctness FAIL [{finding.category}]: {finding.message}"})
-            raise CorrectnessValidationError(c_result)
-        if c_result is not None:
-            publish({"log": "[forge] correctness validation passed ✓"})
+        from forge.settings import determinism_enabled
+        if determinism_enabled():
+            base_url_c = f"http://localhost:{port}"
+            action_names = [a.name for a in compiler_input.actions]
+            publish({"log": "[forge] validating reset fidelity and snapshot/restore…"})
+            try:
+                c_result = await loop.run_in_executor(
+                    None,
+                    lambda: CorrectnessValidator(base_url=base_url_c).validate(action_names),
+                )
+            except Exception as _ce:  # container not ready / transport error
+                publish({"log": f"[forge] correctness validation could not run: {_ce}"})
+                c_result = None
+            if c_result is not None and not c_result.passed:
+                for finding in c_result.findings:
+                    publish({"log": f"[forge] correctness FAIL [{finding.category}]: {finding.message}"})
+                raise CorrectnessValidationError(c_result)
+            if c_result is not None:
+                publish({"log": "[forge] correctness validation passed ✓"})
+        else:
+            publish({"log": "[forge] determinism correctness gate disabled for experiment"})
 
         # ── PostGenerationValidator ────────────────────────────────────────
         manifest_path = envs_root / env_name / "state_schema.json"
@@ -439,6 +443,7 @@ def run_container_episode_task(self, run_id: str, episode_index: int, seed: int)
     """
     from backend.app.database import get_session_factory
     from backend.app.models import SandboxEnvironment
+    from forge.settings import experiment_seed
 
     SessionLocal = get_session_factory()
     episode_id = f"cep_{seed:08x}_{secrets.token_hex(4)}"
@@ -499,6 +504,7 @@ def run_container_episode_task(self, run_id: str, episode_index: int, seed: int)
             import json as _json
             reward_cfg_path = envs_root / env_name / "reward_config.json"
             scoring_methods = ["llm"]
+            reward_preset = "full_layered_partial"
             if reward_cfg_path.exists():
                 try:
                     data = _json.loads(reward_cfg_path.read_text())
@@ -506,10 +512,13 @@ def run_container_episode_task(self, run_id: str, episode_index: int, seed: int)
                         scoring_methods = data["scoring_methods"] or ["llm"]
                     elif "scoring_method" in data:
                         scoring_methods = [data["scoring_method"]]
+                    reward_preset = data.get("reward_preset", reward_preset)
                 except Exception:
                     pass
             reward_engine = TieredRewardEngine(
-                config=TieredRewardConfig(partial_credit_methods=scoring_methods)
+                config=TieredRewardConfig.from_preset(
+                    reward_preset, partial_credit_methods=scoring_methods
+                )
             )
             replay_path = envs_root / env_name / "synthetic_replay.json"
             if replay_path.exists():
@@ -523,9 +532,9 @@ def run_container_episode_task(self, run_id: str, episode_index: int, seed: int)
                         seed, seed % len(trajectory_episodes), len(ep_commands),
                     )
                 else:
-                    agent = make_cli_agent(agent_id, seed=seed)
+                    agent = make_cli_agent(agent_id, seed=experiment_seed(seed))
             else:
-                agent = make_cli_agent(agent_id, seed=seed)
+                agent = make_cli_agent(agent_id, seed=experiment_seed(seed))
             result = CliEpisodeRunner(cfg, reward_engine=reward_engine).run_episode(
                 agent, episode_id=episode_id, jsonl_path=jsonl_path
             )
@@ -553,7 +562,7 @@ def run_container_episode_task(self, run_id: str, episode_index: int, seed: int)
                 dead_end_patience=dead_end_patience,
                 success_threshold=success_threshold,
             )
-            agent = make_browser_agent(agent_id, seed=seed)
+            agent = make_browser_agent(agent_id, seed=experiment_seed(seed))
             result = BrowserEpisodeRunner(cfg).run_episode(
                 agent, episode_id=episode_id, jsonl_path=jsonl_path
             )
@@ -581,7 +590,7 @@ def run_container_episode_task(self, run_id: str, episode_index: int, seed: int)
                     manifest = StateSchemaManifest.model_validate_json(manifest_path.read_text())
                 except Exception as exc:
                     logger.warning("[container-ep] could not load manifest for %s: %s", env_name, exc)
-            agent = make_container_agent(agent_id, seed=seed)
+            agent = make_container_agent(agent_id, seed=experiment_seed(seed))
             with ContainerEpisodeRunner(cfg, manifest=manifest) as runner:
                 result = runner.run_episode(agent, episode_id=episode_id, jsonl_path=jsonl_path)
 
@@ -774,6 +783,7 @@ def run_benchmark_task(
             nonlocal completed
             from forge.envgen.episode_runner import ContainerEpisodeRunner, EpisodeConfig
             from forge.envgen.agents.container_agent import make_container_agent
+            from forge.settings import experiment_seed
 
             manifest = None
             manifest_path = envs_root / task.domain / "state_schema.json"
@@ -790,7 +800,7 @@ def run_benchmark_task(
 
             port = int(port_file.read_text().strip())
             cfg_ep = EpisodeConfig(base_url=f"http://localhost:{port}", objective=task.objective)
-            agent = make_container_agent("random", seed=seed)
+            agent = make_container_agent("random", seed=experiment_seed(seed))
             with ContainerEpisodeRunner(cfg_ep, manifest=manifest) as runner:
                 result = runner.run_episode(agent, jsonl_path=jsonl_path, seed=seed)
 
