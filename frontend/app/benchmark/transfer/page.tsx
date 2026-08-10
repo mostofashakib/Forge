@@ -4,7 +4,7 @@ export default function BenchmarkTransferPage() {
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Transfer Pipeline</h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Fine-tune a base model on Forge-collected data and evaluate zero-shot on WebArena / WorkArena.
+          Reserved for a future external transfer benchmark. Internal held-out evaluation is available now.
         </p>
       </div>
 

@@ -648,10 +648,12 @@ def diagnose(
 @app.command()
 def train(
     data_dir: Path = typer.Option(..., "--data", help="Directory containing exported graded rollouts"),
-    base_model: str = typer.Option(..., "--base-model", help="Base policy checkpoint to update"),
+    base_model: str | None = typer.Option(None, "--base-model", help="Base policy checkpoint (or read from --experiment)"),
     output: Path = typer.Option(Path("forge_policy"), "--output", "-o", help="Checkpoint output directory"),
     objective: str = typer.Option("grpo", "--objective", help="Training objective: grpo | dpo"),
     max_steps: int = typer.Option(500, "--max-steps"),
+    experiment: Path | None = typer.Option(None, "--experiment", help="Declarative experiment YAML"),
+    seed: int | None = typer.Option(None, "--seed", help="Experiment seed; required when YAML lists more than one"),
 ) -> None:
     """Train Forge's own policy from its own graded rollouts (GRPO / DPO).
 
@@ -667,6 +669,37 @@ def train(
     )
     from forge.training.dataset import MalformedExportError
 
+    experiment_config = None
+    train_envs = None
+    run_id = ""
+    if experiment is not None:
+        from datetime import datetime, timezone
+        from forge.experiments import ExperimentConfig
+
+        try:
+            experiment_config = ExperimentConfig.load(experiment)
+        except (FileNotFoundError, ValueError) as exc:
+            typer.echo(f"Invalid experiment: {exc}", err=True)
+            raise typer.Exit(2)
+        if seed is None:
+            if len(experiment_config.seeds) != 1:
+                typer.echo("Error: --seed is required when the experiment lists multiple seeds", err=True)
+                raise typer.Exit(2)
+            seed = experiment_config.seeds[0]
+        if seed not in experiment_config.seeds:
+            typer.echo(f"Error: seed {seed} is not declared by {experiment}", err=True)
+            raise typer.Exit(2)
+        if base_model is not None and base_model != experiment_config.base_model:
+            typer.echo("Error: --base-model conflicts with the experiment config", err=True)
+            raise typer.Exit(2)
+        base_model = experiment_config.base_model
+        train_envs = experiment_config.train_envs
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        run_id = f"{experiment.stem}-s{seed}-{timestamp}"
+    elif base_model is None:
+        typer.echo("Error: provide --base-model or --experiment", err=True)
+        raise typer.Exit(2)
+
     try:
         obj = TrainingObjective(objective.lower())
     except ValueError:
@@ -676,7 +709,9 @@ def train(
     try:
         result = PolicyTrainer().train(TrainingConfig(
             data_dir=data_dir, base_model=base_model, output_dir=output,
-            objective=obj, max_steps=max_steps,
+            objective=obj, max_steps=max_steps, train_envs=train_envs,
+            experiment_config=(experiment_config.model_dump(mode="json") if experiment_config else None),
+            seed=seed, run_id=run_id,
         ))
     except NoTrainingSignalError as exc:
         typer.echo(f"No training signal: {exc}", err=True)
@@ -692,6 +727,8 @@ def train(
         f"Trained {result.objective} policy on {result.num_examples} examples "
         f"(mean reward {result.mean_reward:.3f}) → {result.checkpoint_path}"
     )
+    if run_id:
+        typer.echo(f"Run ID: {run_id}")
 
 
 # ── Benchmark sub-app ──────────────────────────────────────────────────────
@@ -767,11 +804,15 @@ def benchmark_transfer(
     base_model: str = typer.Option("meta-llama/Llama-3.1-8B", "--base-model"),
     output: Path = typer.Option(Path("benchmark_results"), "--output", "-o"),
 ) -> None:
-    """Fine-tune base model on Forge data and evaluate zero-shot on WebArena/WorkArena. Requires GPU."""
+    """Reserved for a future external transfer benchmark. Requires GPU."""
     from forge.benchmark.transfer_pipeline import TransferConfig, run_transfer_pipeline
     cfg = TransferConfig(data_dir=data, base_model=base_model, output_dir=output)
     typer.echo(f"[benchmark] fine-tuning {base_model} on {data}…")
-    result = run_transfer_pipeline(cfg)
+    try:
+        result = run_transfer_pipeline(cfg)
+    except NotImplementedError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(1)
     typer.echo(f"✓ Eval on {result.eval_suite}:")
     typer.echo(f"   task_completion_rate = {result.task_completion_rate:.3f}")
     typer.echo(f"   success@1 = {result.success_at_1:.3f}")
@@ -812,15 +853,23 @@ def benchmark_report(
 
 @benchmark_app.command("eval")
 def benchmark_eval(
-    checkpoint: Path = typer.Option(..., "--checkpoint", help="Path to fine-tuned model checkpoint"),
-    suite: str = typer.Option("webArena", "--suite", help="Eval suite: webArena or workArena"),
+    checkpoint: Path = typer.Option(..., "--checkpoint", help="Directory containing policy_checkpoint.json"),
+    experiment: Path = typer.Option(..., "--experiment", "--suite", help="Declarative experiment YAML"),
+    seed: int | None = typer.Option(None, "--seed", help="Override checkpoint seed"),
+    runs_dir: Path = typer.Option(Path("runs"), "--runs-dir", help="Result record root"),
 ) -> None:
-    """Evaluate a fine-tuned checkpoint zero-shot on WebArena or WorkArena."""
-    typer.echo(f"[benchmark] evaluating {checkpoint} on {suite}…")
+    """Evaluate a policy checkpoint on internal held-out environments."""
+    typer.echo(f"[benchmark] evaluating {checkpoint} on held-out split from {experiment}…")
     try:
         from forge.benchmark._eval import evaluate_on_suite
-        result = evaluate_on_suite(model_path=str(checkpoint), suite=suite)
-        typer.echo(f"✓ task_completion_rate = {result['task_completion_rate']:.3f}")
-    except ImportError:
-        typer.echo("Error: evaluation requires 'transformers' and the eval harness. See docs/superpowers/specs/ for setup.", err=True)
+        result = evaluate_on_suite(
+            model_path=str(checkpoint), suite=str(experiment), seed=seed,
+            runs_dir=runs_dir,
+        )
+        typer.echo(f"✓ heldout_pass_rate = {result['heldout_pass_rate']:.3f}")
+        typer.echo(f"  reward_hacking_rate = {result['reward_hacking_rate']:.3f}")
+        typer.echo(f"  reward_variance = {result['reward_variance']:.3f}")
+        typer.echo(f"  result = {result['result_path']}")
+    except (FileNotFoundError, ImportError, RuntimeError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(1)

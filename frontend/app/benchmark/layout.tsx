@@ -16,7 +16,7 @@ const SIDEBAR_ITEMS = [
     available: false,
     badge: "GPU",
   },
-  { href: "/benchmark/eval", label: "Eval", available: false, badge: "soon" },
+  { href: "/benchmark/eval", label: "Eval", available: true, badge: "held-out" },
 ];
 
 export default function BenchmarkLayout({
