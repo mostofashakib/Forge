@@ -1,0 +1,9 @@
+# One declarative internal-generalization run. Replace names with generated envs.
+train_envs:
+  - email_train
+  - crm_train
+heldout_envs:
+  - calendar_heldout
+reward_preset: balanced
+base_model: Qwen/Qwen2.5-3B-Instruct
+seeds: [0, 1, 2]
