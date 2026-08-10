@@ -2,31 +2,24 @@ export default function BenchmarkEvalPage() {
   return (
     <div className="space-y-5">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Zero-shot Eval</h1>
-        <p className="text-sm text-muted-foreground mt-1">
-          Evaluate a fine-tuned checkpoint against WebArena or WorkArena without any in-distribution training.
+        <h1 className="text-2xl font-semibold tracking-tight">Held-out Eval</h1>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Measure policy generalization on internal environments excluded from training.
         </p>
       </div>
 
-      <div className="border border-amber-200 bg-amber-50 rounded-lg p-6 space-y-4">
-        <div className="flex items-start gap-3">
-          <span className="text-amber-500 text-lg leading-none">⚠</span>
-          <div>
-            <p className="text-sm font-semibold text-amber-800">Not yet available — eval harness required</p>
-            <p className="text-sm text-amber-700 mt-1">
-              Zero-shot evaluation requires integrating an external harness such as WebArena or WorkArena.
-            </p>
-          </div>
+      <div className="space-y-4 rounded-lg border border-emerald-200 bg-emerald-50 p-6">
+        <div>
+          <p className="text-sm font-semibold text-emerald-900">Internal harness ready</p>
+          <p className="mt-1 text-sm text-emerald-800">
+            The experiment YAML defines disjoint train and held-out environments. Eval rejects
+            checkpoints trained with a different split and records the headline metrics under runs/.
+          </p>
         </div>
 
         <div>
-          <p className="text-xs font-medium text-amber-800 mb-1.5">Implement the evaluation stub:</p>
-          <pre className="bg-amber-100 rounded-md px-3 py-2 text-xs font-mono text-amber-900 overflow-x-auto">{`forge/benchmark/_eval.py → evaluate_on_suite()`}</pre>
-        </div>
-
-        <div>
-          <p className="text-xs font-medium text-amber-800 mb-1.5">Once implemented, run via CLI:</p>
-          <pre className="bg-amber-100 rounded-md px-3 py-2 text-xs font-mono text-amber-900 overflow-x-auto">{`forge benchmark eval --checkpoint ./benchmark_results/forge_ft --suite webArena`}</pre>
+          <p className="mb-1.5 text-xs font-medium text-emerald-900">Run via CLI:</p>
+          <pre className="overflow-x-auto rounded-md bg-emerald-100 px-3 py-2 font-mono text-xs text-emerald-950">{`forge benchmark eval \\\n+  --checkpoint ./policy_checkpoint \\\n+  --experiment experiments/internal_heldout.yaml`}</pre>
         </div>
       </div>
     </div>

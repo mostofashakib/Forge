@@ -27,6 +27,7 @@ class RolloutRecord:
     total_reward: float
     passed: bool
     per_step_rewards: list[float]
+    env_name: str = ""
 
 
 @dataclass
@@ -41,6 +42,7 @@ class PreferenceRecord:
     rejected_reward: float
     chosen_passed: bool
     rejected_passed: bool
+    env_name: str = ""
 
 
 _ROLLOUT_COLUMNS = {"episode_id", "task_name", "prompt", "completion", "total_reward", "passed"}
@@ -66,6 +68,7 @@ def load_rollouts(path: Path) -> list[RolloutRecord]:
     for row in df.to_dict("records"):
         records.append(RolloutRecord(
             episode_id=str(row["episode_id"]),
+            env_name=str(row.get("env_name") or _environment_of(str(row["prompt"]))),
             task_name=str(row["task_name"]),
             prompt=str(row["prompt"]),
             completion=str(row["completion"]),
@@ -102,6 +105,7 @@ def load_preferences(path: Path) -> list[PreferenceRecord]:
                 obj = json.loads(line)
                 records.append(PreferenceRecord(
                     task=str(obj.get("task", "")),
+                    env_name=str(obj.get("env_name") or _environment_of(_prompt_of(obj["chosen"]))),
                     prompt=_prompt_of(obj["chosen"]),
                     chosen=_assistant_of(obj["chosen"]),
                     rejected=_assistant_of(obj["rejected"]),
@@ -128,4 +132,12 @@ def _assistant_of(messages: list[dict]) -> str:
     for msg in messages:
         if msg.get("role") == "assistant":
             return str(msg.get("content", ""))
+    return ""
+
+
+def _environment_of(prompt: str) -> str:
+    """Read the environment marker used by all Forge export writers."""
+    for line in prompt.splitlines():
+        if line.startswith("Environment:"):
+            return line.partition(":")[2].strip()
     return ""

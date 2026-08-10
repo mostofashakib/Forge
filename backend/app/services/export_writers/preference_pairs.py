@@ -49,6 +49,7 @@ def write(env_name: str, db: Session, out_dir: Path) -> None:
             worst_steps = get_steps(worst.id, db)
 
             record = {
+                "env_name": best.env_name,
                 "chosen": _episode_to_messages(best, best_steps),
                 "rejected": _episode_to_messages(worst, worst_steps),
                 "chosen_reward": best.total_reward,

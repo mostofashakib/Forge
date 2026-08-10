@@ -6,16 +6,16 @@ Closes the RL loop: the runtime collects and grades episodes
 those grades into a policy update — either group-relative-advantage **GRPO** over
 rollouts or preference-optimization **DPO** over chosen/rejected pairs.
 
-This is distinct from task #1 (`forge/benchmark/`): that is zero-shot transfer
-*evaluation* of a base model on external suites; this is *training* Forge's own
-policy from its own scored experience, and produces a checkpoint the runtime
-agents load via `forge.training.checkpoint.load_policy_agent`.
+The trained checkpoint is evaluated by ``forge.benchmark._eval`` on the
+experiment's disjoint internal held-out environments. External suites remain a
+separate, deferred integration.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
+import random
 
 from forge.training._backends import DPOBackend, GRPOBackend, TrainingBackend
 from forge.training.checkpoint import PolicyCheckpoint
@@ -43,6 +43,10 @@ class TrainingConfig:
     output_dir: Path
     objective: TrainingObjective = TrainingObjective.GRPO
     max_steps: int = 500
+    train_envs: list[str] | None = None
+    experiment_config: dict | None = None
+    seed: int | None = None
+    run_id: str = ""
 
 
 @dataclass
@@ -67,7 +71,9 @@ class PolicyTrainer:
 
     def train(self, config: TrainingConfig) -> TrainingResult:
         objective = TrainingObjective(config.objective)
-        examples, mean_reward = self._prepare(objective, config.data_dir)
+        examples, mean_reward = self._prepare(
+            objective, config.data_dir, train_envs=config.train_envs
+        )
         if not examples:
             raise NoTrainingSignalError(
                 f"no {objective.value} training signal in {config.data_dir}: "
@@ -75,6 +81,8 @@ class PolicyTrainer:
             )
 
         backend = self._backend or self._default_backend(objective)
+        if config.seed is not None:
+            _set_training_seed(config.seed)
         model_path = backend.train(
             base_model=config.base_model,
             examples=examples,
@@ -88,6 +96,10 @@ class PolicyTrainer:
             model_path=model_path,
             num_examples=len(examples),
             mean_reward=mean_reward,
+            experiment_config=config.experiment_config or {},
+            train_envs=config.train_envs or [],
+            seed=config.seed,
+            run_id=config.run_id,
         )
         checkpoint.save(Path(config.output_dir))
         return TrainingResult(
@@ -99,13 +111,21 @@ class PolicyTrainer:
 
     # ------------------------------------------------------------------
 
-    def _prepare(self, objective: TrainingObjective, data_dir: Path) -> tuple[list, float]:
+    def _prepare(
+        self,
+        objective: TrainingObjective,
+        data_dir: Path,
+        train_envs: list[str] | None = None,
+    ) -> tuple[list, float]:
         data_dir = Path(data_dir)
         if objective is TrainingObjective.GRPO:
             path = data_dir / _ROLLOUTS_FILE
             if not path.exists():
                 return [], 0.0
             rollouts = load_rollouts(path)
+            if train_envs is not None:
+                allowed = set(train_envs)
+                rollouts = [rollout for rollout in rollouts if rollout.env_name in allowed]
             examples = grpo_advantages(rollouts)
             mean = sum(r.total_reward for r in rollouts) / len(rollouts) if rollouts else 0.0
             return examples, mean
@@ -114,6 +134,9 @@ class PolicyTrainer:
         if not path.exists():
             return [], 0.0
         preferences = load_preferences(path)
+        if train_envs is not None:
+            allowed = set(train_envs)
+            preferences = [pair for pair in preferences if pair.env_name in allowed]
         examples = dpo_examples(preferences)
         rewards = [p.chosen_reward for p in preferences] + [p.rejected_reward for p in preferences]
         mean = sum(rewards) / len(rewards) if rewards else 0.0
@@ -121,3 +144,22 @@ class PolicyTrainer:
 
     def _default_backend(self, objective: TrainingObjective) -> TrainingBackend:
         return GRPOBackend() if objective is TrainingObjective.GRPO else DPOBackend()
+
+
+def _set_training_seed(seed: int) -> None:
+    """Seed libraries used by the training backends before trainer creation."""
+    random.seed(seed)
+    try:
+        import numpy as np
+
+        np.random.seed(seed)
+    except ImportError:  # pragma: no cover - numpy is a project dependency
+        pass
+    try:
+        import torch
+
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+    except ImportError:
+        pass

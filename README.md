@@ -12,7 +12,7 @@ Forge lets you spin up isolated, observable app environments — Gmail-like emai
 2. **Runs agents inside them** — Random, scripted, or LLM-powered agents interact with the app via a clean API
 3. **Records and rewards every step** — Policy enforcement, multi-method reward scoring, and a unified per-run trace (LLM calls, actions, state changes, verifier decisions) written durably so any run is replayable — even one that crashed mid-episode
 4. **Exports training data** — SFT pairs, DPO preference pairs, GRPO rollouts, failure datasets, and more
-5. **Benchmarks environment quality** — Runs a task suite across domains and scores coverage, reward density, dead-end rate, and action diversity
+5. **Measures held-out generalization** — Trains on an explicit environment split, evaluates only unseen environments, and records reproducible per-seed outcomes
 
 ---
 
@@ -225,7 +225,7 @@ Seven export formats from the per-environment **Export Dataset** page:
 
 ### Policy Training
 
-Closing the RL loop, `forge train` turns Forge's *own* graded experience into a policy update — distinct from the benchmark, which zero-shot *evaluates* a base model. It consumes the exports above and produces a loadable checkpoint:
+Closing the RL loop, `forge train` turns Forge's *own* graded experience into a policy update, then the benchmark evaluates that checkpoint on disjoint internal held-out environments. Training consumes the exports above and produces a loadable checkpoint:
 
 - **GRPO** over `grpo_rollouts.parquet` — rewards are mapped to group-relative advantages `(r − mean) / (std + eps)` across rollouts that share a prompt
 - **DPO** over `preference_pairs.jsonl` — chosen/rejected labels are kept only where the chosen trajectory was graded strictly higher
@@ -234,11 +234,32 @@ The reward→signal mapping is a deterministic function of the grades already as
 
 ```bash
 forge train \
-  --data <export_dir> \             # dir holding grpo_rollouts.parquet / preference_pairs.jsonl
-  --base-model Qwen/Qwen2.5-3B \
+  --data <export_dir> \             # merged graded exports with env_name metadata
+  --experiment experiments/internal_heldout.yaml \
+  --seed 0 \
   --output policy_checkpoint \
   --objective grpo                  # grpo | dpo
 ```
+
+Experiment files declare `{train_envs, heldout_envs, reward_preset, base_model, seeds}`.
+Training reads the base model and train split from the YAML and filters out all held-out
+records. The checkpoint records the exact experiment, split, and seed.
+
+```yaml
+# experiments/internal_heldout.yaml
+train_envs:
+  - email_train
+  - crm_train
+heldout_envs:
+  - calendar_heldout
+reward_preset: balanced
+base_model: Qwen/Qwen2.5-3B-Instruct
+seeds: [0, 1, 2]
+```
+
+The lists must be non-empty, unique, and disjoint. Run `forge train` once for each
+declared seed. Export rows must contain `env_name`; older Forge exports are also
+supported when their prompt contains an `Environment:` line.
 
 ---
 
@@ -248,7 +269,65 @@ Benchmark runs your selected environments against **their own compiled tasks**, 
 
 ### Task Suite
 
-Each benchmarked environment is run against the tasks it was compiled with — `CompiledTaskProvider` resolves them from the environment's compiler input (its `TaskTemplate`s) and maps them onto the benchmark's task shape. There is no fixed built-in suite; an environment with no compiled tasks is skipped rather than falling back to a curated one. Grading is unchanged — each generated environment is scored inside the container episode runner by its own reward function and verifiers.
+Each benchmarked environment is run against the tasks it was compiled with — `CompiledTaskProvider` resolves them from the environment's compiler input (its `TaskTemplate`s) and maps them onto the benchmark's task shape. There is no fixed built-in suite. Internal evaluation fails if a held-out environment has no compiled tasks, rather than silently weakening the denominator. Grading is unchanged — each generated environment is scored inside the container episode runner by its own reward function and verifiers.
+
+For policy generalization, `forge benchmark eval` loads `policy_checkpoint.json` and
+the same experiment YAML used for training. It refuses mismatched configs or leaked
+train environments, runs only `heldout_envs`, and writes
+`runs/<id>/result.json` with the config, seed, held-out pass rate, reward-hacking
+rate, and reward variance.
+
+```bash
+# 1. Train one declared seed using only train_envs.
+forge train \
+  --data exports \
+  --experiment experiments/internal_heldout.yaml \
+  --seed 0 \
+  --output policy_checkpoint
+
+# 2. Start every environment listed in heldout_envs, then evaluate the checkpoint.
+forge benchmark eval \
+  --checkpoint policy_checkpoint \
+  --experiment experiments/internal_heldout.yaml \
+  --runs-dir runs
+```
+
+The evaluator requires each held-out environment to be running and to have compiled
+tasks. It rejects checkpoints missing experiment metadata, checkpoints produced from
+a different config, undeclared seeds, and any train/held-out leakage.
+
+### Policy Evaluation Metrics
+
+| Metric | Definition |
+|---|---|
+| **Held-out pass rate** | Successful compiled-task episodes divided by all evaluated held-out episodes |
+| **Reward-hacking rate** | Fraction of evaluated episodes flagged by `RewardHackingAuditor` |
+| **Reward variance** | Population variance of episode rewards across the held-out run |
+
+Each seeded evaluation writes the paper-facing record below. The run ID is carried
+from `policy_checkpoint.json`, linking the training checkpoint to its evaluation.
+
+```text
+runs/<run-id>/
+├── eval/<environment>/<task>/seed_<seed>.jsonl
+└── result.json
+```
+
+```json
+{
+  "config": {
+    "train_envs": ["email_train", "crm_train"],
+    "heldout_envs": ["calendar_heldout"],
+    "reward_preset": "balanced",
+    "base_model": "Qwen/Qwen2.5-3B-Instruct",
+    "seeds": [0, 1, 2]
+  },
+  "seed": 0,
+  "heldout_pass_rate": 0.72,
+  "reward_hacking_rate": 0.03,
+  "reward_variance": 0.08
+}
+```
 
 The `--depth` / **Max difficulty** slider is a ceiling: only tasks with `difficulty ≤ depth` are included (difficulty is derived from how much a task asserts). Depth 1 runs the simplest tasks only; depth 5 runs all of them.
 
@@ -271,8 +350,8 @@ The responsive Next.js control surface uses an industrial foundry visual system 
 |---|---|
 | **Run** | Select which active environments to benchmark, max difficulty (1–5), seeds per task, and output dir; launch with live log streaming and a progress bar. A snackbar prompts you if no environment is available or selected |
 | **Report** | Table of quality metrics per environment for the most recent completed run; CSV download |
-| **Transfer** | Stub — fine-tune a base model on collected data (GPU node required) |
-| **Eval** | Stub — evaluate a fine-tuned checkpoint zero-shot on WebArena / WorkArena (eval harness required) |
+| **Transfer** | Reserved for a future external transfer benchmark |
+| **Eval** | Evaluate a policy checkpoint on the declarative internal held-out split |
 
 ### CLI
 
@@ -285,13 +364,9 @@ forge benchmark run \
 
 forge benchmark report --output benchmark_results
 
-forge benchmark transfer \
-  --data benchmark_results/data \
-  --base-model meta-llama/Llama-3.1-8B   # requires GPU + trl/transformers/datasets
-
 forge benchmark eval \
-  --checkpoint ./benchmark_results/forge_ft \
-  --suite webArena                         # requires eval harness
+  --checkpoint ./policy_checkpoint \
+  --experiment experiments/internal_heldout.yaml
 ```
 
 ---
@@ -376,9 +451,10 @@ forge/
     data_collector.py  # Episode collection loop
     env_quality.py     # EnvQualityMetrics: coverage, reward density, dead-end rate, diversity
     report.py          # BenchmarkReport: paper-ready figures and summary tables
-    transfer_pipeline.py  # Fine-tune stub (GPU required)
+    transfer_pipeline.py  # Deferred external transfer-benchmark boundary
     _fine_tune.py      # fine_tune_model() entry point
-    _eval.py           # evaluate_on_suite() entry point (eval harness required)
+    _eval.py           # checkpoint-backed internal held-out evaluation + result records
+  experiments.py       # declarative experiment and per-run result contracts
   training/            # Close the RL loop: train a policy from graded rollouts
     dataset.py         # Load grpo_rollouts.parquet / preference_pairs.jsonl exports
     reward_mapping.py  # Reward → GRPO advantage / DPO label (deterministic, no-signal guard)
@@ -409,8 +485,8 @@ frontend/
     benchmark/
       run/             # Launch benchmark: domain/depth/seed config + live log + progress bar
       report/          # Quality metrics table with colour coding + CSV download
-      transfer/        # Stub: fine-tune on collected data (GPU required)
-      eval/            # Stub: zero-shot eval on WebArena / WorkArena (harness required)
+      transfer/        # Deferred external transfer benchmark
+      eval/            # Internal checkpoint evaluation on held-out environments
     environments/
       new/             # 4-option landing page (CLI / Browser / Custom / Premade)
       [env_name]/
@@ -517,7 +593,8 @@ forge diagnose <env_name>            # Analyse episode quality across all runs
 
 forge train \
   --data <export_dir> \              # dir with grpo_rollouts.parquet / preference_pairs.jsonl
-  --base-model Qwen/Qwen2.5-3B \
+  --experiment experiments/internal_heldout.yaml \
+  --seed 0 \
   --output policy_checkpoint \
   --objective grpo                   # grpo | dpo — train a policy from graded rollouts
 
@@ -526,10 +603,7 @@ forge benchmark run \
   --depth 5 \                        # max difficulty (1=easy only, 5=all tasks)
   --seeds 5                          # episodes per task
 forge benchmark report               # generate summary tables from collected results
-forge benchmark transfer \
-  --data benchmark_results/data \
-  --base-model meta-llama/Llama-3.1-8B   # GPU + trl/transformers/datasets required
 forge benchmark eval \
-  --checkpoint ./benchmark_results/forge_ft \
-  --suite webArena                        # eval harness required
+  --checkpoint ./policy_checkpoint \
+  --experiment experiments/internal_heldout.yaml
 ```

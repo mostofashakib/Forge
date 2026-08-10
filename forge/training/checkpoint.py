@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 MANIFEST_NAME = "policy_checkpoint.json"
 
@@ -25,6 +25,10 @@ class PolicyCheckpoint(BaseModel):
     num_examples: int
     mean_reward: float
     created_at: str = ""
+    experiment_config: dict = Field(default_factory=dict)
+    train_envs: list[str] = Field(default_factory=list)
+    seed: int | None = None
+    run_id: str = ""
 
     def save(self, out_dir: Path) -> Path:
         out_dir = Path(out_dir)
