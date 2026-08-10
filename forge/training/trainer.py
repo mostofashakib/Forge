@@ -81,7 +81,9 @@ class PolicyTrainer:
             )
 
         backend = self._backend or self._default_backend(objective)
-        if config.seed is not None:
+        from forge.settings import determinism_enabled
+
+        if config.seed is not None and determinism_enabled():
             _set_training_seed(config.seed)
         model_path = backend.train(
             base_model=config.base_model,

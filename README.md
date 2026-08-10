@@ -158,6 +158,16 @@ Six built-in verifier types compose into a `RewardBreakdown` returned on every s
 
 **Reward-hacking audit** — `RewardHackingAuditor` is a separate audit agent that asks whether a passing verdict was *earned*: it flags passes with skipped milestones, suspiciously short episodes, redundant call patterns, and supports a pluggable LLM audit client. `RewardHackingAuditor.for_verifier(...)` inherits the milestone list straight from a `LayeredVerifier`.
 
+**Reward ablation presets** — set `reward_preset` in an experiment YAML; both
+`VerifierComposer` and `TieredRewardEngine` resolve the same named contract:
+
+| Preset | Verifier and scoring behavior |
+|---|---|
+| `full_layered_partial` | All five verifier layers, weighted partial credit, and reward-hacking audit penalties |
+| `binary_final_state` | Final-state checks only; reward is exactly 0 or 1, with no efficiency or partial-credit adjustment |
+| `judge_only` | LLM judge score only; structured state, trajectory, and negative checks are excluded |
+| `full_no_auditor` | Same layered partial reward as the full preset, while the auditor remains post-hoc and does not alter pass/reward |
+
 ### Interaction Contracts
 
 Every environment declares which capabilities the agent has access to — the actions an agent can take, across every interaction modality — via `env.capabilities()`. Each capability validates actions against its schema *before* anything touches the environment, so a hallucinated tool, unknown endpoint, or out-of-bounds click never executes. Not every environment needs every modality; each advertises only the ones it attaches:
@@ -177,9 +187,9 @@ Every environment declares which capabilities the agent has access to — the ac
 
 ### Determinism
 
-Environments are verified deterministic at creation and launch — same seed and same trajectory always produce the same observations *and* the same score:
+Environments are deterministic by default — same seed and same trajectory produce the same observations *and* the same score:
 
-- **Launch-time determinism check (mandatory)** — two identically-seeded rollouts are hashed (observations + rewards + termination flags); a mismatch raises `DeterminismError` and aborts the launch. Runs in the backend env loader, `forge run` / `forge export`, and `EnvBuilder.build()`. The check is non-bypassable — a non-reproducible environment fails to load
+- **Launch-time determinism check (default)** — two identically-seeded rollouts are hashed (observations + rewards + termination flags); a mismatch raises `DeterminismError` and aborts the launch. It runs in the backend env loader, `forge run` / `forge export`, and `EnvBuilder.build()`
 - **EnvBuilder + DeterminismConfig** — virtual clock, seeded RNG and UUIDs, canonical sorted-key JSON, float rejection (integers only), serialized transitions, network and filesystem guards inside the env, and fresh-universe startup (factory caches dropped every reset)
 - **Seed control** — the seed threads end to end (`reset(seed)` → `POST /forge/reset {"seed": …}` → `STATE.seed_state(seed)`), so the same seed reproduces the same starting universe and a different seed produces a different-but-reproducible one; an unseeded reset restores the fixed baseline
 - **Generated-app determinism contract** — custom LLM-generated apps must use a counter-based virtual clock (`forge_now()`) and sequential IDs (`_next_id()`) in place of wall-clock timestamps and random UUIDs, and build the universe from a `random.Random(seed)`; a static correctness specialist audits this before artifacts are written, and a post-boot `CorrectnessValidator` proves `/forge/reset` restores a byte-identical initial universe (rows, IDs, counters, DB included), that snapshot/restore round-trips, and that the same seed reproduces identical state while distinct seeds diverge — hard-failing the build on any violation
@@ -188,6 +198,13 @@ Environments are verified deterministic at creation and launch — same seed and
 - **SQLite as source of truth** — premade and generated apps persist state in SQLite; verification reads `/forge/state` (DB-backed), never the UI
 - **Enforced separation of concerns** — architecture tests keep environment, agents, verifiers, and training code from importing across boundaries
 - **Test-scenario-diversity gate** — a static analyzer (`tests/architecture/diversity_audit.py`) parses every test module and fails the suite if one asserts only the happy path; each behavior must pair its happy case with a negative case (invalid input / error path) and a false-positive guard (a look-valid input that must be rejected, detected via `pytest.raises`, a differential/exclusion assertion, or a rejection-named test)
+
+For the determinism ablation only, set `FORGE_DETERMINISM=off` before building,
+starting, training, and evaluating environments. This skips the correctness and
+launch gates, swaps the virtual clock for wall time, stops applying experiment
+seeds to runtime RNGs, UUIDs, policies, and training libraries, and omits seeds
+from container resets. Existing containers must be recreated so they receive the
+flag. Omitting the variable (or setting it to `on`) preserves the default behavior.
 
 ### Security & Policy
 
@@ -241,7 +258,8 @@ forge train \
   --objective grpo                  # grpo | dpo
 ```
 
-Experiment files declare `{train_envs, heldout_envs, reward_preset, base_model, seeds}`.
+Experiment files declare `{train_envs, heldout_envs, reward_preset, base_model, seeds}`
+and may set `determinism_repeats` (default `2`).
 Training reads the base model and train split from the YAML and filters out all held-out
 records. The checkpoint records the exact experiment, split, and seed.
 
@@ -252,9 +270,10 @@ train_envs:
   - crm_train
 heldout_envs:
   - calendar_heldout
-reward_preset: balanced
+reward_preset: full_layered_partial
 base_model: Qwen/Qwen2.5-3B-Instruct
 seeds: [0, 1, 2]
+determinism_repeats: 2
 ```
 
 The lists must be non-empty, unique, and disjoint. Run `forge train` once for each
@@ -302,14 +321,14 @@ a different config, undeclared seeds, and any train/held-out leakage.
 |---|---|
 | **Held-out pass rate** | Successful compiled-task episodes divided by all evaluated held-out episodes |
 | **Reward-hacking rate** | Fraction of evaluated episodes flagged by `RewardHackingAuditor` |
-| **Reward variance** | Population variance of episode rewards across the held-out run |
+| **Reward variance** | Mean within-task population variance across repeated trajectories with the identical environment, task, and seed |
 
 Each seeded evaluation writes the paper-facing record below. The run ID is carried
 from `policy_checkpoint.json`, linking the training checkpoint to its evaluation.
 
 ```text
 runs/<run-id>/
-├── eval/<environment>/<task>/seed_<seed>.jsonl
+├── eval/<environment>/<task>/seed_<seed>_repeat_<n>.jsonl
 └── result.json
 ```
 
@@ -318,11 +337,13 @@ runs/<run-id>/
   "config": {
     "train_envs": ["email_train", "crm_train"],
     "heldout_envs": ["calendar_heldout"],
-    "reward_preset": "balanced",
+    "reward_preset": "full_layered_partial",
     "base_model": "Qwen/Qwen2.5-3B-Instruct",
-    "seeds": [0, 1, 2]
+    "seeds": [0, 1, 2],
+    "determinism_repeats": 2
   },
   "seed": 0,
+  "determinism": "on",
   "heldout_pass_rate": 0.72,
   "reward_hacking_rate": 0.03,
   "reward_variance": 0.08
@@ -558,6 +579,7 @@ uv run pytest
 | `FORGE_DB_URL` | `sqlite:///./forge.db` | Backend database URL |
 | `FORGE_SANDBOX_LIMIT` | `10` | Maximum active sandbox environments |
 | `FORGE_HOST` | `127.0.0.1` | Backend bind host used by `run.sh` |
+| `FORGE_DETERMINISM` | `on` | Set to `off` only for the determinism ablation; disables virtual time, runtime/training seeding, and determinism gates |
 | `FORGE_DEV_NETWORK` | `false` | Set to `true` to bypass network isolation in generated envs |
 | `FORGE_DISABLE_PREWARM` | unset | Set to `1` to skip base-image pre-warm on worker boot |
 | `REDIS_URL` | `redis://localhost:6379/0` | Redis URL for Celery and build/benchmark progress pub/sub |

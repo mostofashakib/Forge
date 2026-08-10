@@ -119,6 +119,23 @@ def test_training_filters_rollouts_to_experiment_train_envs(tmp_path):
     assert checkpoint.run_id == "run-3"
 
 
+def test_determinism_off_does_not_seed_training_libraries(tmp_path, monkeypatch):
+    from unittest.mock import patch
+
+    data_dir = tmp_path / "data"
+    _write_grpo(data_dir, [
+        _grpo_row("train_task", 0.0, completion="a"),
+        _grpo_row("train_task", 1.0, completion="b"),
+    ])
+    monkeypatch.setenv("FORGE_DETERMINISM", "off")
+    with patch("forge.training.trainer._set_training_seed") as set_seed:
+        PolicyTrainer(backend=_FakeBackend()).train(TrainingConfig(
+            data_dir=data_dir, base_model="base", output_dir=tmp_path / "out",
+            seed=3,
+        ))
+    set_seed.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # Negative / false-positive: must NOT produce an update
 # ---------------------------------------------------------------------------

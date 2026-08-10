@@ -53,6 +53,7 @@ def _write_env(root, name: str, initial_value: str) -> None:
 def cli_root(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("FORGE_SKIP_DETERMINISM_CHECK", raising=False)
+    monkeypatch.delenv("FORGE_DETERMINISM", raising=False)
     for mod in [m for m in sys.modules if m.startswith("generated_envs")]:
         del sys.modules[mod]
     sys.path.insert(0, str(tmp_path))
@@ -81,6 +82,14 @@ def test_determinism_check_cannot_be_bypassed_by_env_var(cli_root, monkeypatch):
     result = runner.invoke(app, ["run", "--env", "cli_det_no_bypass", "--steps", "3"])
     assert result.exit_code != 0
     assert "not deterministic" in result.output.lower()
+
+
+def test_explicit_determinism_off_allows_nondeterministic_experiment(cli_root, monkeypatch):
+    _write_env(cli_root, "cli_det_ablation", "__import__('time').time_ns()")
+    monkeypatch.setenv("FORGE_DETERMINISM", "off")
+    result = runner.invoke(app, ["run", "--env", "cli_det_ablation", "--steps", "1"])
+    assert result.exit_code == 0
+    assert "determinism check disabled" in result.output.lower()
 
 
 def test_export_fails_on_nondeterministic_env(cli_root):

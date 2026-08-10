@@ -88,6 +88,10 @@ def validate(
 def _verify_determinism(env_instance, seed: int) -> None:
     """Abort launch if two identically-seeded rollouts produce different observations."""
     from forge.runtime.determinism import DeterminismError, run_determinism_check
+    from forge.settings import determinism_enabled
+    if not determinism_enabled():
+        typer.echo("Determinism check disabled (FORGE_DETERMINISM=off)")
+        return
     try:
         report = run_determinism_check(env_instance, seed=seed)
     except DeterminismError as exc:
@@ -133,7 +137,8 @@ def run(
         return
 
     from forge.runtime.policy import seeded_random_policy
-    policy = seeded_random_policy(seed)
+    from forge.settings import experiment_seed
+    policy = seeded_random_policy(experiment_seed(seed))
     for step_num in range(steps):
         action = policy(obs, action_types)
         obs, step_reward, terminated, truncated, step_info = env_instance.step(action)
@@ -175,8 +180,9 @@ def export(
     env_instance.reset(seed=seed, options={"task": task_dict} if task_dict else None)
 
     from forge.runtime.policy import seeded_random_policy
+    from forge.settings import experiment_seed
     action_types = env_instance.action_types
-    policy = seeded_random_policy(seed)
+    policy = seeded_random_policy(experiment_seed(seed))
     for _ in range(steps):
         if not action_types:
             break
@@ -761,6 +767,7 @@ def benchmark_run(
         from forge.schema.state_schema import StateSchemaManifest
         from forge.envgen.episode_runner import ContainerEpisodeRunner, EpisodeConfig
         from forge.envgen.agents.container_agent import make_container_agent
+        from forge.settings import experiment_seed
 
         manifest = None
         manifest_path = envs_root / task.domain / "state_schema.json"
@@ -773,7 +780,7 @@ def benchmark_run(
             return
         port = int(port_file.read_text().strip())
         cfg_ep = EpisodeConfig(base_url=f"http://localhost:{port}", objective=task.objective)
-        agent = make_container_agent("random", seed=seed)
+        agent = make_container_agent("random", seed=experiment_seed(seed))
         with ContainerEpisodeRunner(cfg_ep, manifest=manifest) as runner:
             result = runner.run_episode(agent, jsonl_path=jsonl_path, seed=seed)
         typer.echo(f"  {task.name} seed={seed}  reward={result.total_reward:.3f}  reason={result.termination_reason}")

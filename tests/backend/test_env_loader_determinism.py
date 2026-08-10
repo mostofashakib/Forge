@@ -55,6 +55,7 @@ def _write_env(tmp_path, name: str, source: str) -> None:
 def envs_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("FORGE_GENERATED_ENVS_DIR", str(tmp_path / "generated_envs"))
     monkeypatch.delenv("FORGE_SKIP_DETERMINISM_CHECK", raising=False)
+    monkeypatch.delenv("FORGE_DETERMINISM", raising=False)
     for mod in [m for m in sys.modules if m.startswith("generated_envs")]:
         del sys.modules[mod]
     return tmp_path
@@ -79,3 +80,9 @@ def test_determinism_check_cannot_be_bypassed_by_env_var(envs_dir, monkeypatch):
     monkeypatch.setenv("FORGE_SKIP_DETERMINISM_CHECK", "1")
     with pytest.raises(DeterminismError):
         load_forge_env("det_no_bypass_env", telemetry=None)
+
+
+def test_explicit_determinism_off_skips_loader_check(envs_dir, monkeypatch):
+    _write_env(envs_dir, "det_ablation_env", _NONDETERMINISTIC_WRAPPER)
+    monkeypatch.setenv("FORGE_DETERMINISM", "off")
+    assert load_forge_env("det_ablation_env", telemetry=None) is not None

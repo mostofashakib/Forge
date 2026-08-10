@@ -7,6 +7,8 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from forge.reward_presets import RewardPreset
+
 
 class ExperimentConfig(BaseModel):
     """The complete train/held-out protocol for one experiment."""
@@ -15,9 +17,10 @@ class ExperimentConfig(BaseModel):
 
     train_envs: list[str] = Field(min_length=1)
     heldout_envs: list[str] = Field(min_length=1)
-    reward_preset: str = Field(min_length=1)
+    reward_preset: RewardPreset
     base_model: str = Field(min_length=1)
     seeds: list[int] = Field(min_length=1)
+    determinism_repeats: int = Field(default=2, ge=2)
 
     @model_validator(mode="after")
     def validate_split(self) -> "ExperimentConfig":
@@ -51,6 +54,7 @@ class RunResult(BaseModel):
 
     config: dict[str, Any]
     seed: int
+    determinism: str
     heldout_pass_rate: float = Field(ge=0.0, le=1.0)
     reward_hacking_rate: float = Field(ge=0.0, le=1.0)
     reward_variance: float = Field(ge=0.0)
