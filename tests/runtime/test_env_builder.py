@@ -61,6 +61,17 @@ def test_build_can_skip_determinism_check():
     assert isinstance(env, ForgeEnv)
 
 
+def test_determinism_off_disables_seeded_runtime(monkeypatch):
+    monkeypatch.setenv("FORGE_DETERMINISM", "off")
+    env = make_builder().build()
+    _, _ = env.reset(seed=42)
+    first_id = env._episode_id
+    _, _ = env.reset(seed=42)
+    second_id = env._episode_id
+    assert first_id != second_id
+    assert env._ctx.deterministic is False
+
+
 def test_floats_in_initial_state_rejected():
     class FloatFactory:
         def create(self, ctx, options):

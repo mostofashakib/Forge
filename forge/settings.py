@@ -10,6 +10,19 @@ DEFAULT_GENERATED_ENVS_DIR = "generated_envs"
 DEFAULT_SANDBOX_LIMIT = 10
 
 
+def determinism_enabled() -> bool:
+    """Return the experiment determinism mode (on by default)."""
+    value = os.environ.get("FORGE_DETERMINISM", "on").strip().lower()
+    if value not in {"on", "off"}:
+        raise ValueError("FORGE_DETERMINISM must be 'on' or 'off'")
+    return value == "on"
+
+
+def experiment_seed(seed: int) -> int | None:
+    """Drop configured seeds when running the determinism-off ablation."""
+    return seed if determinism_enabled() else None
+
+
 def redis_url() -> str:
     return os.environ.get("REDIS_URL", DEFAULT_REDIS_URL)
 

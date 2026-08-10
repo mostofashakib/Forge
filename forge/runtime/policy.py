@@ -4,11 +4,10 @@ import random
 from typing import Callable
 
 
-def seeded_random_policy(seed: int) -> Callable[[dict, frozenset], dict]:
-    """Deterministic random action selection: same seed, same action sequence.
+def seeded_random_policy(seed: int | None) -> Callable[[dict, frozenset], dict]:
+    """Random action selection, deterministic when a seed is supplied.
 
-    The single implementation behind determinism checks, parallel rollouts,
-    and CLI episode drivers.
+    Passing ``None`` is reserved for the determinism-off experiment.
     """
     rng = random.Random(seed)
 

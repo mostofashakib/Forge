@@ -25,6 +25,7 @@ from forge.runtime.reward import RewardEngine
 from forge.runtime.snapshot import EnvironmentSpec, ToolParam, ToolSpec
 from forge.runtime.transition import TransitionEngine, TransitionResult
 from forge.runtime.verifier import VerifierEngine
+from forge.settings import determinism_enabled
 
 
 @dataclass(frozen=True)
@@ -47,6 +48,16 @@ class DeterminismConfig:
     mock_filesystem: bool = True        # no filesystem access inside the env
     fresh_startup: bool = True          # drop factory caches; each rollout is a fresh universe
     canonical_json: bool = True         # canonical serializer for cross-library stability
+
+    @classmethod
+    def from_env(cls) -> "DeterminismConfig":
+        if determinism_enabled():
+            return cls()
+        return cls(virtual_clock=False, seeded_rng=False, seeded_uuids=False)
+
+    @property
+    def runtime_enabled(self) -> bool:
+        return self.virtual_clock and self.seeded_rng and self.seeded_uuids
 
 
 
@@ -168,7 +179,7 @@ class EnvBuilder:
         self._verifiers: dict[str, Callable] = {}
         self._default_reward: Callable | None = None
         self._task_rewards: dict[str, Callable] = {}
-        self._config = DeterminismConfig()
+        self._config = DeterminismConfig.from_env()
         self._computer_use: ComputerUse | None = None
         self._browser_use: BrowserUse | None = None
         self._mcp_use: MCPUse | None = None
@@ -197,7 +208,8 @@ class EnvBuilder:
         return self
 
     def with_composed_verifier(
-        self, task, scenario=None, judge_client: Callable | None = None
+        self, task, scenario=None, judge_client: Callable | None = None,
+        reward_preset="full_layered_partial",
     ) -> "EnvBuilder":
         """Register a multi-tiered verifier composed for ``task`` under its name.
 
@@ -207,13 +219,14 @@ class EnvBuilder:
         """
         from forge.runtime.verifier_composer import VerifierComposer
 
-        verifier = VerifierComposer().compose(
+        verifier = VerifierComposer(reward_preset).compose(
             task, scenario=scenario, judge_client=judge_client, verifier_id=task.name
         )
         return self.with_verifier(task.name, verifier)
 
     def with_scenario_scoring(
-        self, mode, weights: dict | None = None, task_name: str | None = None
+        self, mode=None, weights: dict | None = None, task_name: str | None = None,
+        reward_preset="full_layered_partial",
     ) -> "EnvBuilder":
         """Score episodes binary (pass/fail) or partial (weighted per-tier).
 
@@ -223,7 +236,7 @@ class EnvBuilder:
         from forge.runtime.reward import RewardBreakdown
         from forge.runtime.verifier_composer import VerifierComposer
 
-        composer = VerifierComposer()
+        composer = VerifierComposer(reward_preset)
 
         def reward_fn(state, trajectory, verifier_results, task):
             if not verifier_results:
@@ -317,7 +330,8 @@ class EnvBuilder:
             mcp_use=self._mcp_use,
             rest_use=self._rest_use,
             orpc_use=self._orpc_use,
+            deterministic=self._config.runtime_enabled,
         )
-        if verify:
+        if verify and self._config.runtime_enabled:
             run_determinism_check(env, seed=verify_seed)
         return env

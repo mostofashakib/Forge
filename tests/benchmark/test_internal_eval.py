@@ -31,7 +31,7 @@ def _experiment(path, *, train=None, heldout=None, seeds=None):
     path.write_text(
         "train_envs:\n" + "".join(f"  - {name}\n" for name in (train or ["train_a"]))
         + "heldout_envs:\n" + "".join(f"  - {name}\n" for name in (heldout or ["held_a", "held_b"]))
-        + "reward_preset: balanced\nbase_model: base\n"
+        + "reward_preset: full_layered_partial\nbase_model: base\n"
         + f"seeds: {seeds or [7]}\n",
         encoding="utf-8",
     )
@@ -41,9 +41,10 @@ def _config_dict(train=None, heldout=None, seeds=None):
     return {
         "train_envs": train or ["train_a"],
         "heldout_envs": heldout or ["held_a", "held_b"],
-        "reward_preset": "balanced",
+        "reward_preset": "full_layered_partial",
         "base_model": "base",
         "seeds": seeds or [7],
+        "determinism_repeats": 2,
     }
 
 
@@ -59,7 +60,10 @@ def test_evaluate_runs_only_heldout_and_writes_result(tmp_path):
     provider = _Provider()
     outcomes = iter([
         EpisodeOutcome(passed=True, reward=1.0, reward_hacking=False),
-        EpisodeOutcome(passed=False, reward=0.0, reward_hacking=True),
+        EpisodeOutcome(passed=True, reward=0.5, reward_hacking=False),
+        # The full preset's auditor turns this apparent pass into zero reward.
+        EpisodeOutcome(passed=True, reward=0.9, reward_hacking=True),
+        EpisodeOutcome(passed=False, reward=0.0, reward_hacking=False),
     ])
 
     result = evaluate_on_suite(
@@ -70,10 +74,13 @@ def test_evaluate_runs_only_heldout_and_writes_result(tmp_path):
 
     assert provider.requested == ["held_a", "held_b"]
     assert result["heldout_pass_rate"] == 0.5
-    assert result["reward_hacking_rate"] == 0.5
-    assert result["reward_variance"] == 0.25
+    assert result["reward_hacking_rate"] == 0.25
+    assert result["reward_variance"] == 0.03125
+    assert result["num_eval_tasks"] == 2
+    assert result["num_eval_episodes"] == 4
     record = json.loads((tmp_path / "runs/run-7/result.json").read_text())
     assert record["seed"] == 7
+    assert record["determinism"] == "on"
     assert record["config"]["heldout_envs"] == ["held_a", "held_b"]
 
 
@@ -137,3 +144,30 @@ def test_reward_hacking_uses_existing_auditor_for_repeated_actions():
     )
     assert _has_reward_hacking_pattern(result, passed=True) is True
     assert _has_reward_hacking_pattern(result, passed=False) is False
+
+
+def test_full_no_auditor_records_hacking_without_zeroing_reward(tmp_path, monkeypatch):
+    monkeypatch.setenv("FORGE_DETERMINISM", "off")
+    config_path = tmp_path / "experiment.yaml"
+    _experiment(config_path, heldout=["held_a"])
+    text = config_path.read_text().replace(
+        "full_layered_partial", "full_no_auditor"
+    )
+    config_path.write_text(text)
+    config = _config_dict(heldout=["held_a"])
+    config["reward_preset"] = "full_no_auditor"
+    checkpoint_dir = tmp_path / "checkpoint"
+    PolicyCheckpoint(
+        objective="grpo", base_model="base", model_path="model", num_examples=2,
+        mean_reward=0.5, train_envs=["train_a"], seed=7,
+        experiment_config=config,
+    ).save(checkpoint_dir)
+
+    result = evaluate_on_suite(
+        str(checkpoint_dir), str(config_path), runs_dir=tmp_path / "runs",
+        task_provider=_Provider(),
+        episode_runner=lambda *_: EpisodeOutcome(True, 0.8, True),
+    )
+    assert result["heldout_pass_rate"] == 1.0
+    assert result["reward_hacking_rate"] == 1.0
+    assert result["determinism"] == "off"
