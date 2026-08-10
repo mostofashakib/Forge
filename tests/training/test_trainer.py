@@ -36,14 +36,15 @@ class _FakeBackend:
 
 def _write_grpo(data_dir: Path, rows: list[dict]) -> None:
     data_dir.mkdir(parents=True, exist_ok=True)
-    cols = ["episode_id", "task_name", "prompt", "completion", "total_reward", "passed", "per_step_rewards"]
+    cols = ["episode_id", "env_name", "task_name", "prompt", "completion", "total_reward", "passed", "per_step_rewards"]
     df = pd.DataFrame(rows) if rows else pd.DataFrame(columns=cols)
     df.to_parquet(data_dir / "grpo_rollouts.parquet", index=False)
 
 
 def _grpo_row(task, reward, passed=True, completion="c"):
     return {
-        "episode_id": f"ep-{task}-{reward}", "task_name": task, "prompt": f"Task: {task}",
+        "episode_id": f"ep-{task}-{reward}", "env_name": task.split("_")[0],
+        "task_name": task, "prompt": f"Task: {task}\nEnvironment: {task.split('_')[0]}",
         "completion": completion, "total_reward": reward, "passed": passed,
         "per_step_rewards": json.dumps([reward]),
     }
@@ -95,6 +96,27 @@ def test_dpo_training_uses_preference_examples(tmp_path):
     ))
     assert backend.calls[0]["n"] == 2
     assert result.objective == "dpo"
+
+
+def test_training_filters_rollouts_to_experiment_train_envs(tmp_path):
+    data_dir = tmp_path / "data"
+    _write_grpo(data_dir, [
+        _grpo_row("train_task", 0.0, completion="a"),
+        _grpo_row("train_task", 1.0, completion="b"),
+        _grpo_row("heldout_task", 0.0, completion="c"),
+        _grpo_row("heldout_task", 1.0, completion="d"),
+    ])
+    backend = _FakeBackend()
+    PolicyTrainer(backend=backend).train(TrainingConfig(
+        data_dir=data_dir, base_model="base", output_dir=tmp_path / "out",
+        train_envs=["train"], experiment_config={"heldout_envs": ["heldout"]},
+        seed=3, run_id="run-3",
+    ))
+    assert backend.calls[0]["n"] == 2
+    checkpoint = PolicyCheckpoint.load(tmp_path / "out")
+    assert checkpoint.train_envs == ["train"]
+    assert checkpoint.seed == 3
+    assert checkpoint.run_id == "run-3"
 
 
 # ---------------------------------------------------------------------------

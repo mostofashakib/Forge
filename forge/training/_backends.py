@@ -5,9 +5,8 @@ so the trainer's data loading, reward mapping, gating, and checkpoint contract
 are testable without a GPU. Each backend gates on `trl` + `transformers` and,
 until implemented on a GPU node, raises with actionable install guidance.
 
-Distinct from task #1 (`forge/benchmark/`): that path is zero-shot transfer
-*evaluation* on external suites; these backends *train* Forge's own policy from
-its own graded experience via GRPO / DPO.
+These backends train Forge's own policy from graded experience via GRPO / DPO;
+the internal held-out harness evaluates their checkpoint separately.
 """
 from __future__ import annotations
 
