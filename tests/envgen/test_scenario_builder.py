@@ -16,13 +16,15 @@ from forge.envgen.agents.scenario_builder import (
     ScenarioBuilderAgent,
     ScenarioBuilderPrompts,
     ScenarioSuite,
+    VerifierMilestone,
+    analyze_milestone_attribution,
     assess_scenario_suite,
     normalize_seeds,
     scenario_for_seed,
 )
 from forge.envgen.artifact_bus import ArtifactBus
 from forge.envgen.context import EnvGenContext
-from forge.envgen.research import SpecialistResearchContext
+from forge.envgen.research import ResearchSource, SpecialistResearchContext
 from forge.extraction.schemas import ActionDef, CompilerInput
 
 
@@ -269,3 +271,82 @@ def test_prompt_mandates_grounding_and_scenario_ingredients():
     assert "forbidden_actions" in prompt
     assert "expected_answer" in prompt
     assert "seed" in prompt
+    assert "passage" in prompt
+    assert "never invent a citation" in prompt
+
+
+def test_attribution_report_separates_documented_and_invented_milestones():
+    source = ResearchSource(
+        title="CRM guide",
+        url="https://docs.example.test/crm",
+        passage="Qualified leads can be converted into customers.",
+    )
+    suite = ScenarioSuite(
+        scenarios=[Scenario(
+            scenario_id="mixed",
+            required_actions=[VerifierMilestone(value="convert_lead", source=source)],
+            forbidden_actions=["archive_lead"],
+            expected_answer="Converted l1",
+        )]
+    )
+    research = SpecialistResearchContext(
+        role="rl",
+        product_summary="CRM",
+        sources=[source],
+    )
+
+    report = analyze_milestone_attribution(suite, research)
+
+    assert report.total_milestones == 3
+    assert report.source_attributed_count == 1
+    assert report.model_invented_count == 2
+    assert report.source_attributed_fraction == pytest.approx(1 / 3)
+    assert report.model_invented_fraction == pytest.approx(2 / 3)
+    assert report.source_attributed.milestones[0].value == "convert_lead"
+    assert len(report.model_invented.findings) == 2
+
+
+def test_unverified_citation_is_not_treated_as_ground_truth():
+    fetched = ResearchSource(
+        title="CRM guide",
+        url="https://docs.example.test/crm",
+        passage="Qualified leads can be converted into customers.",
+    )
+    fabricated = fetched.model_copy(update={"passage": "All leads must be archived."})
+    suite = ScenarioSuite(scenarios=[Scenario(
+        scenario_id="fabricated",
+        required_actions=[VerifierMilestone(value="archive_lead", source=fabricated)],
+    )])
+
+    report = analyze_milestone_attribution(
+        suite,
+        SpecialistResearchContext(role="rl", product_summary="CRM", sources=[fetched]),
+    )
+
+    assert report.source_attributed_count == 0
+    assert report.model_invented_count == 1
+    assert "absent from fetched research" in report.model_invented.findings[0]
+
+
+@pytest.mark.asyncio
+async def test_agent_persists_attribution_report_on_scenario_suite():
+    source = ResearchSource(
+        title="CRM guide",
+        url="https://docs.example.test/crm",
+        passage="Qualified leads can be converted into customers.",
+    )
+    suite = _healthy_suite()
+    suite.scenarios[0].required_actions[0] = VerifierMilestone(
+        value="convert_lead", source=source
+    )
+    bus = ArtifactBus()
+    await bus.publish("rl_research", SpecialistResearchContext(
+        role="rl", product_summary="CRM", sources=[source]
+    ))
+
+    await ScenarioBuilderAgent(client=_RecordingClient(suite)).run(_ctx(), bus)
+
+    report = bus.get("scenario_suite").attribution_report
+    assert report is not None
+    assert report.source_attributed_count == 1
+    assert report.model_invented_count == report.total_milestones - 1

@@ -21,6 +21,13 @@ class ResearchSource(BaseModel):
     title: str
     url: str
     summary: str = ""
+    passage: str = Field(
+        default="",
+        description=(
+            "A verbatim passage from the fetched document. Empty means the source "
+            "has not been verified against fetched text."
+        ),
+    )
 
 
 class ApplicationResearchBrief(BaseModel):
@@ -52,7 +59,10 @@ class SpecialistResearchContext(BaseModel):
                 lines.extend(f"- {item}" for item in items)
         if self.sources:
             lines.append("\nEvidence sources:")
-            lines.extend(f"- {source.title}: {source.url}" for source in self.sources)
+            for source in self.sources:
+                lines.append(f"- {source.title}: {source.url}")
+                if source.passage:
+                    lines.append(f"  Verbatim passage: {source.passage}")
         return "\n".join(lines)[: self.prompt_budget]
 
 
@@ -91,7 +101,7 @@ class ContextPruner:
             sections[section_name] = selected
         sources: list[ResearchSource] = []
         for source in brief.sources[:5]:
-            cost = len(source.title) + len(source.url) + 4
+            cost = len(source.title) + len(source.url) + len(source.passage) + 24
             if cost > remaining:
                 break
             sources.append(source.model_copy(update={"summary": ""}))
@@ -169,7 +179,9 @@ Infer how the referenced application actually works from the user request, struc
 and supplied web excerpts. Identify concrete workflows, functionality, observable UI states,
 persistent data, business rules, RL-relevant observations, and edge cases needed for a faithful
 prototype. Prefer supplied evidence over assumptions. Keep every list item concise. Do not copy
-page prose. Sources must include only URLs present in the supplied excerpts."""
+page prose into the analysis lists. For every source, include a short, exact `passage` copied
+from its supplied excerpt so downstream verifier constraints can cite it. Sources must include
+only URLs present in the supplied excerpts."""
 
 
 class ResearchPrompts:
@@ -239,6 +251,7 @@ class UserResearchAgent(EnvGenAgent):
                     schema=ApplicationResearchBrief,
                 ),
             )
+            brief = self._bind_sources_to_documents(brief, documents)
         except Exception as exc:
             await bus.log(f"[user-researcher] Research synthesis failed; using structured spec ({exc})")
             brief = self._fallback_brief(ctx, documents)
@@ -305,5 +318,49 @@ class UserResearchAgent(EnvGenAgent):
             functional_requirements=[f"Support the {action} action" for action in actions],
             data_requirements=[f"Persist {entity} state" for entity in entities],
             rl_observations=[f"Expose {entity} state to the RL agent" for entity in entities],
-            sources=[ResearchSource(title=doc.title, url=doc.url) for doc in documents],
+            sources=[
+                ResearchSource(title=doc.title, url=doc.url, passage=doc.text[:1_000])
+                for doc in documents
+            ],
         )
+
+    @staticmethod
+    def _bind_sources_to_documents(
+        brief: ApplicationResearchBrief,
+        documents: list[WebDocument],
+    ) -> ApplicationResearchBrief:
+        """Keep only provenance that can be traced to text we actually fetched.
+
+        The synthesizer may select a short relevant passage. We accept it only
+        when it occurs verbatim in the fetched document. If it omits or alters
+        the passage, retain a bounded excerpt from the real document so a
+        downstream generator can still make an evidence-backed citation.
+        """
+        documents_by_url = {document.url: document for document in documents}
+        bound: list[ResearchSource] = []
+        seen_urls: set[str] = set()
+        for source in brief.sources:
+            document = documents_by_url.get(source.url)
+            if document is None or source.url in seen_urls:
+                continue
+            passage = " ".join(source.passage.split())
+            if not passage or passage not in document.text:
+                passage = document.text[:1_000]
+            bound.append(ResearchSource(
+                title=document.title,
+                url=document.url,
+                summary=source.summary,
+                passage=passage,
+            ))
+            seen_urls.add(source.url)
+
+        # A model can accidentally omit a supplied source. Preserve every
+        # fetched document as verified evidence rather than losing provenance.
+        for document in documents:
+            if document.url not in seen_urls:
+                bound.append(ResearchSource(
+                    title=document.title,
+                    url=document.url,
+                    passage=document.text[:1_000],
+                ))
+        return brief.model_copy(update={"sources": bound})

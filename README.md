@@ -91,7 +91,7 @@ User prompt + compiler input + optional original product research
           │
           ├── BackendBuilderAgent ─┐
           ├── UIBuilderAgent ──────┴─→ AppAssemblyAgent → TelemetryAgent → StateBridgeAgent
-          ├── ScenarioBuilderAgent    (realistic seeded scenarios via seed_state)
+          ├── ScenarioBuilderAgent    (seeded scenarios + source-bound verifier milestones)
           ├── PolicyAgent
           └── RewardAgent
                     │
@@ -112,7 +112,38 @@ User prompt + compiler input + optional original product research
                           container and scores state-manifest coverage
 ```
 
-When enabled for a custom environment, `UserResearchAgent` reads the extracted application spec, the required original product name and URL, optional reference URLs, and a small web search when references are not provided. It synthesizes the target product's workflows, functionality, UI states, data, rules, RL observations, and edge cases. Raw pages are discarded inside the research task; backend, UI, RL, and review specialists receive only their relevant sections under a hard character budget. When disabled, the planner omits the research task and downstream specialists run with the application spec alone.
+When enabled for a custom environment, `UserResearchAgent` reads the extracted application spec, the required original product name and URL, optional reference URLs, and a small web search when references are not provided. It synthesizes the target product's workflows, functionality, UI states, data, rules, RL observations, and edge cases. Full raw pages are discarded inside the research task, but each retained source carries a bounded verbatim passage checked against the fetched document. Backend, UI, RL, and review specialists receive only their relevant sections and these verified evidence excerpts under a hard character budget. When disabled, the planner omits the research task and downstream specialists run with the application spec alone.
+
+`ScenarioBuilderAgent` uses that evidence to bind every verifier-facing required action, forbidden action, and expected answer to a source when documentation justifies the constraint. A milestone source records the fetched document title, URL, and exact passage; a citation counts only when all three match the pruned research context. If no supplied passage supports the constraint, the generator must leave `source` null instead of inventing a citation. Legacy scenario files containing bare strings remain readable and are classified as unattributed.
+
+Every generated `custom/scenarios.json` includes an `attribution_report`. It reports total milestones, source-attributed and model-invented counts and fractions, and analyzes the two groups separately. Source-attributed milestones are documented ground truth. Unattributed or unverifiable milestones are retained as generator findings rather than silently promoted to ground truth.
+
+```json
+{
+  "scenarios": [
+    {
+      "scenario_id": "archive_inbox_message",
+      "required_actions": [
+        {
+          "value": "archive_message",
+          "source": {
+            "title": "Acme Mail guide",
+            "url": "https://docs.example.test/mail",
+            "passage": "Archived messages leave the inbox."
+          }
+        }
+      ]
+    }
+  ],
+  "attribution_report": {
+    "total_milestones": 3,
+    "source_attributed_count": 2,
+    "model_invented_count": 1,
+    "source_attributed_fraction": 0.6666666667,
+    "model_invented_fraction": 0.3333333333
+  }
+}
+```
 
 `TaskExecutor` runs independent tasks concurrently and waits on declared dependencies. Each task receives a scoped artifact channel. The A2A protocol records assignment, completion, failure, review, and artifact-availability messages with correlation IDs, without copying large generated files into message payloads. The reviewer blocks artifact writes when generated code or requirement coverage fails. A dedicated correctness specialist runs alongside it and blocks writes when generated code is nondeterministic — wall-clock reads, unseeded randomness, nondeterministic IDs, or a `/forge/reset` that fails to re-initialize the virtual clock and ID counters — while exempting telemetry event-envelope timestamps that never reach `/forge/state`. When either gate rejects the artifacts, `RepairLoop` does not fail the build immediately: `FindingRouter` attributes each review issue to the specialist that owns the offending artifact, `RepairPlanner` turns the attributed issues into typed correction tasks, and the executor re-runs only those specialists before re-review. It runs at most `FORGE_ENVGEN_MAX_REPAIR_ROUNDS` (default `2`) rounds, de-duplicates findings by fingerprint so an unfixable issue is not retried forever, and raises `UnrepairableFinding` when a finding cannot be attributed to any agent.
 
@@ -169,7 +200,7 @@ Six built-in verifier types compose into a `RewardBreakdown` returned on every s
 
 **Layered verification** — `LayeredVerifier` composes five layers into one verdict: final-state checks, invariant milestone checks (none skipped, correct order), trajectory checks (necessary tool calls made, no unnecessary ones), LLM-as-judge rubrics for creative tasks, and negative checks for unintended side effects.
 
-**Per-environment verifier composition** — `VerifierComposer` builds a configured `LayeredVerifier` for each task from its declared success/failure conditions and scenario ground truth, mapping them onto the five tiers (the LLM judge stays off by default). It then scores an episode's result into a `RewardBreakdown` under either mode: **binary** (full credit only when every tier passes) or **partial** (weighted per-tier mean, so a partially-correct trajectory earns graded credit). A right answer reached by an unauthorized side effect or the wrong tool order still fails.
+**Per-environment verifier composition** — `VerifierComposer` builds a configured `LayeredVerifier` for each task from its declared success/failure conditions and scenario ground truth, mapping them onto the five tiers (the LLM judge stays off by default). Provenance metadata does not affect runtime matching: the composer unwraps each milestone's `value` before checking action presence, order, and forbidden calls, while also accepting legacy strings and serialized milestone dictionaries. It then scores an episode's result into a `RewardBreakdown` under either mode: **binary** (full credit only when every tier passes) or **partial** (weighted per-tier mean, so a partially-correct trajectory earns graded credit). A right answer reached by an unauthorized side effect or the wrong tool order still fails.
 
 **Reward-hacking audit** — `RewardHackingAuditor` is a separate audit agent that asks whether a passing verdict was *earned*: it flags passes with skipped milestones, suspiciously short episodes, redundant call patterns, and supports a pluggable LLM audit client. `RewardHackingAuditor.for_verifier(...)` inherits the milestone list straight from a `LayeredVerifier`.
 
