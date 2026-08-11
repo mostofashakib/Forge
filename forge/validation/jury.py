@@ -7,7 +7,7 @@ weak benchmark comes to look strong.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Sequence
 
 from forge.grading_provenance import GraderContaminationError
@@ -53,7 +53,6 @@ class Jury:
     members: Sequence[ValidationMember]
     generator_families: tuple[str, ...]
     agreement_threshold: float = DEFAULT_AGREEMENT_THRESHOLD
-    _checked: bool = field(default=False, repr=False)
 
     def __post_init__(self) -> None:
         if not self.members:

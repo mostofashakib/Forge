@@ -75,21 +75,28 @@ class ReviewerAgent(EnvGenAgent):
         semantic_review: bool = True,
     ) -> None:
         self._semantic_review = semantic_review
+        self._client: LLMClient | None = None
+        self._panel: SemanticReviewPanel | None = None
+        if not semantic_review:
+            return
+
         # The semantic reviewer judges artifacts an LLM wrote, so it must not be
         # that LLM. It resolves through the judge client, and through an
         # independent quorum when FORGE_QUORUM_MODELS declares one.
-        self._client = client or (
-            get_judge_client(max_tokens=envgen_config().standard_llm_tokens)
-            if semantic_review else None
-        )
-        self._panel: SemanticReviewPanel | None = None
-        if semantic_review:
-            families = tuple(model_family(model) for model in generation_models())
-            self._panel = SemanticReviewPanel(
-                generator_families=families,
-                client=self._client,
-                quorum_specs=configured_quorum(),
+        quorum_specs = configured_quorum()
+        # Only build the single judge when it will actually be consulted:
+        # get_client constructs the provider SDK eagerly, so an unused judge
+        # would make its credentials mandatory for a quorum-only setup.
+        if client is not None or not quorum_specs:
+            self._client = client or get_judge_client(
+                max_tokens=envgen_config().standard_llm_tokens
             )
+        families = tuple(model_family(model) for model in generation_models())
+        self._panel = SemanticReviewPanel(
+            generator_families=families,
+            client=self._client,
+            quorum_specs=quorum_specs,
+        )
 
     async def run(self, ctx: EnvGenContext, bus: ArtifactBus) -> None:
         artifacts = {name: await bus.wait_for(name) for name in self.depends_on}
