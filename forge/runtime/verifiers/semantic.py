@@ -23,6 +23,44 @@ class MockSemanticLLMClient:
         return str(self._score)
 
 
+class EmbeddingSemanticClient:
+    """Score a rubric against text with sentence embeddings instead of an LLM.
+
+    "How well does this text satisfy this rubric" is a text-similarity question.
+    An embedding model answers it deterministically, offline, and in
+    milliseconds — and, having no provider, it needs no independence guarantee
+    from the model that generated the environment.
+
+    Satisfies the :class:`SemanticLLMClient` protocol so it drops into an
+    existing :class:`SemanticVerifier` unchanged.
+    """
+
+    def __init__(self, scorer: object | None = None) -> None:
+        if scorer is None:
+            from forge.envgen.ml_reward import SentenceEmbeddingScorer
+
+            scorer = SentenceEmbeddingScorer()
+        self._scorer = scorer
+
+    def judge(self, prompt: str) -> str:
+        rubric, text = _split_rubric_prompt(prompt)
+        # An absent rubric or empty text is a score of zero, not a similarity
+        # question: nothing can satisfy a rubric, however close the embeddings
+        # of two empty strings happen to land.
+        if not rubric or not text:
+            return "0.0"
+        return str(self._scorer.score(rubric, text))
+
+
+def _split_rubric_prompt(prompt: str) -> tuple[str, str]:
+    """Pull the rubric and text back out of the verifier's prompt format."""
+    rubric_match = re.search(r"Rubric:\s*(.*?)\n\n", prompt, re.DOTALL)
+    text_match = re.search(r"Text:\s*(.*?)\n\n", prompt, re.DOTALL)
+    if rubric_match is None or text_match is None:
+        return "", ""
+    return rubric_match.group(1).strip(), text_match.group(1).strip()
+
+
 class SemanticVerifier:
     def __init__(
         self,
