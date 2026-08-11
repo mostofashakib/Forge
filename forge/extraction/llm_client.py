@@ -279,6 +279,41 @@ def get_client(
     raise ValueError(f"Unknown LLM provider: {p!r}. Valid: anthropic, ollama")
 
 
+def generation_models() -> tuple[str, ...]:
+    """Return every model tier used to *generate* environments, in tier order.
+
+    Both tiers count: the capable model authors application code and reviews it,
+    the standard model authors policies, scenarios, and rewards. A judge is only
+    independent if it differs from all of them.
+    """
+    p = os.environ.get("FORGE_LLM_PROVIDER", "anthropic").lower()
+    standard = os.environ.get(
+        "FORGE_LLM_MODEL", _ANTHROPIC_DEFAULT if p == "anthropic" else _OLLAMA_DEFAULT
+    )
+    capable = os.environ.get(
+        "FORGE_LLM_MODEL_CAPABLE",
+        _ANTHROPIC_CAPABLE if p == "anthropic" else _OLLAMA_DEFAULT,
+    )
+    return (standard,) if standard == capable else (standard, capable)
+
+
+def get_judge_client(max_tokens: int = 8192, max_retries: int = 3) -> LLMClient:
+    """Return the client used for LLM *grading*, kept separate from generation.
+
+    Configured by ``FORGE_JUDGE_MODEL`` / ``FORGE_JUDGE_PROVIDER``. When unset,
+    grading falls back to the generation model — which is a valid local default
+    but is *not* an independent grader; see :mod:`forge.grading_provenance`.
+    """
+    judge_provider = os.environ.get("FORGE_JUDGE_PROVIDER") or None
+    judge_model = os.environ.get("FORGE_JUDGE_MODEL") or None
+    return get_client(
+        max_tokens=max_tokens,
+        max_retries=max_retries,
+        model=judge_model,
+        provider=judge_provider,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Test doubles
 # ---------------------------------------------------------------------------

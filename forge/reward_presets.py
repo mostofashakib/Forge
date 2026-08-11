@@ -20,6 +20,16 @@ class RewardPresetSpec:
     binary_final_state: bool = False
     judge_only: bool = False
 
+    @property
+    def issues_llm_verdict(self) -> bool:
+        """True when this preset always asks a model for part of the grade.
+
+        Presets that merely *enable* the judge layer are excluded: they issue an
+        LLM verdict only for tasks that declare a semantic check, and most
+        tasks are graded structurally.
+        """
+        return self.judge_only
+
 
 _ALL_LAYERS = frozenset({"state", "invariant", "trajectory", "judge", "negative"})
 _PRESETS: dict[RewardPreset, RewardPresetSpec] = {

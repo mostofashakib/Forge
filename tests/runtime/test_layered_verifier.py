@@ -157,3 +157,29 @@ def test_registers_with_verifier_engine():
     assert len(results) == 1
     assert results[0].passed is True
     assert results[0].verifier_id == "reply_task"
+
+
+# ---------------------------------------------------------------------------
+# LLM-judge disclosure — does this verifier ask a model for a verdict?
+# ---------------------------------------------------------------------------
+
+def test_structural_verifier_does_not_use_an_llm_judge():
+    verifier = LayeredVerifier("structural")
+    verifier.add_state_check("done", lambda state, traj, task: state.get("done") is True)
+
+    assert not verifier.uses_llm_judge
+
+
+def test_verifier_with_a_rubric_uses_an_llm_judge():
+    verifier = LayeredVerifier("creative")
+    verifier.add_llm_judge("tone", "Is the reply polite?")
+
+    assert verifier.uses_llm_judge
+
+
+def test_attaching_a_judge_client_alone_does_not_count_as_llm_grading():
+    """False-positive guard: a wired-but-unused judge issues no verdict."""
+    verifier = LayeredVerifier("structural", judge_client=lambda *args: (1.0, "ok"))
+    verifier.add_state_check("done", lambda state, traj, task: state.get("done") is True)
+
+    assert not verifier.uses_llm_judge

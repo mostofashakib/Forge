@@ -183,6 +183,42 @@ Six built-in verifier types compose into a `RewardBreakdown` returned on every s
 | `judge_only` | LLM judge score only; structured state, trajectory, and negative checks are excluded |
 | `full_no_auditor` | Same layered partial reward as the full preset, while the auditor remains post-hoc and does not alter pass/reward |
 
+### Verification Independence
+
+Forge's environments are authored by an LLM. If the same model family then *graded* the agent, the grade would not be independent evidence — the generator would be marking its own homework. Forge's answer is structural: **the verdict is computed, not asked for.**
+
+| Grading path | Who issues the verdict | Contaminable |
+|---|---|---|
+| Final-state checks | Assertions over recorded state | No |
+| Invariant / milestone checks | Order and presence over the trajectory | No |
+| Trajectory checks | Necessary vs. unnecessary tool calls | No |
+| Negative checks | Forbidden side effects over the trajectory | No |
+| Reward-hacking audit | Milestone, length, and call-pattern rules | No — the optional LLM audit client is off by default |
+| LLM judge (`judge` layer, semantic checks) | A model | **Yes** |
+| Objective progress scoring | A model | **Yes** |
+
+Five of the seven paths never consult a model, and a sixth only does so when explicitly given a client. `VerifierComposer` leaves the judge layer off unless a task explicitly declares a semantic check, and the `binary_final_state` preset removes it entirely — so the default reward path is fully structural and needs no independence guarantee at all. This is the reason the layered verifier is built the way it is, not an incidental design choice.
+
+For the paths that *do* consult a model, independence is configurable and enforced:
+
+- **Separate judge client** — `FORGE_JUDGE_MODEL` / `FORGE_JUDGE_PROVIDER` configure grading independently of generation. Every grading call site (`TieredRewardEngine`, `ObjectiveScorer`, trajectory anomaly detection) resolves through `get_judge_client()`; generation keeps using `get_client()`. Unset, grading falls back to the generation model — a workable local default, and an explicitly non-independent one.
+- **Family-level comparison** — `model_family()` collapses tiers, so grading Sonnet-authored environments with Haiku does *not* count as separation. Swapping tiers changes cost, not provenance.
+- **Enforced before the run** — experiments declare `require_grader_independence` (default `true`). When a run would issue LLM verdicts under a judge from the generating family, `forge benchmark eval` raises `GraderContaminationError` before spending a single episode, and names the variable that fixes it.
+- **Recorded in the result** — every `result.json` carries a `grading` block naming the generating models, the judge, and whether the pair was independent. A structural run records `llm_graded: false`, which is the *positive* claim: this number came from computed checks, not from a model's opinion.
+
+```json
+"grading": {
+  "generator_models": ["claude-haiku-4-5-20251001", "claude-sonnet-4-6"],
+  "generator_families": ["claude"],
+  "judge_model": null,
+  "judge_family": null,
+  "llm_graded": false,
+  "independent": true
+}
+```
+
+One caveat stated plainly: `llm_graded` is derived from the reward preset, which is exact for `judge_only` and for the structural presets. A `full_layered_partial` run whose tasks declare semantic checks issues LLM verdicts that the preset alone does not reveal; pass `llm_graded=True` explicitly for those runs until the flag is derived per task.
+
 ### Interaction Contracts
 
 Every environment declares which capabilities the agent has access to — the actions an agent can take, across every interaction modality — via `env.capabilities()`. Each capability validates actions against its schema *before* anything touches the environment, so a hallucinated tool, unknown endpoint, or out-of-bounds click never executes. Not every environment needs every modality; each advertises only the ones it attaches:
@@ -306,6 +342,7 @@ reward_preset: full_layered_partial
 base_model: Qwen/Qwen2.5-3B-Instruct
 seeds: [0, 1, 2]
 determinism_repeats: 2
+require_grader_independence: true
 ```
 
 The lists must be non-empty, unique, and disjoint. Run `forge train` once for each
@@ -372,13 +409,22 @@ runs/<run-id>/
     "reward_preset": "full_layered_partial",
     "base_model": "Qwen/Qwen2.5-3B-Instruct",
     "seeds": [0, 1, 2],
-    "determinism_repeats": 2
+    "determinism_repeats": 2,
+    "require_grader_independence": true
   },
   "seed": 0,
   "determinism": "on",
   "heldout_pass_rate": 0.72,
   "reward_hacking_rate": 0.03,
-  "reward_variance": 0.08
+  "reward_variance": 0.08,
+  "grading": {
+    "generator_models": ["claude-haiku-4-5-20251001", "claude-sonnet-4-6"],
+    "generator_families": ["claude"],
+    "judge_model": null,
+    "judge_family": null,
+    "llm_graded": false,
+    "independent": true
+  }
 }
 ```
 
@@ -544,6 +590,7 @@ forge/
   schema/              # StateSchemaManifest and related schemas
   settings.py          # Process-wide settings: determinism mode, seeds, paths, URLs
   reward_presets.py    # Canonical reward-ablation presets shared by every reward path
+  grading_provenance.py  # Generator/grader independence: model families, enforcement, record
   logging_utils.py     # Credential-safe redaction for logs
   paths.py             # Confined-path helpers for generated-env file access
   cli/
@@ -698,6 +745,8 @@ All LLM calls go through a single `get_client()` factory — swap providers or m
 | `FORGE_LLM_MODEL_CAPABLE` | `claude-sonnet-4-6` | Capable-tier model (code generation, complex reasoning) |
 | `ANTHROPIC_API_KEY` | — | Required when `FORGE_LLM_PROVIDER=anthropic` |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL |
+| `FORGE_JUDGE_PROVIDER` | falls back to `FORGE_LLM_PROVIDER` | Provider used for LLM **grading** only |
+| `FORGE_JUDGE_MODEL` | falls back to `FORGE_LLM_MODEL` | Model used for LLM **grading** only. Set this to a model outside the generating family to make LLM-graded runs independent — see [Verification Independence](#verification-independence) |
 
 **Run fully locally with Ollama:**
 ```bash
