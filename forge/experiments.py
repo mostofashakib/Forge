@@ -21,6 +21,9 @@ class ExperimentConfig(BaseModel):
     base_model: str = Field(min_length=1)
     seeds: list[int] = Field(min_length=1)
     determinism_repeats: int = Field(default=2, ge=2)
+    # Only bites when a run actually issues LLM verdicts; a structural-only
+    # reward preset satisfies it trivially. See forge.grading_provenance.
+    require_grader_independence: bool = True
 
     @model_validator(mode="after")
     def validate_split(self) -> "ExperimentConfig":
@@ -58,6 +61,9 @@ class RunResult(BaseModel):
     heldout_pass_rate: float = Field(ge=0.0, le=1.0)
     reward_hacking_rate: float = Field(ge=0.0, le=1.0)
     reward_variance: float = Field(ge=0.0)
+    # Which models generated the environments and which graded the agent, so a
+    # reader can tell a structural result from an LLM-judged one.
+    grading: dict[str, Any] | None = None
 
     def save(self, runs_dir: str | Path, run_id: str) -> Path:
         if not run_id or Path(run_id).name != run_id:
