@@ -48,6 +48,7 @@ def evaluate_on_suite(
     episode_runner: EpisodeRunner | None = None,
     depth: int = 5,
     llm_graded: bool | None = None,
+    verdict_jury=None,
 ) -> dict:
     """Evaluate ``policy_checkpoint.json`` only on configured held-out envs.
 
@@ -90,7 +91,7 @@ def evaluate_on_suite(
         )
     if episode_runner is None:
         episode_runner = _container_episode_runner(
-            checkpoint_dir, config.reward_preset
+            checkpoint_dir, config.reward_preset, verdict_jury=verdict_jury
         )
 
     # Resolve who generated and who graded before spending any episodes: a
@@ -233,7 +234,9 @@ class _PolicyContainerAdapter:
         return {"endpoint": endpoint, "payload": payload}
 
 
-def _container_episode_runner(checkpoint_dir: Path, reward_preset) -> EpisodeRunner:
+def _container_episode_runner(
+    checkpoint_dir: Path, reward_preset, verdict_jury=None
+) -> EpisodeRunner:
     from forge.envgen.episode_runner import ContainerEpisodeRunner, EpisodeConfig
     from forge.schema.state_schema import StateSchemaManifest
     from forge.settings import generated_envs_root
@@ -266,24 +269,133 @@ def _container_episode_runner(checkpoint_dir: Path, reward_preset) -> EpisodeRun
             result = runner.run_episode(
                 policy, jsonl_path=jsonl_path, seed=seed
             )
-        passed = result.termination_reason == "success"
+        verdict = resolve_verdict(result, task, reward_preset, jury=verdict_jury)
         preset = reward_preset_spec(reward_preset)
-        reward = 1.0 if preset.binary_final_state and passed else result.total_reward
-        if preset.binary_final_state and not passed:
+        reward = (
+            1.0 if preset.binary_final_state and verdict.passed
+            else result.total_reward
+        )
+        if preset.binary_final_state and not verdict.passed:
             reward = 0.0
         return EpisodeOutcome(
-            passed=passed,
+            passed=verdict.passed,
             reward=reward,
-            reward_hacking=_has_reward_hacking_pattern(result, passed),
+            reward_hacking=_has_reward_hacking_pattern(result, verdict.passed),
+            # ObjectiveScorer still runs every step to shape the reward, so the
+            # count is honest even when the pass/fail came from a computed
+            # check rather than a model.
             llm_verdicts=result.llm_verdicts,
+            indeterminate=verdict.indeterminate,
         )
 
-    # ContainerEpisodeRunner scores every step with ObjectiveScorer, and that
-    # score drives both the step reward and the success/termination decision.
-    # This path is LLM-graded under every reward preset, including the ones
-    # whose verifier layers are entirely structural.
+    # ContainerEpisodeRunner scores every step with ObjectiveScorer to shape the
+    # per-step reward, so a model issues verdicts on this path regardless of how
+    # pass/fail is decided.
     run.issues_llm_verdicts = True
     return run
+
+
+class _EpisodeTrajectory:
+    """Adapt a container episode result to the trajectory shape verifiers read."""
+
+    def __init__(self, result) -> None:
+        self.steps = list(getattr(result, "steps", []))
+        self.events = list(getattr(result, "events", []) or [])
+
+    @property
+    def step_count(self) -> int:
+        return len(self.steps)
+
+    @property
+    def actions(self) -> list[dict]:
+        return [getattr(step, "action", {}) or {} for step in self.steps]
+
+
+def structural_verdict(result, task: Task, reward_preset) -> bool | None:
+    """Grade an episode against its compiled success and failure conditions.
+
+    Returns ``None`` when there is no structural ground truth to grade against —
+    the task carries no compiled template, declares no conditions, or the preset
+    enables no structural layer. Absent ground truth is *unknown*, never success:
+    the caller decides what to do with an ungradeable episode rather than
+    inheriting a free pass.
+    """
+    template = getattr(task, "template", None)
+    if template is None or not template.success_conditions:
+        return None
+
+    from forge.runtime.verifier_composer import VerifierComposer
+
+    composer = VerifierComposer(reward_preset)
+    try:
+        verifier = composer.compose(template, verifier_id=task.name)
+    except ValueError:
+        # The preset demands a condition type this task does not declare.
+        return None
+    if not verifier.has_structural_checks:
+        return None
+
+    final_state = (
+        getattr(result.steps[-1], "state_after", {}) if result.steps else {}
+    )
+    verification = verifier(
+        final_state,
+        _EpisodeTrajectory(result),
+        {"name": task.name, "objective": task.objective},
+    )
+    return bool(verification.passed)
+
+
+@dataclass(frozen=True)
+class EpisodeVerdict:
+    """How an episode was decided, and by what."""
+
+    passed: bool
+    source: str
+    indeterminate: bool = False
+
+    @property
+    def llm_derived(self) -> bool:
+        """True when a model, not a computed check, produced this verdict."""
+        return self.source != "structural"
+
+
+def resolve_verdict(
+    result, task: Task, reward_preset, jury=None
+) -> EpisodeVerdict:
+    """Decide an episode, preferring computed ground truth over model opinion.
+
+    Order matters. A structural verdict against the environment's own compiled
+    conditions is a function of the recorded trajectory, so it is preferred
+    whenever it exists. Only when a task carries no compiled ground truth does
+    this fall back to the run's termination reason — which the objective scorer
+    drives, and which is therefore recorded as LLM-derived.
+
+    A verdict jury, when supplied, votes on top of that verdict; a jury that
+    cannot agree yields an indeterminate episode rather than a coin flip.
+    """
+    structural = structural_verdict(result, task, reward_preset)
+    if structural is not None:
+        verdict = EpisodeVerdict(passed=structural, source="structural")
+    else:
+        verdict = EpisodeVerdict(
+            passed=result.termination_reason == "success",
+            source="termination_reason",
+        )
+
+    if jury is None:
+        return verdict
+
+    outcome = jury.deliberate({
+        "task": task.name,
+        "objective": task.objective,
+        "passed": verdict.passed,
+        "steps": len(getattr(result, "steps", [])),
+    })
+    if outcome.indeterminate:
+        # Undecided is not failed. The caller drops it from the denominator.
+        return EpisodeVerdict(passed=False, source=verdict.source, indeterminate=True)
+    return EpisodeVerdict(passed=bool(outcome.decision), source=verdict.source)
 
 
 def _has_reward_hacking_pattern(result, passed: bool) -> bool:

@@ -58,6 +58,13 @@ class LayeredVerifier:
         """
         return bool(self._judges)
 
+    @property
+    def has_structural_checks(self) -> bool:
+        """True when this verifier can reach a verdict without consulting a model."""
+        return any(
+            self._checks[layer] for layer in self.LAYERS if layer != "judge"
+        )
+
     # ------------------------------------------------------------------
     # Layer registration
     # ------------------------------------------------------------------
