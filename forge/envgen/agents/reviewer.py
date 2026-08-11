@@ -9,7 +9,18 @@ from pydantic import BaseModel, Field
 from forge.envgen.agents.base import EnvGenAgent
 from forge.envgen.artifact_bus import ArtifactBus
 from forge.envgen.context import EnvGenContext
-from forge.extraction.llm_client import LLMClient, get_client
+from forge.envgen.agents.semantic_review import (
+    RequirementAssessment,
+    SemanticReviewPanel,
+    SemanticReviewPrompts,
+)
+from forge.extraction.llm_client import (
+    LLMClient,
+    generation_models,
+    get_judge_client,
+)
+from forge.grading_provenance import model_family
+from forge.validation.quorum import configured_quorum
 from forge.envgen.config import envgen_config
 
 
@@ -38,22 +49,8 @@ class GenerationReviewError(RuntimeError):
         self.review = review
 
 
-class RequirementAssessment(BaseModel):
-    requirements_met: bool
-    findings: list[str] = Field(default_factory=list)
-
-
-_REVIEW_SYSTEM = (
-    "You are the final reviewer for a generated reinforcement-learning environment. "
-    "Compare the user's request and structured domain requirements to the supplied artifacts. "
-    "Check functional coverage, UI-to-API action coverage, RL state/reward suitability, and "
-    "clear code responsibilities. Report only concrete unmet requirements or code-quality "
-    "problems; do not reject for subjective style preferences."
-)
-
-
-class ReviewerPrompts:
-    SYSTEM = _REVIEW_SYSTEM
+# The review prompt and its output schema live with the panel that uses them.
+ReviewerPrompts = SemanticReviewPrompts
 
 
 class ReviewerAgent(EnvGenAgent):
@@ -78,10 +75,21 @@ class ReviewerAgent(EnvGenAgent):
         semantic_review: bool = True,
     ) -> None:
         self._semantic_review = semantic_review
+        # The semantic reviewer judges artifacts an LLM wrote, so it must not be
+        # that LLM. It resolves through the judge client, and through an
+        # independent quorum when FORGE_QUORUM_MODELS declares one.
         self._client = client or (
-            get_client(max_tokens=envgen_config().standard_llm_tokens, capable=True)
+            get_judge_client(max_tokens=envgen_config().standard_llm_tokens)
             if semantic_review else None
         )
+        self._panel: SemanticReviewPanel | None = None
+        if semantic_review:
+            families = tuple(model_family(model) for model in generation_models())
+            self._panel = SemanticReviewPanel(
+                generator_families=families,
+                client=self._client,
+                quorum_specs=configured_quorum(),
+            )
 
     async def run(self, ctx: EnvGenContext, bus: ArtifactBus) -> None:
         artifacts = {name: await bus.wait_for(name) for name in self.depends_on}
@@ -178,7 +186,7 @@ class ReviewerAgent(EnvGenAgent):
             f"Policy requirements: {ctx.policy_requirements or 'default safety policy'}",
             f"Reward requirements: {ctx.reward_requirements or 'default task reward'}",
         ]
-        if self._semantic_review and self._client is not None:
+        if self._semantic_review and self._panel is not None:
             review_chars = envgen_config().generated_file_review_chars
             artifact_excerpt = "\n\n".join(
                 f"=== {path} ===\n{content[:review_chars]}"
@@ -204,29 +212,43 @@ class ReviewerAgent(EnvGenAgent):
                 f"Reward:\n{str(artifacts['reward_fn_code'])[:8000]}"
             )
             loop = asyncio.get_running_loop()
-            assessment: RequirementAssessment = await loop.run_in_executor(
-                None,
-                lambda: self._client.extract(
-                    system=ReviewerPrompts.SYSTEM,
-                    user=semantic_input,
-                    schema=RequirementAssessment,
-                ),
+            result = await loop.run_in_executor(
+                None, lambda: self._panel.assess(semantic_input)
             )
-            severity = (
-                ReviewSeverity.WARNING if assessment.requirements_met else ReviewSeverity.ERROR
-            )
-            findings = assessment.findings or (
-                ["Semantic reviewer found unmet user requirements"]
-                if not assessment.requirements_met else []
-            )
-            issues.extend(
-                ReviewIssue(
-                    severity=severity,
-                    category="semantic_review",
-                    message=finding,
+            if result.contested:
+                # The panel disagreed. That is not approval: a contested gate
+                # means the artifacts are not established as correct, and the
+                # dissenting findings are exactly what the repair loop needs.
+                # Labelled separately so a reader can tell "reviewers
+                # disagreed" from "reviewers rejected".
+                findings = result.findings or [
+                    "Semantic reviewers could not reach agreement"
+                ]
+                issues.extend(
+                    ReviewIssue(
+                        severity=ReviewSeverity.ERROR,
+                        category="semantic_review_contested",
+                        message=finding,
+                    )
+                    for finding in findings
                 )
-                for finding in findings
-            )
+            else:
+                severity = (
+                    ReviewSeverity.WARNING if result.requirements_met
+                    else ReviewSeverity.ERROR
+                )
+                findings = result.findings or (
+                    ["Semantic reviewer found unmet user requirements"]
+                    if not result.requirements_met else []
+                )
+                issues.extend(
+                    ReviewIssue(
+                        severity=severity,
+                        category="semantic_review",
+                        message=finding,
+                    )
+                    for finding in findings
+                )
         review = GenerationReview(
             approved=not any(issue.severity == ReviewSeverity.ERROR for issue in issues),
             requirements_checked=requirements,

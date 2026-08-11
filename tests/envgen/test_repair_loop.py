@@ -526,3 +526,14 @@ async def test_repair_loop_raises_when_review_report_missing():
     bus = ArtifactBus()  # nothing ran; no review_report
     with pytest.raises(RuntimeError, match="review report"):
         await RepairLoop().run(plan, agents, ctx, bus, TaskExecutor())
+
+
+def test_a_contested_semantic_review_is_not_auto_repairable():
+    """Reviewers disagreeing is not a defect a specialist can be told to fix.
+
+    It must reach the unrepairable path and stop the build with the dissent,
+    rather than being silently routed to an arbitrary specialist.
+    """
+    router = FindingRouter(_pipeline_agents())
+
+    assert router.route(_issue(None, category="semantic_review_contested")) is None
