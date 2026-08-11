@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 # Models are named ``<family><variant>`` in every provider we support:
 # ``claude-sonnet-4-6``, ``gpt-4o``, ``gemma4:26b``, ``llama-3.1-8b``. The
@@ -62,6 +62,9 @@ class GradingProvenance:
     generator_models: tuple[str, ...]
     judge_model: str | None
     llm_graded: bool
+    # Verdicts a model actually issued, counted during the run. ``None`` means
+    # nothing was observed — a declared value that no measurement has confirmed.
+    llm_verdicts: int | None = None
 
     @property
     def generator_families(self) -> tuple[str, ...]:
@@ -91,6 +94,23 @@ class GradingProvenance:
             return False
         return self.judge_family not in self.generator_families
 
+    def with_observed_verdicts(self, count: int) -> "GradingProvenance":
+        """Return this provenance with the verdict count measured during the run.
+
+        Observation outranks declaration: a run that counted model verdicts
+        cannot be recorded as structural, because the record is what a reader
+        trusts when they cannot re-run the experiment.
+        """
+        if count < 0:
+            raise ValueError(f"observed verdict count cannot be negative: {count}")
+        if count > 0 and not self.llm_graded:
+            raise ValueError(
+                f"run was declared structural but issued {count} model verdicts; "
+                "the grading path under-declared itself, so the result record "
+                "would misstate how this run was graded"
+            )
+        return replace(self, llm_verdicts=count)
+
     def as_record(self) -> dict:
         """JSON-safe provenance for the run result record."""
         return {
@@ -99,6 +119,7 @@ class GradingProvenance:
             "judge_model": self.judge_model,
             "judge_family": self.judge_family,
             "llm_graded": self.llm_graded,
+            "llm_verdicts": self.llm_verdicts,
             "independent": self.independent,
         }
 

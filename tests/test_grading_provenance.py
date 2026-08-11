@@ -198,5 +198,54 @@ def test_provenance_record_is_json_safe_and_carries_the_verdict():
         "judge_model": "gpt-4o",
         "judge_family": "gpt",
         "llm_graded": True,
+        "llm_verdicts": None,
         "independent": True,
     }
+
+
+# ---------------------------------------------------------------------------
+# Observed verdict counts
+# ---------------------------------------------------------------------------
+
+def test_observed_verdicts_are_recorded_alongside_the_verdict():
+    provenance = GradingProvenance(
+        generator_models=("claude-sonnet-4-6",), judge_model="gpt-4o", llm_graded=True
+    ).with_observed_verdicts(412)
+
+    assert provenance.as_record()["llm_verdicts"] == 412
+
+
+def test_a_run_with_no_observation_records_an_unknown_count():
+    provenance = GradingProvenance(
+        generator_models=("claude-sonnet-4-6",), judge_model=None, llm_graded=False
+    )
+
+    assert provenance.as_record()["llm_verdicts"] is None
+
+
+def test_observing_verdicts_does_not_mutate_the_original_record():
+    original = GradingProvenance(
+        generator_models=("claude-sonnet-4-6",), judge_model="gpt-4o", llm_graded=True
+    )
+
+    updated = original.with_observed_verdicts(7)
+
+    assert original.llm_verdicts is None
+    assert updated is not original
+
+
+def test_observed_verdicts_cannot_be_negative():
+    provenance = GradingProvenance(
+        generator_models=("claude-sonnet-4-6",), judge_model="gpt-4o", llm_graded=True
+    )
+    with pytest.raises(ValueError):
+        provenance.with_observed_verdicts(-1)
+
+
+def test_structural_claim_is_refused_when_verdicts_were_observed():
+    """A record cannot say 'no model graded this' after counting model verdicts."""
+    provenance = GradingProvenance(
+        generator_models=("claude-sonnet-4-6",), judge_model=None, llm_graded=False
+    )
+    with pytest.raises(ValueError):
+        provenance.with_observed_verdicts(3)
