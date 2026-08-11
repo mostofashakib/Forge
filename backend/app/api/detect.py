@@ -1,9 +1,17 @@
 """Trajectory analysis — detect reward hacking, distribution drift, and policy gaming.
 
 POST /api/sandbox/{env_name}/detect
-  — Loads recent completed agent episodes, compares trajectories across runs,
-    and uses an LLM to surface anomalies. Returns structured findings that
-    can be displayed in the Violations page.
+  — Loads recent completed agent episodes and analyses them in two passes.
+
+The first pass is statistical (:mod:`forge.validation.detectors`): distribution
+drift, reward collapse, outlier episodes, and reward earned from implausibly
+short trajectories are all closed-form questions, and computing them is exact,
+instant, free, and reproducible.
+
+The second pass asks an LLM only about what statistics cannot express — policy
+gaming, where an agent satisfies the letter of a rule while defeating its
+purpose. That pass is best-effort: if it fails, the statistical findings are
+still returned.
 """
 from __future__ import annotations
 
@@ -18,6 +26,7 @@ from sqlalchemy.orm import Session
 
 from backend.app.database import get_db
 from backend.app.models import AgentEpisode, AgentRun, SandboxEnvironment
+from forge.validation.detectors import EpisodeFeatures, analyze_episodes
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/sandbox", tags=["detect"])
@@ -117,6 +126,31 @@ def _load_steps(ep: AgentEpisode, max_steps: int = _MAX_STEPS) -> list[dict]:
         return []
 
 
+def _episode_features(
+    episodes: list[AgentEpisode],
+    steps_map: dict[str, list[dict]],
+) -> list[EpisodeFeatures]:
+    """Reduce episodes to the numeric signal the statistical detectors read.
+
+    The action is the command verb, not the full command line, so that ``ls -la``
+    and ``ls /tmp`` count as the same action when measuring vocabulary drift.
+    """
+    features: list[EpisodeFeatures] = []
+    for ep in episodes:
+        actions: list[str] = []
+        for step in steps_map.get(ep.id, []):
+            command = str(step.get("command", "")).strip()
+            if command:
+                actions.append(command.split()[0])
+        features.append(EpisodeFeatures(
+            episode_id=ep.id,
+            reward=ep.total_reward or 0.0,
+            steps=ep.total_steps or 0,
+            actions=actions,
+        ))
+    return features
+
+
 def _build_prompt(
     episodes: list[AgentEpisode],
     steps_map: dict[str, list[dict]],
@@ -178,6 +212,12 @@ def detect_issues(env_name: str, db: Session = Depends(get_db)):
         )
 
     steps_map = {ep.id: _load_steps(ep) for ep in episodes}
+
+    # Drift, collapse, outliers, and short-trajectory reward hacking are
+    # statistics. Computing them is exact, instant, free, and reproducible —
+    # all four of which an LLM's impression of the same numbers is not.
+    statistical = analyze_episodes(_episode_features(episodes, steps_map))
+
     trajectory_text = _build_prompt(episodes, steps_map)
 
     objective = runs[0].objective if runs else "unknown"
@@ -198,12 +238,23 @@ def detect_issues(env_name: str, db: Session = Depends(get_db)):
             system=DetectionPrompts.SYSTEM, user=user, schema=_DetectionResult
         )
     except Exception as exc:
-        logger.warning("[detect] LLM failed: %s", exc)
-        raise HTTPException(status_code=500, detail=f"Detection LLM failed: {exc}")
+        # The statistical findings stand on their own. Losing the LLM's
+        # judgement about policy gaming should degrade the report, not fail the
+        # request and throw away the numbers we already computed.
+        logger.warning("[detect] LLM pass failed, returning statistical findings: %s", exc)
+        result = _DetectionResult(
+            findings=[],
+            summary="Statistical analysis only; the semantic pass was unavailable.",
+            is_clean=not statistical,
+        )
 
+    findings = [f.as_record() for f in statistical] + [
+        f.model_dump() for f in result.findings
+    ]
     return {
         "episodes_analysed": len(episodes),
-        "is_clean": result.is_clean,
+        "is_clean": not findings,
         "summary": result.summary,
-        "findings": [f.model_dump() for f in result.findings],
+        "findings": findings,
+        "statistical_findings": len(statistical),
     }

@@ -213,12 +213,132 @@ class OllamaClient:
 
 
 # ---------------------------------------------------------------------------
+# OpenAI
+# ---------------------------------------------------------------------------
+
+class OpenAIClient:
+    """LLM client backed by the OpenAI API.
+
+    Exists so a quorum can draw members from a family that did not generate the
+    artifact under review. The SDK is imported lazily so building a member never
+    requires the package to be installed.
+    """
+
+    def __init__(
+        self,
+        model: str = "gpt-4o",
+        max_retries: int = 3,
+        max_tokens: int = 8192,
+    ) -> None:
+        self._model = model
+        self._max_retries = max_retries
+        self._max_tokens = max_tokens
+
+    def extract(self, system: str, user: str, schema: type[BaseModel]) -> BaseModel:
+        import openai  # lazy — only required when OpenAI is an active provider
+
+        client = openai.OpenAI()
+        system = LLMPromptFormatter.structured(system, schema)
+        json_schema = _flat_schema(schema)
+        last_error: Exception | None = None
+
+        for _ in range(self._max_retries):
+            try:
+                extra = f"\n\nPrevious attempt failed: {last_error}" if last_error else ""
+                response = client.chat.completions.create(
+                    model=self._model,
+                    max_completion_tokens=self._max_tokens,
+                    messages=[
+                        {"role": "system", "content": system + extra},
+                        {"role": "user", "content": user},
+                    ],
+                    response_format={
+                        "type": "json_schema",
+                        "json_schema": {
+                            "name": schema.__name__,
+                            "schema": json_schema,
+                            "strict": False,
+                        },
+                    },
+                )
+                return schema.model_validate_json(response.choices[0].message.content)
+            except Exception as e:
+                last_error = e
+
+        raise RuntimeError(
+            f"OpenAI extraction failed after {self._max_retries} attempts "
+            f"(model={self._model}): {last_error}"
+        ) from last_error
+
+
+# ---------------------------------------------------------------------------
+# Gemini
+# ---------------------------------------------------------------------------
+
+class GeminiClient:
+    """LLM client backed by the Google Gemini API.
+
+    The third independent family, so a three-member quorum can be assembled with
+    no family repeated. The SDK is imported lazily.
+    """
+
+    def __init__(
+        self,
+        model: str = "gemini-2.0-flash",
+        max_retries: int = 3,
+        max_tokens: int = 8192,
+    ) -> None:
+        self._model = model
+        self._max_retries = max_retries
+        self._max_tokens = max_tokens
+
+    def extract(self, system: str, user: str, schema: type[BaseModel]) -> BaseModel:
+        from google import genai  # lazy — only required when Gemini is active
+        from google.genai import types
+
+        client = genai.Client()
+        system = LLMPromptFormatter.structured(system, schema)
+        last_error: Exception | None = None
+
+        for _ in range(self._max_retries):
+            try:
+                extra = f"\n\nPrevious attempt failed: {last_error}" if last_error else ""
+                response = client.models.generate_content(
+                    model=self._model,
+                    contents=user,
+                    config=types.GenerateContentConfig(
+                        system_instruction=system + extra,
+                        max_output_tokens=self._max_tokens,
+                        response_mime_type="application/json",
+                        response_schema=schema,
+                    ),
+                )
+                return schema.model_validate_json(response.text)
+            except Exception as e:
+                last_error = e
+
+        raise RuntimeError(
+            f"Gemini extraction failed after {self._max_retries} attempts "
+            f"(model={self._model}): {last_error}"
+        ) from last_error
+
+
+# ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
 
 _ANTHROPIC_DEFAULT  = "claude-haiku-4-5-20251001"
 _ANTHROPIC_CAPABLE  = "claude-sonnet-4-6"
 _OLLAMA_DEFAULT     = "gemma4:26b"
+_OPENAI_DEFAULT     = "gpt-4o"
+_GEMINI_DEFAULT     = "gemini-2.0-flash"
+
+_PROVIDER_DEFAULTS = {
+    "anthropic": _ANTHROPIC_DEFAULT,
+    "ollama": _OLLAMA_DEFAULT,
+    "openai": _OPENAI_DEFAULT,
+    "gemini": _GEMINI_DEFAULT,
+}
 
 
 def get_client(
@@ -255,17 +375,21 @@ def get_client(
     """
     p = (provider or os.environ.get("FORGE_LLM_PROVIDER", "anthropic")).lower()
 
+    if p not in _PROVIDER_DEFAULTS:
+        raise ValueError(
+            f"Unknown LLM provider: {p!r}. "
+            f"Valid: {', '.join(sorted(_PROVIDER_DEFAULTS))}"
+        )
+
     if model is None:
+        fallback = _PROVIDER_DEFAULTS[p]
         if capable:
             model = os.environ.get(
                 "FORGE_LLM_MODEL_CAPABLE",
-                _ANTHROPIC_CAPABLE if p == "anthropic" else _OLLAMA_DEFAULT,
+                _ANTHROPIC_CAPABLE if p == "anthropic" else fallback,
             )
         else:
-            model = os.environ.get(
-                "FORGE_LLM_MODEL",
-                _ANTHROPIC_DEFAULT if p == "anthropic" else _OLLAMA_DEFAULT,
-            )
+            model = os.environ.get("FORGE_LLM_MODEL", fallback)
 
     if p == "anthropic":
         return AnthropicClient(model=model, max_tokens=max_tokens, max_retries=max_retries)
@@ -276,7 +400,10 @@ def get_client(
             model=model, max_tokens=max_tokens, max_retries=max_retries, base_url=base_url
         )
 
-    raise ValueError(f"Unknown LLM provider: {p!r}. Valid: anthropic, ollama")
+    if p == "openai":
+        return OpenAIClient(model=model, max_tokens=max_tokens, max_retries=max_retries)
+
+    return GeminiClient(model=model, max_tokens=max_tokens, max_retries=max_retries)
 
 
 def generation_models() -> tuple[str, ...]:
@@ -287,12 +414,11 @@ def generation_models() -> tuple[str, ...]:
     independent if it differs from all of them.
     """
     p = os.environ.get("FORGE_LLM_PROVIDER", "anthropic").lower()
-    standard = os.environ.get(
-        "FORGE_LLM_MODEL", _ANTHROPIC_DEFAULT if p == "anthropic" else _OLLAMA_DEFAULT
-    )
+    fallback = _PROVIDER_DEFAULTS.get(p, _ANTHROPIC_DEFAULT)
+    standard = os.environ.get("FORGE_LLM_MODEL", fallback)
     capable = os.environ.get(
         "FORGE_LLM_MODEL_CAPABLE",
-        _ANTHROPIC_CAPABLE if p == "anthropic" else _OLLAMA_DEFAULT,
+        _ANTHROPIC_CAPABLE if p == "anthropic" else fallback,
     )
     return (standard,) if standard == capable else (standard, capable)
 

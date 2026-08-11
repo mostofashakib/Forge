@@ -56,3 +56,50 @@ def test_audit_log_model(db):
     assert fetched.rule_id == "no_refund_without_order"
     assert fetched.severity == "high"
     assert fetched.actor == "agent"
+
+
+# ---------------------------------------------------------------------------
+# Statistical detection
+# ---------------------------------------------------------------------------
+
+def test_episode_features_are_extracted_from_recorded_steps():
+    from backend.app.api.detect import _episode_features
+
+    class _Ep:
+        id = "cep_abc"
+        total_steps = 3
+        total_reward = 0.5
+
+    features = _episode_features(
+        [_Ep()],
+        {"cep_abc": [{"command": "ls -la"}, {"command": "cat x"}, {"command": "ls -la"}]},
+    )
+
+    assert features[0].episode_id == "cep_abc"
+    assert features[0].reward == 0.5
+    # The command verb is the action, so "ls -la" and "ls foo" are one action.
+    assert features[0].actions == ["ls", "cat", "ls"]
+
+
+def test_episode_features_tolerate_missing_steps():
+    from backend.app.api.detect import _episode_features
+
+    class _Ep:
+        id = "cep_none"
+        total_steps = 0
+        total_reward = 0.0
+
+    assert _episode_features([_Ep()], {})[0].actions == []
+
+
+def test_a_step_without_a_command_contributes_no_action():
+    from backend.app.api.detect import _episode_features
+
+    class _Ep:
+        id = "cep_x"
+        total_steps = 1
+        total_reward = 0.1
+
+    features = _episode_features([_Ep()], {"cep_x": [{"exit_code": 0}]})
+
+    assert features[0].actions == []
