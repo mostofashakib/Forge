@@ -86,3 +86,53 @@ def test_run_result_without_grading_provenance_records_none(tmp_path):
     )
     path = result.save(tmp_path, "run-2")
     assert json.loads(path.read_text())["grading"] is None
+
+
+def test_experiment_defaults_a_maximum_abstention_rate(tmp_path):
+    path = tmp_path / "exp.yaml"
+    path.write_text(
+        "train_envs: [a]\nheldout_envs: [b]\nreward_preset: full_layered_partial\n"
+        "base_model: m\nseeds: [0]\n",
+        encoding="utf-8",
+    )
+    assert ExperimentConfig.load(path).max_abstention_rate == 0.2
+
+
+def test_experiment_rejects_an_abstention_ceiling_above_one(tmp_path):
+    path = tmp_path / "exp.yaml"
+    path.write_text(
+        "train_envs: [a]\nheldout_envs: [b]\nreward_preset: full_layered_partial\n"
+        "base_model: m\nseeds: [0]\nmax_abstention_rate: 1.5\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError):
+        ExperimentConfig.load(path)
+
+
+def test_experiment_rejects_a_negative_abstention_ceiling(tmp_path):
+    path = tmp_path / "exp.yaml"
+    path.write_text(
+        "train_envs: [a]\nheldout_envs: [b]\nreward_preset: full_layered_partial\n"
+        "base_model: m\nseeds: [0]\nmax_abstention_rate: -0.1\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError):
+        ExperimentConfig.load(path)
+
+
+def test_run_result_records_the_abstention_rate(tmp_path):
+    result = RunResult(
+        config={}, seed=0, determinism="on",
+        heldout_pass_rate=1.0, reward_hacking_rate=0.0, reward_variance=0.0,
+        abstention_rate=0.125,
+    )
+    path = result.save(tmp_path, "run-a")
+    assert json.loads(path.read_text())["abstention_rate"] == 0.125
+
+
+def test_run_result_defaults_the_abstention_rate_to_zero(tmp_path):
+    result = RunResult(
+        config={}, seed=0, determinism="on",
+        heldout_pass_rate=1.0, reward_hacking_rate=0.0, reward_variance=0.0,
+    )
+    assert result.abstention_rate == 0.0

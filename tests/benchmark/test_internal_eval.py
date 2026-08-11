@@ -47,6 +47,7 @@ def _config_dict(train=None, heldout=None, seeds=None):
         "seeds": seeds or [7],
         "determinism_repeats": 2,
         "require_grader_independence": True,
+        "max_abstention_rate": 0.2,
     }
 
 
@@ -193,6 +194,7 @@ def _judged_config(independence=True):
         "train_envs": ["train_a"], "heldout_envs": ["held_a"],
         "reward_preset": "judge_only", "base_model": "base", "seeds": [7],
         "determinism_repeats": 2, "require_grader_independence": independence,
+        "max_abstention_rate": 0.2,
     }
 
 
@@ -390,3 +392,117 @@ def test_container_episode_runner_declares_that_it_issues_llm_verdicts(tmp_path,
     runner = _container_episode_runner(checkpoint_dir, "full_layered_partial")
 
     assert runner.issues_llm_verdicts is True
+
+
+# ---------------------------------------------------------------------------
+# Abstention accounting
+# ---------------------------------------------------------------------------
+
+def _outcomes(*specs):
+    it = iter(specs)
+    return lambda task, seed, path: next(it)
+
+
+def test_indeterminate_episodes_leave_the_pass_rate_denominator(tmp_path):
+    config_path = tmp_path / "experiment.yaml"
+    config_path.write_text(
+        "train_envs: [train_a]\nheldout_envs: [held_a]\n"
+        "reward_preset: full_layered_partial\nbase_model: base\nseeds: [7]\n"
+        "max_abstention_rate: 0.5\n",
+        encoding="utf-8",
+    )
+    config = _config_dict(heldout=["held_a"])
+    config["max_abstention_rate"] = 0.5
+    checkpoint_dir = _checkpoint(tmp_path, config)
+
+    result = evaluate_on_suite(
+        str(checkpoint_dir), str(config_path), runs_dir=tmp_path / "runs",
+        task_provider=_Provider(),
+        episode_runner=_outcomes(
+            EpisodeOutcome(passed=True, reward=1.0),
+            EpisodeOutcome(passed=False, reward=0.0, indeterminate=True),
+        ),
+    )
+
+    # One determinate episode, and it passed.
+    assert result["heldout_pass_rate"] == 1.0
+    assert result["abstention_rate"] == 0.5
+
+
+def test_a_run_with_no_abstentions_reports_a_zero_rate(tmp_path):
+    config_path = tmp_path / "experiment.yaml"
+    _experiment(config_path, heldout=["held_a"])
+    checkpoint_dir = _checkpoint(tmp_path, _config_dict(heldout=["held_a"]))
+
+    result = evaluate_on_suite(
+        str(checkpoint_dir), str(config_path), runs_dir=tmp_path / "runs",
+        task_provider=_Provider(), episode_runner=_pass_runner,
+    )
+
+    assert result["abstention_rate"] == 0.0
+    assert result["heldout_pass_rate"] == 1.0
+
+
+def test_excessive_abstention_fails_the_run_instead_of_publishing_a_number(tmp_path):
+    """A jury that cannot decide most cases is a broken instrument, not a result."""
+    config_path = tmp_path / "experiment.yaml"
+    config_path.write_text(
+        "train_envs: [train_a]\nheldout_envs: [held_a]\n"
+        "reward_preset: full_layered_partial\nbase_model: base\nseeds: [7]\n"
+        "max_abstention_rate: 0.4\n",
+        encoding="utf-8",
+    )
+    config = _config_dict(heldout=["held_a"])
+    config["max_abstention_rate"] = 0.4
+    checkpoint_dir = _checkpoint(tmp_path, config)
+
+    with pytest.raises(ValueError, match="abstention"):
+        evaluate_on_suite(
+            str(checkpoint_dir), str(config_path), runs_dir=tmp_path / "runs",
+            task_provider=_Provider(),
+            episode_runner=_outcomes(
+                EpisodeOutcome(passed=True, reward=1.0),
+                EpisodeOutcome(passed=False, reward=0.0, indeterminate=True),
+            ),
+        )
+    assert not (tmp_path / "runs/run-7/result.json").exists()
+
+
+def test_abstention_exactly_at_the_ceiling_is_allowed(tmp_path):
+    """Boundary: the ceiling is a maximum, not an exclusive bound."""
+    config_path = tmp_path / "experiment.yaml"
+    config_path.write_text(
+        "train_envs: [train_a]\nheldout_envs: [held_a]\n"
+        "reward_preset: full_layered_partial\nbase_model: base\nseeds: [7]\n"
+        "max_abstention_rate: 0.5\n",
+        encoding="utf-8",
+    )
+    config = _config_dict(heldout=["held_a"])
+    config["max_abstention_rate"] = 0.5
+    checkpoint_dir = _checkpoint(tmp_path, config)
+
+    result = evaluate_on_suite(
+        str(checkpoint_dir), str(config_path), runs_dir=tmp_path / "runs",
+        task_provider=_Provider(),
+        episode_runner=_outcomes(
+            EpisodeOutcome(passed=True, reward=1.0),
+            EpisodeOutcome(passed=False, reward=0.0, indeterminate=True),
+        ),
+    )
+
+    assert result["abstention_rate"] == 0.5
+
+
+def test_a_run_where_every_episode_is_indeterminate_fails(tmp_path):
+    config_path = tmp_path / "experiment.yaml"
+    _experiment(config_path, heldout=["held_a"])
+    checkpoint_dir = _checkpoint(tmp_path, _config_dict(heldout=["held_a"]))
+
+    with pytest.raises(ValueError):
+        evaluate_on_suite(
+            str(checkpoint_dir), str(config_path), runs_dir=tmp_path / "runs",
+            task_provider=_Provider(),
+            episode_runner=lambda task, seed, path: EpisodeOutcome(
+                passed=False, reward=0.0, indeterminate=True
+            ),
+        )
