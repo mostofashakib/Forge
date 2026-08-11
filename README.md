@@ -12,7 +12,11 @@ Forge lets you spin up isolated, observable app environments — Gmail-like emai
 2. **Runs agents inside them** — Random, scripted, or LLM-powered agents interact with the app via a clean API
 3. **Records and rewards every step** — Policy enforcement, multi-method reward scoring, and a unified per-run trace (LLM calls, actions, state changes, verifier decisions) written durably so any run is replayable — even one that crashed mid-episode
 4. **Exports training data** — SFT pairs, DPO preference pairs, GRPO rollouts, failure datasets, and more
-5. **Measures held-out generalization** — Trains on an explicit environment split, evaluates only unseen environments, and records reproducible per-seed outcomes
+5. **Trains a policy on its own experience** — `forge train` turns graded rollouts into a GRPO or DPO update and writes a checkpoint the runtime agents can load back
+6. **Measures held-out generalization** — Trains on an explicit environment split, evaluates only unseen environments, and records reproducible per-seed outcomes
+
+The loop closes: generate environments → run agents → grade → export → train → evaluate
+on environments the policy never trained on → reload the checkpoint and collect again.
 
 ---
 
@@ -94,16 +98,25 @@ User prompt + compiler input + optional original product research
                     ├─→ EnvironmentCorrectnessAgent   determinism audit gate
                     └─→ ReviewerAgent                 static + semantic checks
                     │
+                    ▼
+              RepairLoop  ──→ routes each finding back to the owning
+                    │         specialist as a correction task, up to
+                    │         FORGE_ENVGEN_MAX_REPAIR_ROUNDS rounds
+                    ▼
              approved artifacts → docker build/run
                     │
-                    ▼
-            CorrectnessValidator (post-boot)
-      reset fidelity + snapshot/restore round-trip
+                    ├─→ CorrectnessValidator (post-boot)
+                    │     reset fidelity + snapshot/restore round-trip
+                    └─→ PostGenerationValidator (post-boot)
+                          exercises declared actions against the live
+                          container and scores state-manifest coverage
 ```
 
 When enabled for a custom environment, `UserResearchAgent` reads the extracted application spec, the required original product name and URL, optional reference URLs, and a small web search when references are not provided. It synthesizes the target product's workflows, functionality, UI states, data, rules, RL observations, and edge cases. Raw pages are discarded inside the research task; backend, UI, RL, and review specialists receive only their relevant sections under a hard character budget. When disabled, the planner omits the research task and downstream specialists run with the application spec alone.
 
-`TaskExecutor` runs independent tasks concurrently and waits on declared dependencies. Each task receives a scoped artifact channel. The A2A protocol records assignment, completion, failure, review, and artifact-availability messages with correlation IDs, without copying large generated files into message payloads. The reviewer blocks artifact writes when generated code or requirement coverage fails. A dedicated correctness specialist runs alongside it and blocks writes when generated code is nondeterministic — wall-clock reads, unseeded randomness, nondeterministic IDs, or a `/forge/reset` that fails to re-initialize the virtual clock and ID counters — while exempting telemetry event-envelope timestamps that never reach `/forge/state`. Once the container is built and running, `CorrectnessValidator` exercises the live endpoints to prove reset fidelity (two resets and a mutate→reset both return the byte-identical pristine baseline) and a snapshot→mutate→restore round-trip before the environment is accepted; any drift hard-fails the build. Local follow-up work, including reviewer-driven automatic repairs, is tracked in the git-ignored `TASKS.md`.
+`TaskExecutor` runs independent tasks concurrently and waits on declared dependencies. Each task receives a scoped artifact channel. The A2A protocol records assignment, completion, failure, review, and artifact-availability messages with correlation IDs, without copying large generated files into message payloads. The reviewer blocks artifact writes when generated code or requirement coverage fails. A dedicated correctness specialist runs alongside it and blocks writes when generated code is nondeterministic — wall-clock reads, unseeded randomness, nondeterministic IDs, or a `/forge/reset` that fails to re-initialize the virtual clock and ID counters — while exempting telemetry event-envelope timestamps that never reach `/forge/state`. When either gate rejects the artifacts, `RepairLoop` does not fail the build immediately: `FindingRouter` attributes each review issue to the specialist that owns the offending artifact, `RepairPlanner` turns the attributed issues into typed correction tasks, and the executor re-runs only those specialists before re-review. It runs at most `FORGE_ENVGEN_MAX_REPAIR_ROUNDS` (default `2`) rounds, de-duplicates findings by fingerprint so an unfixable issue is not retried forever, and raises `UnrepairableFinding` when a finding cannot be attributed to any agent.
+
+Once the container is built and running, `CorrectnessValidator` exercises the live endpoints to prove reset fidelity (two resets and a mutate→reset both return the byte-identical pristine baseline) and a snapshot→mutate→restore round-trip before the environment is accepted; any drift hard-fails the build. `PostGenerationValidator` then boots the same container, calls `/forge/reset`, exercises the declared actions, and checks the observed state against the `StateSchemaManifest` — reporting missing fields and a coverage score so a generated app that never populates part of its declared state surfaces before agents run against it.
 
 Generation prompts are grouped behind prompt catalog classes, and the shared LLM client appends an explicit Pydantic output contract to every structured call. `EnvGenConfig` centralizes model token budgets, research limits, context budgets, and reviewer excerpt sizes; each value can be changed through its `FORGE_ENVGEN_*`, `FORGE_RESEARCH_*`, `FORGE_SPECIALIST_*`, or `FORGE_REVIEW_*` environment variable. `GenerationErrorHandler` normalizes specialist failures and retains task/agent error records for orchestration and A2A diagnostics.
 
@@ -114,6 +127,7 @@ Agent execution and data collection are separate layers. Runtime agents choose a
 - **Five agent adapters** — `random`, `scripted:<path>`, `anthropic:<model>`, `openai:<model>`, `vllm:<model>`
 - **AgentContext** — per-episode agent memory with a compact deterministic digest for prompt injection, stuck-vs-context-limit diagnosis, and automatic pruning of error spam and revisited-state noise
 - **Trajectory recording** — every step's state, action, and reward persisted to JSONL and DB
+- **Objective progress scoring** — `ObjectiveScorer` grades how far the current app/CLI/browser state is from the stated objective on a 0.0–1.0 scale with one-sentence reasoning; the container, CLI, and browser episode runners all use it, so dense per-step signal exists even for environments whose only ground truth is a natural-language goal
 - **Cross-run episode selection** — pick episodes from multiple runs, export as a single merged dataset
 - **Parallel rollouts** — launch batched episode rollouts across any compiled environment from the global Rollouts page; `ParallelRolloutRunner` runs the same task across many isolated env copies concurrently (one fresh instance per rollout, millisecond start/teardown) and classifies each outcome as success, failure, partial success, or edge case so a single batch yields diverse training scenarios
 - **Per-environment dashboard** — pass rate, average reward, step efficiency, termination-reason breakdown
@@ -126,6 +140,7 @@ Agent execution and data collection are separate layers. Runtime agents choose a
 - **Episode replay** — re-run any recorded episode step-by-step from stored trajectory
 - **Branch replay** — fork from any step index and try alternate action sequences
 - **Failure clustering** — groups failed episodes by trajectory diff similarity
+- **Cross-run anomaly detection** — `POST /api/sandbox/{env}/detect` loads recent completed episodes, compares trajectories across runs, and returns severity-tagged findings in five categories (`reward_hacking`, `distribution_drift`, `policy_gaming`, `anomalous_pattern`, `reward_collapse`), surfaced on the per-environment Violations page next to the rule-based audit log
 - **Environment graph** — visual entity/action relationship map
 
 ### Reward Engine
@@ -197,6 +212,7 @@ Environments are deterministic by default — same seed and same trajectory prod
 - **Flake-free UI** — premade UIs ship a CSS no-motion override and browser sessions force `prefers-reduced-motion` + injected no-animation styles
 - **SQLite as source of truth** — premade and generated apps persist state in SQLite; verification reads `/forge/state` (DB-backed), never the UI
 - **Enforced separation of concerns** — architecture tests keep environment, agents, verifiers, and training code from importing across boundaries
+- **UI-determinism gate** — `tests/architecture/test_ui_determinism.py` asserts every premade UI ships the `forge-no-motion` kill switch, that the browser runner disables motion on every page it opens, and that verification reads the DB rather than the rendered UI
 - **Test-scenario-diversity gate** — a static analyzer (`tests/architecture/diversity_audit.py`) parses every test module and fails the suite if one asserts only the happy path; each behavior must pair its happy case with a negative case (invalid input / error path) and a false-positive guard (a look-valid input that must be rejected, detected via `pytest.raises`, a differential/exclusion assertion, or a rejection-named test)
 
 For the determinism ablation only, set `FORGE_DETERMINISM=off` before building,
@@ -216,6 +232,20 @@ flag. Omitting the variable (or setting it to `on`) preserves the default behavi
 - **PII redaction** — strips emails, phone numbers, and SSNs from LLM input before code generation
 - **RBAC observation filtering** — removes or restricts state fields per role, applied in `reset()` and `step()`
 - **Policy Violation Viewer** — global filterable table of violations by environment, episode, and severity
+
+### Environment Customization
+
+A generated environment package can override compiled behaviour without editing generated code. Any `custom/*.py` file in the package is imported at load time and its decorated functions are registered by `CustomizationLoader`:
+
+| Hook | Overrides |
+|---|---|
+| `@override_transition(action_name)` | The transition function for one action |
+| `@verifier(task_name)` | The verifier for one task |
+| `@reward(task_name)` | The reward function for one task |
+| `@observation_transform(name)` | The observation shown to the agent |
+| `@policy_rule(name)` | An additional policy rule evaluated on every step |
+
+`EnvConfig` carries the per-environment knobs the UI's **Config** page edits — `RewardConfig` (base success, step penalty, policy-violation penalty, invalid-action penalty, reward clamps, semantic weight) and `ObservationConfig` (mode, actor role, visible/hidden entities for RBAC filtering). Overrides live in the package's `custom/` directory, which is included in the runnable source export.
 
 ### Synthetic Data Engine
 
@@ -239,6 +269,8 @@ Seven export formats from the per-environment **Export Dataset** page:
 | **Raw Trajectories** | `trajectories.jsonl` | Custom pipelines |
 | **Rewards** | `rewards.jsonl` | Analysis, custom reward models |
 | **Verifier Results** | `verifier_results.jsonl` | Debugging, custom reward models |
+
+**Runnable source export** — separately from the datasets, any generated environment can be downloaded as a self-contained zip (`GET /api/envs/{env_name}/download`, or the download action on the environment page). `build_source_bundle` packages the generated app, `container_env.py`, `reward_fn.py`, `state_schema.json`, and any `custom/` overrides alongside a README and a `docker-compose.yml`, while filtering runtime artifacts (`episodes/`, `__pycache__`, `.pyc`). The result runs with one command on a machine that has never seen Forge, so an environment can be published, reviewed, or archived independently of this platform.
 
 ### Policy Training
 
@@ -392,6 +424,25 @@ forge benchmark eval \
 
 ---
 
+## Status & Known Gaps
+
+Everything documented above is implemented and covered by the test suite. Three
+things are deliberately *not* — they are wired end to end but raise
+`NotImplementedError` rather than silently degrading:
+
+| Gap | Where | Why it matters |
+|---|---|---|
+| **External transfer benchmark** | `forge/benchmark/transfer_pipeline.py`, `_fine_tune.py` | Generalization is currently measured only on Forge's own held-out environments. Transfer to an independent harness (WebArena / WorkArena) is the claim that would separate "the split held" from "the training actually taught the policy something about real apps" |
+| **SFT fine-tuning entry point** | `forge/benchmark/_fine_tune.py` | `forge train` supports GRPO and DPO; the SFT path that the transfer pipeline needs is still a stub |
+| **Distributed parallel runs** | worker layer | `ParallelRolloutRunner` parallelizes within one host; multi-worker distribution with deterministic seed assignment, backpressure, and run-level aggregation is not built |
+
+There are also **no published numbers**. The evaluation protocol, metrics, and
+result-record format exist; no reference run has been executed and committed, so
+the repository currently demonstrates capability rather than results. See
+[TASKS.md](TASKS.md) for the ranked work queue.
+
+---
+
 ## Architecture
 
 ```
@@ -461,7 +512,14 @@ forge/
     planning.py        # Typed task plans and dependency validation
     executor.py        # Dependency-aware specialist task execution
     a2a.py             # Typed Agent-to-Agent messages and scoped context permissions
+    artifact_bus.py    # Async artifact publish/await between dependent specialists
+    repair.py          # RepairLoop: route review findings back to owning specialists
     correctness_validator.py  # Post-boot reset-fidelity + snapshot/restore validation
+    post_generation_validator.py  # Post-boot action exercise + state-manifest coverage
+    source_bundle.py   # Package a generated env as a standalone runnable zip
+    objective.py       # ObjectiveScorer: LLM 0–1 progress score toward a stated goal
+    error_handling.py  # GenerationErrorHandler: normalized specialist failures
+    episode_runner.py  # Container episode loop; cli_runner.py / browser_runner.py
     telemetry/         # Telemetry client and collectors
     container.py       # Docker build, run, start/stop, normalisation, mirror fallback
     tiered_reward.py   # TieredRewardEngine with partial credit and multi-method scoring
@@ -482,14 +540,18 @@ forge/
     trainer.py         # PolicyTrainer: prepare signal → backend → PolicyCheckpoint
     checkpoint.py      # PolicyCheckpoint manifest + load_policy_agent()
     _backends.py       # GRPO/DPO backends gated on trl + transformers (GPU node)
-  customization/       # Environment customisation helpers
+  customization/       # Per-env overrides: decorator hooks, EnvConfig, loader
   schema/              # StateSchemaManifest and related schemas
+  settings.py          # Process-wide settings: determinism mode, seeds, paths, URLs
+  reward_presets.py    # Canonical reward-ablation presets shared by every reward path
+  logging_utils.py     # Credential-safe redaction for logs
+  paths.py             # Confined-path helpers for generated-env file access
   cli/
     main.py            # forge CLI: compile, validate, run, replay, diagnose, benchmark *
 backend/
   app/
-    api/               # FastAPI routers: sandbox, agent_runs, synthetic, evaluate, exports,
-    │                  #   audit, rollouts, detect, compile, benchmark
+    api/               # FastAPI routers: sandbox, envs, episodes, agent_runs, synthetic,
+    │                  #   evaluate, exports, audit, rollouts, detect, compile, benchmark
     services/
       export_writers/  # sft_pairs, preference_pairs, grpo_rollouts, failure_dataset, ...
     worker/            # Celery tasks: build_sandbox, run_episode, run_rollout,
@@ -510,6 +572,8 @@ frontend/
       eval/            # Internal checkpoint evaluation on held-out environments
     environments/
       new/             # 4-option landing page (CLI / Browser / Custom / Premade)
+        custom/        # Prompt form + optional user-research toggle
+        premade/       # Gmail / Slack picker
       [env_name]/
         sandbox/       # Tabbed hub: App / Terminal / Observability
         progress/      # Real-time planner, specialist, review, and Docker build progress
@@ -532,7 +596,12 @@ tests/
   runtime/             # Kernel, verifier, policy, RBAC, network isolation, PII tests
   backend/             # API integration tests, E2E sandbox + agent-runs + benchmark tests
   envgen/              # ContainerRuntime, normalisation, pull/mirror/HTTPS fallback tests
-  benchmark/           # Task suite and quality metric tests
+  benchmark/           # Task suite, quality metric, and internal held-out eval tests
+  training/            # Dataset loading, reward mapping, trainer, checkpoint tests
+  cli/                 # forge CLI command tests (run determinism, train, replay)
+  customization/       # Hook registry, loader, and config tests
+  gmail_env/           # Premade Gmail determinism, transition, and verifier tests
+  architecture/        # Separation-of-concerns, UI-determinism, and test-diversity gates
 ```
 
 ---
@@ -564,8 +633,14 @@ The development runner configures Redis with a TCP backlog of 128 to match the d
 
 **Run tests:**
 ```bash
-uv run pytest
+uv run pytest                                  # full suite (1,056 tests)
+uv run pytest tests/architecture               # boundary, UI-determinism, and diversity gates only
+uv run pytest tests/runtime tests/envgen       # kernel + generation pipeline
 ```
+
+The full suite completes in about 12 seconds — LLM calls are mocked and no container is
+built. `tests/architecture` doubles as a review gate: it fails the build on cross-layer
+imports, animated premade UIs, and tests that assert only the happy path.
 
 ---
 
@@ -584,6 +659,33 @@ uv run pytest
 | `FORGE_DISABLE_PREWARM` | unset | Set to `1` to skip base-image pre-warm on worker boot |
 | `REDIS_URL` | `redis://localhost:6379/0` | Redis URL for Celery and build/benchmark progress pub/sub |
 | `NEXT_PUBLIC_API_URL` | `http://localhost:8000` | Backend URL used by the frontend |
+
+### Container Images & Resource Limits
+
+| Variable | Default | Description |
+|---|---|---|
+| `FORGE_PYTHON_BASE_IMAGE` | `python:3.12-slim` | Base image every generated custom environment is built on |
+| `FORGE_CLI_IMAGE` | `ubuntu:22.04` | Image used for CLI environments |
+| `FORGE_BROWSER_IMAGE` | `lscr.io/linuxserver/chromium:latest` | Image used for browser environments |
+| `FORGE_CONTAINER_MEMORY` | `1g` | Memory cap for generated custom containers |
+| `FORGE_CLI_MEMORY` | `1g` | Memory cap for CLI containers |
+| `FORGE_BROWSER_MEMORY` | `2g` | Memory cap for browser containers |
+| `FORGE_CONTAINER_NANO_CPUS` | `1000000000` | CPU quota in nano-CPUs (1e9 = 1 core) |
+| `FORGE_CONTAINER_PIDS` | `256` | PID limit per container |
+
+### Generation Budgets
+
+`EnvGenConfig` centralizes every model token budget, research limit, context budget, and reviewer excerpt size; each field maps to one environment variable. The full list with defaults lives in [.env.example](.env.example) — the ones most often tuned:
+
+| Variable | Default | Description |
+|---|---|---|
+| `FORGE_ENVGEN_MAX_REPAIR_ROUNDS` | `2` | Reviewer-driven repair rounds before the build fails |
+| `FORGE_ENVGEN_CAPABLE_TOKENS` | `8192` | Output budget for capable-tier generation calls |
+| `FORGE_ENVGEN_TELEMETRY_TOKENS` | `32768` | Output budget for the telemetry specialist |
+| `FORGE_RESEARCH_SEARCH_RESULTS` | `3` | Pages fetched by the user researcher when no reference URLs are given |
+| `FORGE_RESEARCH_DOCUMENT_CHARS` | `20000` | Per-document character cap on fetched research |
+| `FORGE_SPECIALIST_CONTEXT_CHARS` | `12000` | Hard character budget on the context handed to each specialist |
+| `FORGE_REVIEW_FILE_CHARS` | `16000` | Per-file excerpt size the reviewer sees |
 
 ### LLM Provider
 
@@ -607,11 +709,13 @@ FORGE_LLM_PROVIDER=ollama FORGE_LLM_MODEL=gemma4:12b ./run.sh
 ## CLI
 
 ```bash
-forge compile --input spec.json      # Extract + compile an environment
-forge run <env_name> --agent random  # Run an episode interactively
-forge replay <episode_id>            # Replay a recorded episode (ep_* or cep_*)
-forge validate <env_name>            # Smoke-test a compiled environment
-forge diagnose <env_name>            # Analyse episode quality across all runs
+forge compile --input spec.json --output generated_envs   # Extract + compile an environment
+forge validate generated_envs/<env_name>                  # Tests + override validation on a package
+forge run --env <env_name> --task <verifier_id> \
+  --seed 42 --steps 10               # Run one episode with a seeded random policy
+forge export --env <env_name> --seed 42 --out exports     # Run + write the trajectory as JSONL
+forge replay <episode_id> [--json]   # Replay a recorded episode (ep_* gym or cep_* container)
+forge diagnose <env_name> [--json]   # Analyse episode quality across all runs
 
 forge train \
   --data <export_dir> \              # dir with grpo_rollouts.parquet / preference_pairs.jsonl
@@ -628,4 +732,10 @@ forge benchmark report               # generate summary tables from collected re
 forge benchmark eval \
   --checkpoint ./policy_checkpoint \
   --experiment experiments/internal_heldout.yaml
+forge benchmark transfer             # deferred — raises NotImplementedError (see Roadmap)
 ```
+
+`forge run` and `forge export` drive the environment with a seeded random policy
+(`seeded_random_policy`), not an LLM adapter; LLM/scripted agents run through the
+backend agent-run API and the **Agent** page. Both commands run the launch-time
+determinism check before the first `reset()`.
