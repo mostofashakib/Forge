@@ -292,3 +292,101 @@ def test_structural_run_is_not_blocked_by_a_same_family_judge_variable(tmp_path,
     )
 
     assert result["grading"]["independent"] is True
+
+
+# ---------------------------------------------------------------------------
+# Observed grading — the record must reflect what ran, not what the preset implies
+# ---------------------------------------------------------------------------
+
+def test_result_records_the_observed_verdict_count(tmp_path, monkeypatch):
+    monkeypatch.setenv("FORGE_LLM_MODEL", "claude-haiku-4-5-20251001")
+    monkeypatch.setenv("FORGE_LLM_MODEL_CAPABLE", "claude-sonnet-4-6")
+    monkeypatch.setenv("FORGE_JUDGE_MODEL", "gpt-4o")
+    config_path = tmp_path / "experiment.yaml"
+    _judged_experiment(config_path)
+    checkpoint_dir = _checkpoint(tmp_path, _judged_config())
+
+    result = evaluate_on_suite(
+        str(checkpoint_dir), str(config_path), runs_dir=tmp_path / "runs",
+        task_provider=_Provider(),
+        episode_runner=lambda task, seed, path: EpisodeOutcome(
+            passed=True, reward=1.0, reward_hacking=False, llm_verdicts=5
+        ),
+    )
+
+    record = json.loads((tmp_path / "runs/run-7/result.json").read_text())
+    assert result["grading"]["llm_verdicts"] == 10  # 2 repeats x 5 verdicts
+    assert record["grading"]["llm_verdicts"] == 10
+
+
+def test_structural_run_that_issues_verdicts_is_refused_not_recorded(tmp_path):
+    """A runner that under-declares itself must abort, not write a false record."""
+    config_path = tmp_path / "experiment.yaml"
+    _experiment(config_path, heldout=["held_a"])
+    checkpoint_dir = _checkpoint(tmp_path, _config_dict(heldout=["held_a"]))
+
+    with pytest.raises(ValueError, match="under-declared"):
+        evaluate_on_suite(
+            str(checkpoint_dir), str(config_path), runs_dir=tmp_path / "runs",
+            task_provider=_Provider(),
+            episode_runner=lambda task, seed, path: EpisodeOutcome(
+                passed=True, reward=1.0, reward_hacking=False, llm_verdicts=3
+            ),
+        )
+    assert not (tmp_path / "runs/run-7/result.json").exists()
+
+
+def test_structural_run_observing_no_verdicts_records_zero(tmp_path):
+    config_path = tmp_path / "experiment.yaml"
+    _experiment(config_path, heldout=["held_a"])
+    checkpoint_dir = _checkpoint(tmp_path, _config_dict(heldout=["held_a"]))
+
+    result = evaluate_on_suite(
+        str(checkpoint_dir), str(config_path), runs_dir=tmp_path / "runs",
+        task_provider=_Provider(), episode_runner=_pass_runner,
+    )
+
+    assert result["grading"]["llm_graded"] is False
+    assert result["grading"]["llm_verdicts"] == 0
+
+
+def test_a_runner_declaring_llm_verdicts_is_gated_before_any_episode(tmp_path, monkeypatch):
+    """The container runner always scores with an LLM, so the gate must see that.
+
+    The preset alone says ``full_layered_partial`` issues no LLM verdict, so a
+    preset-derived flag would let this contaminated run proceed.
+    """
+    monkeypatch.setenv("FORGE_LLM_MODEL", "claude-haiku-4-5-20251001")
+    monkeypatch.setenv("FORGE_LLM_MODEL_CAPABLE", "claude-sonnet-4-6")
+    monkeypatch.setenv("FORGE_JUDGE_MODEL", "claude-sonnet-4-6")
+    config_path = tmp_path / "experiment.yaml"
+    _experiment(config_path, heldout=["held_a"])
+    checkpoint_dir = _checkpoint(tmp_path, _config_dict(heldout=["held_a"]))
+
+    episodes_run = []
+
+    def declaring_runner(task, seed, path):
+        episodes_run.append(task)
+        return EpisodeOutcome(passed=True, reward=1.0, reward_hacking=False)
+
+    declaring_runner.issues_llm_verdicts = True
+
+    with pytest.raises(GraderContaminationError):
+        evaluate_on_suite(
+            str(checkpoint_dir), str(config_path), runs_dir=tmp_path / "runs",
+            task_provider=_Provider(), episode_runner=declaring_runner,
+        )
+    assert episodes_run == []
+
+
+def test_container_episode_runner_declares_that_it_issues_llm_verdicts(tmp_path, monkeypatch):
+    """Every container episode is scored by ObjectiveScorer, so it grades with an LLM."""
+    from forge.benchmark._eval import _container_episode_runner
+
+    import forge.benchmark._eval as eval_module
+
+    monkeypatch.setattr(eval_module, "load_policy_agent", lambda _dir: object())
+    checkpoint_dir = _checkpoint(tmp_path, _config_dict())
+    runner = _container_episode_runner(checkpoint_dir, "full_layered_partial")
+
+    assert runner.issues_llm_verdicts is True

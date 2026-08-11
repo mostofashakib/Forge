@@ -210,14 +210,19 @@ For the paths that *do* consult a model, independence is configurable and enforc
 "grading": {
   "generator_models": ["claude-haiku-4-5-20251001", "claude-sonnet-4-6"],
   "generator_families": ["claude"],
-  "judge_model": null,
-  "judge_family": null,
-  "llm_graded": false,
+  "judge_model": "gpt-4o",
+  "judge_family": "gpt",
+  "llm_graded": true,
+  "llm_verdicts": 412,
   "independent": true
 }
 ```
 
-One caveat stated plainly: `llm_graded` is derived from the reward preset, which is exact for `judge_only` and for the structural presets. A `full_layered_partial` run whose tasks declare semantic checks issues LLM verdicts that the preset alone does not reveal; pass `llm_graded=True` explicitly for those runs until the flag is derived per task.
+**Declared before, counted after.** The reward preset describes which verifier layers are enabled; it does not describe what a grading path actually does. So the run asks the episode runner first (`issues_llm_verdicts`), falls back to the preset only when the runner is silent, and then counts what really happened: every `ObjectiveScorer` call increments `EpisodeResult.llm_verdicts`, and the total lands in the record.
+
+The two must agree. A run that declared itself structural and then issued model verdicts raises instead of writing the record — an under-declaring grading path is a bug, and a result file that understates model involvement is worse than no file, because it is what a reader trusts when they cannot re-run the experiment.
+
+This matters concretely: `ContainerEpisodeRunner` scores **every step** with `ObjectiveScorer`, and that score drives both the step reward and the success/termination decision. The held-out evaluation path is therefore LLM-graded under every preset, including presets whose verifier layers are entirely structural — so it declares `issues_llm_verdicts = True` and is gated for grader independence before a single episode runs.
 
 ### Interaction Contracts
 
@@ -420,9 +425,10 @@ runs/<run-id>/
   "grading": {
     "generator_models": ["claude-haiku-4-5-20251001", "claude-sonnet-4-6"],
     "generator_families": ["claude"],
-    "judge_model": null,
-    "judge_family": null,
-    "llm_graded": false,
+    "judge_model": "gpt-4o",
+    "judge_family": "gpt",
+    "llm_graded": true,
+    "llm_verdicts": 412,
     "independent": true
   }
 }

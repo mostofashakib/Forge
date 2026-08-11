@@ -32,6 +32,10 @@ class BaseEpisodeResult:
     total_reward: float = 0.0
     final_objective_score: float = 0.0
     termination_reason: str = "unknown"
+    # Verdicts a model issued during this episode. Observed, not inferred:
+    # it is the count of scorer calls, so a step recorded without being
+    # scored does not inflate it.
+    llm_verdicts: int = 0
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     completed_at: datetime | None = None
 
@@ -50,6 +54,7 @@ class BaseEpisodeResult:
             "total_reward": self.total_reward,
             "final_objective_score": self.final_objective_score,
             "termination_reason": self.termination_reason,
+            "llm_verdicts": self.llm_verdicts,
             "started_at": self.started_at.isoformat(),
             "completed_at": self.completed_at.isoformat() if self.completed_at else None,
         }
