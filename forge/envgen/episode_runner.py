@@ -327,11 +327,15 @@ class ContainerEpisodeRunner:
                         if bv != av:
                             derived_diff[fname] = {"before": bv, "after": av}
 
+            # This score is a model's verdict, and it drives both the step
+            # reward and the success/termination decision. Count it so the run
+            # record can state how much of the grade a model produced.
             obj_score = self._scorer.score(
                 new_state, cfg.objective,
                 derived_diff=derived_diff or None,
                 action_taken=action or None,
             )
+            result.llm_verdicts += 1
 
             # StateDiffFloor: reward at least diff_floor if stable state changed
             if self._manifest is not None and self._manifest.state_changed(state, new_state):

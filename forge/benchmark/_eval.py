@@ -27,6 +27,8 @@ class EpisodeOutcome:
     passed: bool
     reward: float
     reward_hacking: bool = False
+    # Verdicts a model issued while grading this episode, counted by the runner.
+    llm_verdicts: int = 0
 
 
 EpisodeRunner = Callable[[Task, int, Path], EpisodeOutcome]
@@ -69,14 +71,6 @@ def evaluate_on_suite(
         f"{experiment_path.stem}-seed-{selected_seed}"
     )
 
-    # Resolve who generated and who graded before spending any episodes: a
-    # contaminated grader invalidates the run, so fail before the work, not after.
-    if llm_graded is None:
-        llm_graded = reward_preset_spec(config.reward_preset).issues_llm_verdict
-    provenance = resolve_grading_provenance(llm_graded=llm_graded)
-    if config.require_grader_independence:
-        require_independent_grader(provenance)
-
     if checkpoint.train_envs != config.train_envs:
         raise ValueError("checkpoint training environments do not match the experiment config")
     overlap = sorted(set(checkpoint.train_envs) & set(config.heldout_envs))
@@ -95,6 +89,19 @@ def evaluate_on_suite(
         episode_runner = _container_episode_runner(
             checkpoint_dir, config.reward_preset
         )
+
+    # Resolve who generated and who graded before spending any episodes: a
+    # contaminated grader invalidates the run, so fail before the work, not
+    # after. The runner is asked first because it knows what it will actually
+    # do — the reward preset only describes the verifier layers, and the
+    # container runner issues an LLM verdict on every step under any preset.
+    if llm_graded is None:
+        llm_graded = getattr(episode_runner, "issues_llm_verdicts", None)
+    if llm_graded is None:
+        llm_graded = reward_preset_spec(config.reward_preset).issues_llm_verdict
+    provenance = resolve_grading_provenance(llm_graded=llm_graded)
+    if config.require_grader_independence:
+        require_independent_grader(provenance)
 
     outcomes: list[EpisodeOutcome] = []
     reward_groups: list[list[float]] = []
@@ -129,6 +136,12 @@ def evaluate_on_suite(
     hacking_rate = sum(outcome.reward_hacking for outcome in outcomes) / len(outcomes)
     task_variances = [pvariance(rewards) for rewards in reward_groups]
     reward_variance = sum(task_variances) / len(task_variances)
+
+    # Replace the declared grading mode with what the run actually did. This
+    # raises rather than writing a record that understates model involvement.
+    provenance = provenance.with_observed_verdicts(
+        sum(outcome.llm_verdicts for outcome in outcomes)
+    )
 
     result_record = RunResult(
         config=config.model_dump(mode="json"),
@@ -243,8 +256,14 @@ def _container_episode_runner(checkpoint_dir: Path, reward_preset) -> EpisodeRun
             passed=passed,
             reward=reward,
             reward_hacking=_has_reward_hacking_pattern(result, passed),
+            llm_verdicts=result.llm_verdicts,
         )
 
+    # ContainerEpisodeRunner scores every step with ObjectiveScorer, and that
+    # score drives both the step reward and the success/termination decision.
+    # This path is LLM-graded under every reward preset, including the ones
+    # whose verifier layers are entirely structural.
+    run.issues_llm_verdicts = True
     return run
 
 
