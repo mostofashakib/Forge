@@ -360,3 +360,36 @@ async def test_a_contested_panel_is_labelled_distinctly_from_a_clear_rejection()
     categories = {issue.category for issue in bus.get("review_report").issues}
     assert "semantic_review_contested" in categories
     assert "semantic_review" not in categories
+
+
+def test_reviewer_does_not_build_a_judge_client_when_a_quorum_is_configured(monkeypatch):
+    """A quorum-only setup must not require the single judge's credentials.
+
+    get_client eagerly constructs the provider SDK, so building an unused judge
+    would make an Anthropic API key mandatory even when every quorum member
+    comes from another provider.
+    """
+    import forge.envgen.agents.reviewer as reviewer_module
+
+    def _explode(*args, **kwargs):
+        raise AssertionError("judge client must not be built when a quorum exists")
+
+    monkeypatch.setattr(reviewer_module, "get_judge_client", _explode)
+    monkeypatch.setenv("FORGE_LLM_PROVIDER", "anthropic")
+    monkeypatch.setenv("FORGE_QUORUM_MODELS", "openai:gpt-4o,gemini:gemini-2.0-flash")
+
+    agent = reviewer_module.ReviewerAgent()
+
+    assert agent._panel is not None
+    assert agent._client is None
+
+
+def test_reviewer_still_builds_a_judge_client_without_a_quorum(monkeypatch):
+    """False-positive guard: the single-judge path must keep its client."""
+    import forge.envgen.agents.reviewer as reviewer_module
+
+    monkeypatch.delenv("FORGE_QUORUM_MODELS", raising=False)
+    monkeypatch.setenv("FORGE_LLM_PROVIDER", "ollama")
+    monkeypatch.setenv("FORGE_JUDGE_MODEL", "llama3.1:8b")
+
+    assert reviewer_module.ReviewerAgent()._client is not None
