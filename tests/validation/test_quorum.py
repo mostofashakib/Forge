@@ -109,3 +109,28 @@ def test_a_member_that_returns_a_verdict_does_not_abstain():
 
     assert verdict.abstained is False
     assert verdict.passed is False
+
+
+def test_a_member_returning_passed_and_detail_records_both():
+    """A (passed, detail) return must be unpacked — a truthy tuple is not a pass."""
+    members = quorum_members(
+        parse_quorum_models("openai:gpt-4o"),
+        generator_families=("claude",),
+        evaluate=lambda client, subject: (False, "reward never fires"),
+        client_factory=lambda spec: object(),
+    )
+    verdict = members[0].evaluate({})
+
+    assert verdict.passed is False
+    assert verdict.detail == "reward never fires"
+
+
+def test_a_member_returning_a_bare_bool_still_works():
+    members = quorum_members(
+        parse_quorum_models("openai:gpt-4o"),
+        generator_families=("claude",),
+        evaluate=lambda client, subject: True,
+        client_factory=lambda spec: object(),
+    )
+
+    assert members[0].evaluate({}).passed is True

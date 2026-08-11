@@ -17,8 +17,9 @@ QUORUM_MODELS_VAR = "FORGE_QUORUM_MODELS"
 
 _SUPPORTED_PROVIDERS = frozenset({"anthropic", "ollama", "openai", "gemini"})
 
-# Takes a configured client and the subject under validation, returns pass/fail.
-EvaluateFn = Callable[[Any, Any], bool]
+# Takes a configured client and the subject under validation. Returns either
+# the verdict alone, or ``(verdict, detail)`` to record the reasoning.
+EvaluateFn = Callable[[Any, Any], "bool | tuple[bool, str]"]
 
 
 @dataclass(frozen=True)
@@ -84,7 +85,7 @@ class _LLMMember:
 
     def evaluate(self, subject: Any) -> MemberVerdict:
         try:
-            passed = self._evaluate(self._client, subject)
+            result = self._evaluate(self._client, subject)
         except Exception as exc:
             # A provider outage is missing evidence, not evidence of failure.
             # Abstaining keeps it out of the agreement denominator instead of
@@ -93,9 +94,17 @@ class _LLMMember:
                 member_id=self.member_id, family=self.family,
                 passed=None, detail=f"abstained: {exc}",
             )
+        # An evaluate function may return the verdict alone or paired with the
+        # reasoning behind it. Unpacking is not optional: a (False, "...") tuple
+        # is truthy, so treating the result as a bare bool would silently turn
+        # every failing verdict into a pass.
+        if isinstance(result, tuple):
+            passed, detail = result
+        else:
+            passed, detail = result, ""
         return MemberVerdict(
             member_id=self.member_id, family=self.family,
-            passed=bool(passed), detail="",
+            passed=bool(passed), detail=detail,
         )
 
 
