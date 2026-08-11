@@ -16,17 +16,72 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from forge.envgen.agents.base import EnvGenAgent, with_correction
 from forge.envgen.artifact_bus import ArtifactBus
 from forge.envgen.config import envgen_config
 from forge.envgen.context import EnvGenContext
 from forge.extraction.llm_client import LLMClient, get_client
+from forge.envgen.research import ResearchSource, SpecialistResearchContext
 
 # A seed of -1 marks "the model did not assign one"; normalize_seeds fills it in.
 _UNASSIGNED_SEED = -1
+
+
+class VerifierMilestone(BaseModel):
+    """One verifier constraint and the external evidence behind it.
+
+    ``source=None`` is intentional and measurable: it means the generator, not
+    product documentation, introduced the constraint. The before-validator
+    keeps old scenario JSON readable, treating legacy strings as unattributed.
+    """
+
+    value: str
+    source: ResearchSource | None = None
+
+    @field_validator("value")
+    @classmethod
+    def _non_empty_value(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("verifier milestone value must not be empty")
+        return value
+
+
+def _coerce_milestone(value: object) -> object:
+    return {"value": value, "source": None} if isinstance(value, str) else value
+
+
+class MilestoneAttribution(BaseModel):
+    scenario_id: str
+    milestone_type: Literal["required_action", "forbidden_action", "expected_answer"]
+    value: str
+    source: ResearchSource | None = None
+
+
+class MilestoneAttributionGroup(BaseModel):
+    count: int = 0
+    fraction: float = 0.0
+    milestones: list[MilestoneAttribution] = Field(default_factory=list)
+    findings: list[str] = Field(default_factory=list)
+
+
+class MilestoneAttributionReport(BaseModel):
+    """Separates documented ground truth from generator-authored constraints."""
+
+    total_milestones: int = 0
+    source_attributed_count: int = 0
+    model_invented_count: int = 0
+    source_attributed_fraction: float = 0.0
+    model_invented_fraction: float = 0.0
+    source_attributed: MilestoneAttributionGroup = Field(
+        default_factory=MilestoneAttributionGroup
+    )
+    model_invented: MilestoneAttributionGroup = Field(
+        default_factory=MilestoneAttributionGroup
+    )
 
 
 class Scenario(BaseModel):
@@ -48,9 +103,23 @@ class Scenario(BaseModel):
     ordering_note: str = ""
     # Ground truth for the verifier (#5): the exact actions that must run (in
     # order), the ones that must not, and the expected outcome.
-    required_actions: list[str] = Field(default_factory=list)
-    forbidden_actions: list[str] = Field(default_factory=list)
-    expected_answer: str = ""
+    required_actions: list[VerifierMilestone] = Field(default_factory=list)
+    forbidden_actions: list[VerifierMilestone] = Field(default_factory=list)
+    expected_answer: VerifierMilestone | None = None
+
+    @field_validator("required_actions", "forbidden_actions", mode="before")
+    @classmethod
+    def _legacy_action_milestones(cls, values: object) -> object:
+        if isinstance(values, list):
+            return [_coerce_milestone(value) for value in values]
+        return values
+
+    @field_validator("expected_answer", mode="before")
+    @classmethod
+    def _legacy_answer_milestone(cls, value: object) -> object:
+        if value == "":
+            return None
+        return _coerce_milestone(value)
 
     def record_count(self) -> int:
         return sum(len(rows) for rows in self.records.values())
@@ -59,6 +128,7 @@ class Scenario(BaseModel):
 class ScenarioSuite(BaseModel):
     env_name: str = ""
     scenarios: list[Scenario] = Field(default_factory=list)
+    attribution_report: MilestoneAttributionReport | None = None
 
 
 @dataclass
@@ -112,7 +182,8 @@ def assess_scenario_suite(
             ))
 
         if known_actions is not None:
-            for name in scenario.required_actions + scenario.forbidden_actions:
+            for milestone in scenario.required_actions + scenario.forbidden_actions:
+                name = _milestone_value(milestone)
                 if name not in known_actions:
                     issues.append(ScenarioIssue(
                         "unknown_action",
@@ -136,6 +207,87 @@ def assess_scenario_suite(
             "No scenario is ordering-sensitive; add one where call order matters",
         ))
     return issues
+
+
+def _milestone_value(milestone: VerifierMilestone | str) -> str:
+    # Assignment validation is deliberately not forced on the public Pydantic
+    # model, so tolerate callers mutating a legacy string into the list.
+    return milestone if isinstance(milestone, str) else milestone.value
+
+
+def analyze_milestone_attribution(
+    suite: ScenarioSuite,
+    research: SpecialistResearchContext | None,
+) -> MilestoneAttributionReport:
+    """Classify milestones using only citations verified against research input."""
+    verified_sources = {
+        source.url: source for source in (research.sources if research else [])
+    }
+    attributed: list[MilestoneAttribution] = []
+    invented: list[MilestoneAttribution] = []
+    invented_findings: list[str] = []
+
+    for scenario in suite.scenarios:
+        typed: list[tuple[str, VerifierMilestone | str]] = [
+            *(("required_action", item) for item in scenario.required_actions),
+            *(("forbidden_action", item) for item in scenario.forbidden_actions),
+        ]
+        if scenario.expected_answer is not None:
+            typed.append(("expected_answer", scenario.expected_answer))
+        for milestone_type, raw in typed:
+            milestone = (
+                VerifierMilestone(value=raw) if isinstance(raw, str) else raw
+            )
+            record = MilestoneAttribution(
+                scenario_id=scenario.scenario_id,
+                milestone_type=milestone_type,
+                value=milestone.value,
+                source=milestone.source,
+            )
+            source = milestone.source
+            verified = verified_sources.get(source.url) if source else None
+            passage_is_verified = bool(
+                source
+                and verified
+                and source.title == verified.title
+                and source.passage.strip()
+                and source.passage.strip() in verified.passage
+            )
+            if passage_is_verified:
+                attributed.append(record)
+            else:
+                invented.append(record)
+                reason = "has no source"
+                if source is not None:
+                    reason = "cites a source or passage absent from fetched research"
+                invented_findings.append(
+                    f"{scenario.scenario_id}:{milestone_type} {reason}: {milestone.value}"
+                )
+
+    total = len(attributed) + len(invented)
+    attributed_fraction = len(attributed) / total if total else 0.0
+    invented_fraction = len(invented) / total if total else 0.0
+    return MilestoneAttributionReport(
+        total_milestones=total,
+        source_attributed_count=len(attributed),
+        model_invented_count=len(invented),
+        source_attributed_fraction=attributed_fraction,
+        model_invented_fraction=invented_fraction,
+        source_attributed=MilestoneAttributionGroup(
+            count=len(attributed),
+            fraction=attributed_fraction,
+            milestones=attributed,
+            findings=[
+                "Source-attributed milestones are treated as documented ground truth."
+            ] if attributed else [],
+        ),
+        model_invented=MilestoneAttributionGroup(
+            count=len(invented),
+            fraction=invented_fraction,
+            milestones=invented,
+            findings=invented_findings,
+        ),
+    )
 
 
 def normalize_seeds(suite: ScenarioSuite) -> ScenarioSuite:
@@ -197,6 +349,12 @@ _SYSTEM = (
     "  - `forbidden_actions`: actions that must NOT be called (e.g. acting on a\n"
     "    distractor).\n"
     "  - `expected_answer`: the correct final outcome.\n"
+    "Every item in `required_actions` and `forbidden_actions`, and the "
+    "`expected_answer`, is a VerifierMilestone with `value` and `source`. `source` "
+    "must name the fetched document title and URL and quote a short verbatim `passage` "
+    "that justifies making the milestone required. Copy title, URL, and passage exactly "
+    "from Evidence sources. If no supplied passage justifies a milestone, set `source` "
+    "to null; never invent a citation.\n"
     "Only reference actions that actually exist in the provided action list.\n"
     "\n"
     "Records are keyed by entity name; each value is a list of row dicts. Make each\n"
@@ -257,6 +415,9 @@ class ScenarioBuilderAgent(EnvGenAgent):
         )
 
         suite = normalize_seeds(result.model_copy(update={"env_name": ctx.env_name}))
+        research = bus.get("rl_research")
+        attribution_report = analyze_milestone_attribution(suite, research)
+        suite = suite.model_copy(update={"attribution_report": attribution_report})
         issues = assess_scenario_suite(suite, known_actions=set(action_names))
         if issues:
             summary = "; ".join(f"{i.category}: {i.message}" for i in issues)
@@ -266,4 +427,10 @@ class ScenarioBuilderAgent(EnvGenAgent):
                 f"[scenario-builder] Published {len(suite.scenarios)} scenarios "
                 f"(seeds {[s.seed for s in suite.scenarios]})"
             )
+        await bus.log(
+            "[scenario-builder] Verifier provenance: "
+            f"{attribution_report.source_attributed_count}/"
+            f"{attribution_report.total_milestones} milestones source-attributed; "
+            f"{attribution_report.model_invented_count} model-invented"
+        )
         await bus.publish("scenario_suite", suite)
