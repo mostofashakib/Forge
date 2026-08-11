@@ -147,3 +147,29 @@ def test_research_prompt_caps_raw_web_content():
     prompt = UserResearchAgent._build_prompt(_ctx(), [document])
 
     assert prompt.count("x") < 25_000
+
+
+def test_research_sources_are_bound_to_fetched_document_passages():
+    document = WebDocument(
+        title="Canonical guide",
+        url="https://docs.example.test/mail",
+        text="Archived messages leave the inbox and remain searchable.",
+    )
+    brief = _brief().model_copy(update={
+        "sources": [ResearchSource(
+            title="Model-written title",
+            url=document.url,
+            passage="not text from the fetched page",
+        )]
+    })
+
+    bound = UserResearchAgent._bind_sources_to_documents(brief, [document])
+
+    assert bound.sources == [ResearchSource(
+        title="Canonical guide",
+        url=document.url,
+        passage=document.text,
+    )]
+    assert "Verbatim passage:" in ContextPruner(max_chars=1_000).for_role(
+        bound, "rl"
+    ).as_prompt()
