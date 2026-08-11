@@ -1,7 +1,7 @@
 # Independent Quorum Validation
 
 **Date:** 2026-08-11
-**Status:** Approved (approach), in implementation
+**Status:** Implemented (phases A, B, C)
 
 ## Problem
 
@@ -112,7 +112,9 @@ better suited:
 
 The last row absorbs the previously separate issue #3 (routing container grading
 through `VerifierComposer`/`LayeredVerifier` instead of per-step LLM scoring).
-`task_from_template` currently discards `success_conditions`; it must carry them.
+`task_from_template` now carries `success_conditions` through as `Task.template`,
+and `structural_verdict` grades against them. `ObjectiveScorer` remains only as
+dense per-step reward shaping.
 
 **C — Quorum on verdicts.** `EpisodeVerdictJury` on final episode pass/fail,
 `abstention_rate` in `RunResult`, and the `max_abstention_rate` guard.
