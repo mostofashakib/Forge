@@ -221,3 +221,175 @@ async def test_reviewer_rejects_syntax_and_requirement_failures():
     review = bus.get("review_report")
     assert review.approved is False
     assert {issue.category for issue in review.issues} >= {"syntax", "requirements"}
+
+
+# ---------------------------------------------------------------------------
+# Semantic review independence
+# ---------------------------------------------------------------------------
+
+def test_reviewer_semantic_judge_is_not_the_generation_client(monkeypatch):
+    """The model that wrote the artifacts must not be the one approving them."""
+    from forge.envgen.agents.reviewer import ReviewerAgent
+
+    monkeypatch.setenv("FORGE_LLM_PROVIDER", "ollama")
+    monkeypatch.setenv("FORGE_LLM_MODEL", "gemma4:26b")
+    monkeypatch.setenv("FORGE_LLM_MODEL_CAPABLE", "gemma4:26b")
+    monkeypatch.setenv("FORGE_JUDGE_MODEL", "llama3.1:8b")
+    monkeypatch.delenv("FORGE_QUORUM_MODELS", raising=False)
+
+    agent = ReviewerAgent()
+
+    assert agent._client._model == "llama3.1:8b"
+    assert agent._client._model != "gemma4:26b"
+
+
+def test_reviewer_builds_a_quorum_panel_when_one_is_configured(monkeypatch):
+    from forge.envgen.agents.reviewer import ReviewerAgent
+
+    monkeypatch.setenv("FORGE_LLM_PROVIDER", "anthropic")
+    monkeypatch.setenv("FORGE_QUORUM_MODELS", "openai:gpt-4o,gemini:gemini-2.0-flash")
+
+    agent = ReviewerAgent()
+
+    assert agent._panel is not None
+    assert agent._panel._jury is not None
+
+
+def test_reviewer_without_a_quorum_uses_a_single_judge(monkeypatch):
+    from forge.envgen.agents.reviewer import ReviewerAgent
+
+    monkeypatch.delenv("FORGE_QUORUM_MODELS", raising=False)
+
+    agent = ReviewerAgent()
+
+    assert agent._panel is not None
+    assert agent._panel._jury is None
+
+
+def test_reviewer_with_semantic_review_disabled_builds_no_panel(monkeypatch):
+    from forge.envgen.agents.reviewer import ReviewerAgent
+
+    monkeypatch.setenv("FORGE_QUORUM_MODELS", "openai:gpt-4o")
+
+    assert ReviewerAgent(semantic_review=False)._panel is None
+
+
+def test_reviewer_refuses_a_quorum_drawn_from_the_generating_family(monkeypatch):
+    from forge.grading_provenance import GraderContaminationError
+    from forge.envgen.agents.reviewer import ReviewerAgent
+
+    monkeypatch.setenv("FORGE_LLM_PROVIDER", "anthropic")
+    monkeypatch.setenv("FORGE_LLM_MODEL_CAPABLE", "claude-sonnet-4-6")
+    monkeypatch.setenv("FORGE_QUORUM_MODELS", "anthropic:claude-haiku-4-5-20251001")
+
+    with pytest.raises(GraderContaminationError):
+        ReviewerAgent()
+
+
+def _complete_routes() -> str:
+    endpoints = " ".join((
+        "/forge/health", "/forge/state", "/forge/reset", "/forge/snapshot",
+        "/forge/restore", "/forge/restore-state", "complete_task",
+    ))
+    return f"ROUTES = {endpoints!r}\n"
+
+
+class _PanelStub:
+    def __init__(self, requirements_met, findings):
+        from forge.envgen.agents.semantic_review import PanelResult
+
+        self._result = PanelResult(requirements_met=requirements_met, findings=findings)
+
+    def assess(self, semantic_input):
+        return self._result
+
+
+@pytest.mark.asyncio
+async def test_semantic_panel_agreeing_requirements_are_met_approves():
+    bus = await _review_bus(_complete_routes())
+    agent = ReviewerAgent(semantic_review=False)
+    agent._semantic_review = True
+    agent._panel = _PanelStub(True, ["cosmetic nit"])
+
+    await agent.run(_ctx(), bus)
+
+    review = bus.get("review_report")
+    assert review.approved is True
+
+
+@pytest.mark.asyncio
+async def test_semantic_panel_agreeing_requirements_are_unmet_blocks():
+    bus = await _review_bus(_complete_routes())
+    agent = ReviewerAgent(semantic_review=False)
+    agent._semantic_review = True
+    agent._panel = _PanelStub(False, ["reward never fires"])
+
+    await agent.run(_ctx(), bus)
+
+    review = bus.get("review_report")
+    assert review.approved is False
+    assert any(issue.category == "semantic_review" for issue in review.issues)
+
+
+@pytest.mark.asyncio
+async def test_a_contested_semantic_panel_blocks_rather_than_approving():
+    """A split panel is not approval — it routes into repair with the dissent."""
+    bus = await _review_bus(_complete_routes())
+    agent = ReviewerAgent(semantic_review=False)
+    agent._semantic_review = True
+    agent._panel = _PanelStub(None, ["[gpt-4o] ok", "[gemini] state schema is wrong"])
+
+    await agent.run(_ctx(), bus)
+
+    review = bus.get("review_report")
+    assert review.approved is False
+    messages = " ".join(issue.message for issue in review.issues)
+    assert "state schema is wrong" in messages
+
+
+@pytest.mark.asyncio
+async def test_a_contested_panel_is_labelled_distinctly_from_a_clear_rejection():
+    """The record must distinguish 'reviewers disagreed' from 'reviewers rejected'."""
+    bus = await _review_bus(_complete_routes())
+    agent = ReviewerAgent(semantic_review=False)
+    agent._semantic_review = True
+    agent._panel = _PanelStub(None, ["[gemini] state schema is wrong"])
+
+    await agent.run(_ctx(), bus)
+
+    categories = {issue.category for issue in bus.get("review_report").issues}
+    assert "semantic_review_contested" in categories
+    assert "semantic_review" not in categories
+
+
+def test_reviewer_does_not_build_a_judge_client_when_a_quorum_is_configured(monkeypatch):
+    """A quorum-only setup must not require the single judge's credentials.
+
+    get_client eagerly constructs the provider SDK, so building an unused judge
+    would make an Anthropic API key mandatory even when every quorum member
+    comes from another provider.
+    """
+    import forge.envgen.agents.reviewer as reviewer_module
+
+    def _explode(*args, **kwargs):
+        raise AssertionError("judge client must not be built when a quorum exists")
+
+    monkeypatch.setattr(reviewer_module, "get_judge_client", _explode)
+    monkeypatch.setenv("FORGE_LLM_PROVIDER", "anthropic")
+    monkeypatch.setenv("FORGE_QUORUM_MODELS", "openai:gpt-4o,gemini:gemini-2.0-flash")
+
+    agent = reviewer_module.ReviewerAgent()
+
+    assert agent._panel is not None
+    assert agent._client is None
+
+
+def test_reviewer_still_builds_a_judge_client_without_a_quorum(monkeypatch):
+    """False-positive guard: the single-judge path must keep its client."""
+    import forge.envgen.agents.reviewer as reviewer_module
+
+    monkeypatch.delenv("FORGE_QUORUM_MODELS", raising=False)
+    monkeypatch.setenv("FORGE_LLM_PROVIDER", "ollama")
+    monkeypatch.setenv("FORGE_JUDGE_MODEL", "llama3.1:8b")
+
+    assert reviewer_module.ReviewerAgent()._client is not None

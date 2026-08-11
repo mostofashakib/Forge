@@ -195,7 +195,7 @@ Forge's environments are authored by an LLM. If the same model family then *grad
 | Negative checks | Forbidden side effects over the trajectory | No |
 | Reward-hacking audit | Milestone, length, and call-pattern rules | No — the optional LLM audit client is off by default |
 | LLM judge (`judge` layer, semantic checks) | A model | **Yes** |
-| Objective progress scoring | A model | **Yes** |
+| Objective progress scoring (reward shaping only) | A model | **Yes** |
 
 Five of the seven paths never consult a model, and a sixth only does so when explicitly given a client. `VerifierComposer` leaves the judge layer off unless a task explicitly declares a semantic check, and the `binary_final_state` preset removes it entirely — so the default reward path is fully structural and needs no independence guarantee at all. This is the reason the layered verifier is built the way it is, not an incidental design choice.
 
@@ -222,7 +222,23 @@ For the paths that *do* consult a model, independence is configurable and enforc
 
 The two must agree. A run that declared itself structural and then issued model verdicts raises instead of writing the record — an under-declaring grading path is a bug, and a result file that understates model involvement is worse than no file, because it is what a reader trusts when they cannot re-run the experiment.
 
-This matters concretely: `ContainerEpisodeRunner` scores **every step** with `ObjectiveScorer`, and that score drives both the step reward and the success/termination decision. The held-out evaluation path is therefore LLM-graded under every preset, including presets whose verifier layers are entirely structural — so it declares `issues_llm_verdicts = True` and is gated for grader independence before a single episode runs.
+**Pass/fail is computed, not asked.** Held-out episodes are graded by `structural_verdict`, which composes a `LayeredVerifier` from the environment's own compiled `success_conditions` and `failure_conditions` and runs it against the recorded final state and trajectory. Reaching the right final state by a forbidden route still fails. `ObjectiveScorer` remains only as dense per-step reward shaping — it no longer decides whether an episode succeeded.
+
+When a task carries no compiled ground truth, the verdict falls back to the run's termination reason, which the objective scorer drives. That fallback is recorded as LLM-derived rather than quietly presented as a computed result: absent ground truth is *unknown*, never a free pass.
+
+### Verdict Quorum
+
+A `Jury` can vote on top of the structural verdict. Members implement one small interface and may be LLM-backed or deterministic, so a statistical test and a Gemini judge are the same kind of thing to the jury.
+
+| Setting | Meaning |
+|---|---|
+| `FORGE_QUORUM_MODELS` | Comma-separated `provider:model` list. Members must come from different families, and none may share a family with the generator. Empty means a single judge. |
+| `agreement_threshold` | Unanimity among voting members by default; `0.67` accepts 2-1 on a three-member jury |
+| `max_abstention_rate` | Ceiling on undecided episodes (default `0.2`) |
+
+Majority decides, but a split below the threshold is **indeterminate**: the episode leaves the pass-rate denominator instead of being counted as a failure. An abstaining member — a provider outage is missing evidence, not evidence of failure — is excluded from the agreement denominator rather than counted as a vote against.
+
+Because excluding episodes shrinks the denominator, `abstention_rate` is reported beside `heldout_pass_rate` in every `result.json`, and a run exceeding `max_abstention_rate` **fails and writes no record**. Past that point the surviving episodes are a biased sample of the ones the jury found easy, and publishing the number would be worse than failing.
 
 ### Interaction Contracts
 

@@ -10,3 +10,5 @@ seeds: [0, 1, 2]
 determinism_repeats: 2
 # Refuse LLM-graded runs judged by the generating model family.
 require_grader_independence: true
+# Fail the run rather than publish a pass rate from a gutted denominator.
+max_abstention_rate: 0.2

@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+from forge.extraction.schemas import TaskTemplate
 from dataclasses import dataclass
 from typing import Callable
 
@@ -11,8 +13,8 @@ class Task:
     compiled task templates (see :mod:`forge.benchmark.compiled_tasks`).
 
     ``success_fn`` is retained for the dataclass contract but is not called on
-    the benchmark path — generated environments are graded inside the container
-    episode runner by their own ``reward_fn``/verifier.
+    the benchmark path. Generated environments are graded structurally, against
+    the ``template``'s compiled success and failure conditions.
     """
 
     name: str
@@ -20,3 +22,7 @@ class Task:
     objective: str
     success_fn: Callable[[dict], bool]
     difficulty: Difficulty
+    # The compiled task this was resolved from. Carries the success and
+    # failure conditions the environment was built with, which are the
+    # ground truth an episode is graded against.
+    template: "TaskTemplate | None" = None

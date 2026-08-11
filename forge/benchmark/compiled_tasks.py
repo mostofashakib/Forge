@@ -7,8 +7,9 @@ This module maps a generated environment's compiled :class:`TaskTemplate`s
 :class:`~forge.benchmark.task_suite.Task` shape so every benchmarked environment
 runs against its own tasks.
 
-Grading is unaffected: the container episode runner scores generated
-environments with their own ``reward_fn``/verifier, so ``Task.success_fn`` is
+The compiled ``success_conditions`` and ``failure_conditions`` travel with the
+task as ``Task.template``: they are the environment's own ground truth, and the
+held-out evaluation grades against them structurally. ``Task.success_fn`` is
 never invoked on this path and is present only to satisfy the dataclass.
 """
 
@@ -35,9 +36,9 @@ def _derive_difficulty(template: TaskTemplate) -> int:
 
 
 def _placeholder_success(_state: dict) -> bool:
-    # Generated environments are graded by their own reward_fn/verifier inside
-    # the container episode runner; the benchmark never calls Task.success_fn on
-    # this path. This exists only to satisfy the Task contract.
+    # Generated environments are graded structurally against Task.template; the
+    # benchmark never calls Task.success_fn on this path. This exists only to
+    # satisfy the Task contract.
     return False
 
 
@@ -49,6 +50,7 @@ def task_from_template(template: TaskTemplate, env_name: str) -> Task:
         objective=template.description,
         success_fn=_placeholder_success,
         difficulty=_derive_difficulty(template),
+        template=template,
     )
 
 
