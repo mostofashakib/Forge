@@ -24,6 +24,9 @@ class ExperimentConfig(BaseModel):
     # Only bites when a run actually issues LLM verdicts; a structural-only
     # reward preset satisfies it trivially. See forge.grading_provenance.
     require_grader_independence: bool = True
+    # A jury that cannot agree on this fraction of its cases is a broken
+    # instrument; publishing a pass rate from the remainder would hide that.
+    max_abstention_rate: float = Field(default=0.2, ge=0.0, le=1.0)
 
     @model_validator(mode="after")
     def validate_split(self) -> "ExperimentConfig":
@@ -61,6 +64,10 @@ class RunResult(BaseModel):
     heldout_pass_rate: float = Field(ge=0.0, le=1.0)
     reward_hacking_rate: float = Field(ge=0.0, le=1.0)
     reward_variance: float = Field(ge=0.0)
+    # Fraction of episodes the verdict jury could not decide. Excluded
+    # episodes leave the denominator, so this must be read beside the
+    # pass rate rather than buried.
+    abstention_rate: float = Field(default=0.0, ge=0.0, le=1.0)
     # Which models generated the environments and which graded the agent, so a
     # reader can tell a structural result from an LLM-judged one.
     grading: dict[str, Any] | None = None

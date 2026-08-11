@@ -29,6 +29,9 @@ class EpisodeOutcome:
     reward_hacking: bool = False
     # Verdicts a model issued while grading this episode, counted by the runner.
     llm_verdicts: int = 0
+    # True when the verdict jury could not agree. Such an episode leaves the
+    # pass-rate denominator rather than being counted as a failure.
+    indeterminate: bool = False
 
 
 EpisodeRunner = Callable[[Task, int, Path], EpisodeOutcome]
@@ -132,8 +135,23 @@ def evaluate_on_suite(
     if not outcomes:
         raise ValueError("the held-out split produced no evaluation episodes")
 
-    pass_rate = sum(outcome.passed for outcome in outcomes) / len(outcomes)
-    hacking_rate = sum(outcome.reward_hacking for outcome in outcomes) / len(outcomes)
+    abstention_rate = sum(o.indeterminate for o in outcomes) / len(outcomes)
+    if abstention_rate > config.max_abstention_rate:
+        # Refuse to publish a pass rate computed from what is left. A jury that
+        # cannot decide this share of its cases is a broken instrument, and the
+        # remaining episodes are a biased sample of the ones it found easy.
+        raise ValueError(
+            f"abstention rate {abstention_rate:.2f} exceeds the configured "
+            f"maximum {config.max_abstention_rate:.2f}; the verdict jury could "
+            "not decide enough episodes for the pass rate to mean anything"
+        )
+
+    decided = [outcome for outcome in outcomes if not outcome.indeterminate]
+    if not decided:
+        raise ValueError("every evaluated episode was indeterminate")
+
+    pass_rate = sum(outcome.passed for outcome in decided) / len(decided)
+    hacking_rate = sum(outcome.reward_hacking for outcome in decided) / len(decided)
     task_variances = [pvariance(rewards) for rewards in reward_groups]
     reward_variance = sum(task_variances) / len(task_variances)
 
@@ -150,6 +168,7 @@ def evaluate_on_suite(
         heldout_pass_rate=pass_rate,
         reward_hacking_rate=hacking_rate,
         reward_variance=reward_variance,
+        abstention_rate=abstention_rate,
         grading=provenance.as_record(),
     )
     result_path = result_record.save(runs_dir, resolved_run_id)
