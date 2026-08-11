@@ -12,6 +12,7 @@ from forge.benchmark._eval import (
     evaluate_on_suite,
 )
 from forge.benchmark.task_suite import Task
+from forge.grading_provenance import GraderContaminationError
 from forge.training.checkpoint import PolicyCheckpoint
 
 
@@ -45,6 +46,7 @@ def _config_dict(train=None, heldout=None, seeds=None):
         "base_model": "base",
         "seeds": seeds or [7],
         "determinism_repeats": 2,
+        "require_grader_independence": True,
     }
 
 
@@ -171,3 +173,122 @@ def test_full_no_auditor_records_hacking_without_zeroing_reward(tmp_path, monkey
     assert result["heldout_pass_rate"] == 1.0
     assert result["reward_hacking_rate"] == 1.0
     assert result["determinism"] == "off"
+
+
+# ---------------------------------------------------------------------------
+# Generator/grader independence
+# ---------------------------------------------------------------------------
+
+def _judged_experiment(path, *, independence=True):
+    path.write_text(
+        "train_envs: [train_a]\nheldout_envs: [held_a]\n"
+        "reward_preset: judge_only\nbase_model: base\nseeds: [7]\n"
+        f"require_grader_independence: {'true' if independence else 'false'}\n",
+        encoding="utf-8",
+    )
+
+
+def _judged_config(independence=True):
+    return {
+        "train_envs": ["train_a"], "heldout_envs": ["held_a"],
+        "reward_preset": "judge_only", "base_model": "base", "seeds": [7],
+        "determinism_repeats": 2, "require_grader_independence": independence,
+    }
+
+
+def _checkpoint(tmp_path, config):
+    checkpoint_dir = tmp_path / "checkpoint"
+    PolicyCheckpoint(
+        objective="grpo", base_model="base", model_path="model", num_examples=2,
+        mean_reward=0.5, train_envs=["train_a"], seed=7, run_id="run-7",
+        experiment_config=config,
+    ).save(checkpoint_dir)
+    return checkpoint_dir
+
+
+def _pass_runner(task, seed, path):
+    return EpisodeOutcome(passed=True, reward=1.0, reward_hacking=False)
+
+
+def test_structural_run_records_independent_grading_provenance(tmp_path):
+    """The default preset issues no LLM verdict, so provenance is clean."""
+    config_path = tmp_path / "experiment.yaml"
+    _experiment(config_path, heldout=["held_a"])
+    checkpoint_dir = _checkpoint(tmp_path, _config_dict(heldout=["held_a"]))
+
+    result = evaluate_on_suite(
+        str(checkpoint_dir), str(config_path), runs_dir=tmp_path / "runs",
+        task_provider=_Provider(), episode_runner=_pass_runner,
+    )
+
+    grading = result["grading"]
+    assert grading["llm_graded"] is False
+    assert grading["independent"] is True
+    assert grading["judge_model"] is None
+
+
+def test_llm_graded_run_refuses_a_judge_from_the_generating_family(tmp_path, monkeypatch):
+    monkeypatch.setenv("FORGE_LLM_MODEL", "claude-haiku-4-5-20251001")
+    monkeypatch.setenv("FORGE_LLM_MODEL_CAPABLE", "claude-sonnet-4-6")
+    monkeypatch.setenv("FORGE_JUDGE_MODEL", "claude-sonnet-4-6")
+    config_path = tmp_path / "experiment.yaml"
+    _judged_experiment(config_path)
+    checkpoint_dir = _checkpoint(tmp_path, _judged_config())
+
+    with pytest.raises(GraderContaminationError):
+        evaluate_on_suite(
+            str(checkpoint_dir), str(config_path), runs_dir=tmp_path / "runs",
+            task_provider=_Provider(), episode_runner=_pass_runner,
+        )
+
+
+def test_llm_graded_run_accepts_a_judge_from_another_family(tmp_path, monkeypatch):
+    monkeypatch.setenv("FORGE_LLM_MODEL", "claude-haiku-4-5-20251001")
+    monkeypatch.setenv("FORGE_LLM_MODEL_CAPABLE", "claude-sonnet-4-6")
+    monkeypatch.setenv("FORGE_JUDGE_MODEL", "gpt-4o")
+    config_path = tmp_path / "experiment.yaml"
+    _judged_experiment(config_path)
+    checkpoint_dir = _checkpoint(tmp_path, _judged_config())
+
+    result = evaluate_on_suite(
+        str(checkpoint_dir), str(config_path), runs_dir=tmp_path / "runs",
+        task_provider=_Provider(), episode_runner=_pass_runner,
+    )
+
+    assert result["grading"]["independent"] is True
+    assert result["grading"]["judge_family"] == "gpt"
+
+
+def test_waiving_independence_records_the_contamination_instead_of_aborting(tmp_path, monkeypatch):
+    """An explicit waiver must still leave the contamination visible in the record."""
+    monkeypatch.setenv("FORGE_LLM_MODEL", "claude-haiku-4-5-20251001")
+    monkeypatch.setenv("FORGE_LLM_MODEL_CAPABLE", "claude-sonnet-4-6")
+    monkeypatch.setenv("FORGE_JUDGE_MODEL", "claude-sonnet-4-6")
+    config_path = tmp_path / "experiment.yaml"
+    _judged_experiment(config_path, independence=False)
+    checkpoint_dir = _checkpoint(tmp_path, _judged_config(independence=False))
+
+    result = evaluate_on_suite(
+        str(checkpoint_dir), str(config_path), runs_dir=tmp_path / "runs",
+        task_provider=_Provider(), episode_runner=_pass_runner,
+    )
+
+    record = json.loads((tmp_path / "runs/run-7/result.json").read_text())
+    assert result["grading"]["independent"] is False
+    assert record["grading"]["independent"] is False
+
+
+def test_structural_run_is_not_blocked_by_a_same_family_judge_variable(tmp_path, monkeypatch):
+    """False-positive guard: a configured judge that never grades is not contamination."""
+    monkeypatch.setenv("FORGE_LLM_MODEL_CAPABLE", "claude-sonnet-4-6")
+    monkeypatch.setenv("FORGE_JUDGE_MODEL", "claude-sonnet-4-6")
+    config_path = tmp_path / "experiment.yaml"
+    _experiment(config_path, heldout=["held_a"])
+    checkpoint_dir = _checkpoint(tmp_path, _config_dict(heldout=["held_a"]))
+
+    result = evaluate_on_suite(
+        str(checkpoint_dir), str(config_path), runs_dir=tmp_path / "runs",
+        task_provider=_Provider(), episode_runner=_pass_runner,
+    )
+
+    assert result["grading"]["independent"] is True

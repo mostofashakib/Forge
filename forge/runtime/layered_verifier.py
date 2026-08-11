@@ -48,6 +48,16 @@ class LayeredVerifier:
         self._judges: list[_JudgeCheck] = []
         self.required_milestones: list[str] = []
 
+    @property
+    def uses_llm_judge(self) -> bool:
+        """True when a model issues part of this verifier's verdict.
+
+        Registered rubrics, not an attached client, decide this: a judge client
+        that is wired but never consulted contributes nothing to the grade, and
+        the answer feeds the run's generator/grader independence record.
+        """
+        return bool(self._judges)
+
     # ------------------------------------------------------------------
     # Layer registration
     # ------------------------------------------------------------------

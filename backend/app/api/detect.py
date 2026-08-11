@@ -188,12 +188,11 @@ def detect_issues(env_name: str, db: Session = Depends(get_db)):
         f"{trajectory_text}"
     )
 
-    from forge.extraction.llm_client import get_client as _get_client
+    # Anomaly detection issues verdicts on agent behavior, so it grades: it uses
+    # the judge client to stay separable from the generation model.
+    from forge.extraction.llm_client import get_judge_client as _get_client
     from forge.envgen.config import envgen_config
-    client = _get_client(
-        max_tokens=envgen_config().grading_llm_tokens,
-        capable=True,
-    )
+    client = _get_client(max_tokens=envgen_config().grading_llm_tokens)
     try:
         result: _DetectionResult = client.extract(
             system=DetectionPrompts.SYSTEM, user=user, schema=_DetectionResult

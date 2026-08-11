@@ -8,3 +8,5 @@ reward_preset: full_layered_partial
 base_model: Qwen/Qwen2.5-3B-Instruct
 seeds: [0, 1, 2]
 determinism_repeats: 2
+# Refuse LLM-graded runs judged by the generating model family.
+require_grader_independence: true

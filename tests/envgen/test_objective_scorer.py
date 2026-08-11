@@ -42,3 +42,18 @@ def test_score_clamps_to_0_1():
             return schema(score=2.5, reasoning="over")
     scorer = ObjectiveScorer(client=_OverScorer())
     assert scorer.score({}, "anything") == 1.0
+
+
+# ---------------------------------------------------------------------------
+# Grading routes through the judge client, not the generation client
+# ---------------------------------------------------------------------------
+
+def test_scorer_defaults_to_the_judge_model_not_the_generation_model(monkeypatch):
+    monkeypatch.setenv("FORGE_LLM_PROVIDER", "ollama")
+    monkeypatch.setenv("FORGE_LLM_MODEL", "gemma4:26b")
+    monkeypatch.setenv("FORGE_JUDGE_MODEL", "llama3.1:8b")
+
+    scorer = ObjectiveScorer()
+
+    assert scorer._client._model == "llama3.1:8b"
+    assert scorer._client._model != "gemma4:26b"
