@@ -11,7 +11,7 @@ scoring choice. It reuses the existing primitives — it does not reimplement th
 from __future__ import annotations
 
 from enum import Enum
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from forge.extraction.schemas import CompilerInput, SuccessCondition, TaskTemplate
 from forge.reward_presets import RewardPreset, reward_preset_spec
@@ -25,8 +25,8 @@ from forge.runtime.verification import VerificationResult
 class ScenarioLike(Protocol):
     """Structural view of a scenario's trajectory ground truth."""
 
-    required_actions: list[str]
-    forbidden_actions: list[str]
+    required_actions: list[Any]
+    forbidden_actions: list[Any]
     ordering_sensitive: bool
 
 
@@ -38,6 +38,19 @@ class ScoringMode(str, Enum):
 # A comma-separated expression lists several event/action names in one condition.
 def _names(expression: str) -> list[str]:
     return [part.strip() for part in expression.split(",") if part.strip()]
+
+
+def _milestone_values(milestones: list[Any]) -> list[str]:
+    """Read both legacy string constraints and provenance-aware milestones."""
+    values: list[str] = []
+    for milestone in milestones:
+        if isinstance(milestone, str):
+            values.append(milestone)
+        elif isinstance(milestone, dict):
+            values.append(str(milestone["value"]))
+        else:
+            values.append(str(milestone.value))
+    return values
 
 
 class VerifierComposer:
@@ -163,14 +176,14 @@ class VerifierComposer:
             raise ValueError(f"Unknown failure condition type: {kind!r}")
 
     def _apply_scenario(self, verifier: LayeredVerifier, scenario: ScenarioLike) -> None:
-        required = list(scenario.required_actions)
+        required = _milestone_values(scenario.required_actions)
         if required:
             if scenario.ordering_sensitive:
                 verifier.require_action_sequence(required)
             else:
                 verifier.require_actions(required)
         if scenario.forbidden_actions:
-            verifier.forbid_actions(list(scenario.forbidden_actions))
+            verifier.forbid_actions(_milestone_values(scenario.forbidden_actions))
 
     # ------------------------------------------------------------------
     # Scoring
