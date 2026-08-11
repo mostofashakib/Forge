@@ -13,6 +13,10 @@ from typing import Callable
 from forge.benchmark.compiled_tasks import CompiledTaskProvider, db_compiler_input_loader
 from forge.benchmark.task_suite import Task
 from forge.experiments import ExperimentConfig, RunResult
+from forge.grading_provenance import (
+    require_independent_grader,
+    resolve_grading_provenance,
+)
 from forge.reward_presets import reward_preset_spec
 from forge.settings import determinism_enabled
 from forge.training.checkpoint import MANIFEST_NAME, PolicyCheckpoint, load_policy_agent
@@ -38,6 +42,7 @@ def evaluate_on_suite(
     task_provider=None,
     episode_runner: EpisodeRunner | None = None,
     depth: int = 5,
+    llm_graded: bool | None = None,
 ) -> dict:
     """Evaluate ``policy_checkpoint.json`` only on configured held-out envs.
 
@@ -63,6 +68,14 @@ def evaluate_on_suite(
     resolved_run_id = run_id or checkpoint.run_id or (
         f"{experiment_path.stem}-seed-{selected_seed}"
     )
+
+    # Resolve who generated and who graded before spending any episodes: a
+    # contaminated grader invalidates the run, so fail before the work, not after.
+    if llm_graded is None:
+        llm_graded = reward_preset_spec(config.reward_preset).issues_llm_verdict
+    provenance = resolve_grading_provenance(llm_graded=llm_graded)
+    if config.require_grader_independence:
+        require_independent_grader(provenance)
 
     if checkpoint.train_envs != config.train_envs:
         raise ValueError("checkpoint training environments do not match the experiment config")
@@ -124,6 +137,7 @@ def evaluate_on_suite(
         heldout_pass_rate=pass_rate,
         reward_hacking_rate=hacking_rate,
         reward_variance=reward_variance,
+        grading=provenance.as_record(),
     )
     result_path = result_record.save(runs_dir, resolved_run_id)
     return {

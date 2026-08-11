@@ -330,3 +330,14 @@ def test_judge_only_preset_skips_assertions_and_normalizes_score():
 def test_tiered_reward_presets_expose_auditor_switch():
     assert TieredRewardConfig.from_preset("full_layered_partial").auditor_enabled
     assert not TieredRewardConfig.from_preset("full_no_auditor").auditor_enabled
+
+
+def test_tiered_reward_grades_with_the_judge_model_not_the_generation_model(monkeypatch):
+    monkeypatch.setenv("FORGE_LLM_PROVIDER", "ollama")
+    monkeypatch.setenv("FORGE_LLM_MODEL", "gemma4:26b")
+    monkeypatch.setenv("FORGE_JUDGE_MODEL", "llama3.1:8b")
+
+    engine = TieredRewardEngine()
+
+    assert engine._client._model == "llama3.1:8b"
+    assert engine._client._model != "gemma4:26b"

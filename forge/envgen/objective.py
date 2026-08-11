@@ -3,7 +3,7 @@ import json
 
 from pydantic import BaseModel
 
-from forge.extraction.llm_client import LLMClient, get_client
+from forge.extraction.llm_client import LLMClient, get_judge_client
 from forge.envgen.config import envgen_config
 
 
@@ -33,7 +33,8 @@ class ObjectiveScorer:
     """LLM-based scorer that evaluates how well a state achieves an objective."""
 
     def __init__(self, client: LLMClient | None = None) -> None:
-        self._client = client or get_client(max_tokens=envgen_config().cli_llm_tokens)
+        # Scoring is grading, so it uses the judge client, not the generation client.
+        self._client = client or get_judge_client(max_tokens=envgen_config().cli_llm_tokens)
 
     def score(
         self,
@@ -66,7 +67,7 @@ class ObjectiveScorer:
     def score_with_image(self, screenshot_b64: str, url: str, objective: str) -> float:
         """Score a browser state using a screenshot. Falls back to 0.5 on error."""
         try:
-            client = get_client(max_tokens=envgen_config().cli_llm_tokens)
+            client = get_judge_client(max_tokens=envgen_config().cli_llm_tokens)
             user = f"Objective: {objective}\n\nCurrent URL: {url}\n\nSee the screenshot for the current browser state."
             result = client.extract_with_image(
                 system=ObjectivePrompts.SYSTEM, user=user,

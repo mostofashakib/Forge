@@ -43,7 +43,7 @@ from typing import Sequence
 
 from pydantic import BaseModel, Field
 
-from forge.extraction.llm_client import LLMClient, get_client
+from forge.extraction.llm_client import LLMClient, get_judge_client
 from forge.envgen.config import envgen_config
 from forge.reward_presets import RewardPreset, reward_preset_spec
 
@@ -303,7 +303,8 @@ class TieredRewardEngine:
         client: LLMClient | None = None,
         config: TieredRewardConfig | None = None,
     ) -> None:
-        self._client = client or get_client(
+        # Every tier of this engine grades, so it uses the judge client.
+        self._client = client or get_judge_client(
             max_tokens=envgen_config().grading_llm_tokens
         )
         self._cfg = config or TieredRewardConfig()

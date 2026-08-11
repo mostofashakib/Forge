@@ -58,3 +58,71 @@ def test_prompt_formatter_adds_explicit_output_contract():
 def test_prompt_formatter_rejects_missing_instruction():
     with pytest.raises(ValueError, match="cannot be empty"):
         LLMPromptFormatter.structured("  ", _SimpleSchema)
+
+
+# ---------------------------------------------------------------------------
+# Generation vs. judge model resolution
+# ---------------------------------------------------------------------------
+
+def test_generation_models_reports_both_tiers(monkeypatch):
+    from forge.extraction.llm_client import generation_models
+
+    monkeypatch.setenv("FORGE_LLM_MODEL", "claude-haiku-4-5-20251001")
+    monkeypatch.setenv("FORGE_LLM_MODEL_CAPABLE", "claude-sonnet-4-6")
+
+    assert generation_models() == (
+        "claude-haiku-4-5-20251001",
+        "claude-sonnet-4-6",
+    )
+
+
+def test_generation_models_does_not_duplicate_a_shared_tier(monkeypatch):
+    from forge.extraction.llm_client import generation_models
+
+    monkeypatch.setenv("FORGE_LLM_MODEL", "gemma4:26b")
+    monkeypatch.setenv("FORGE_LLM_MODEL_CAPABLE", "gemma4:26b")
+
+    assert generation_models() == ("gemma4:26b",)
+
+
+def test_judge_client_uses_the_judge_model_not_the_generation_model(monkeypatch):
+    from forge.extraction.llm_client import get_judge_client
+
+    monkeypatch.setenv("FORGE_LLM_PROVIDER", "ollama")
+    monkeypatch.setenv("FORGE_LLM_MODEL", "gemma4:26b")
+    monkeypatch.setenv("FORGE_JUDGE_MODEL", "llama3.1:8b")
+
+    client = get_judge_client()
+
+    assert client._model == "llama3.1:8b"
+    assert client._model != "gemma4:26b"
+
+
+def test_judge_client_falls_back_to_the_generation_model_when_unset(monkeypatch):
+    """No judge configured is not an error — it is a non-independent default."""
+    from forge.extraction.llm_client import get_judge_client
+
+    monkeypatch.setenv("FORGE_LLM_PROVIDER", "ollama")
+    monkeypatch.setenv("FORGE_LLM_MODEL", "gemma4:26b")
+    monkeypatch.delenv("FORGE_JUDGE_MODEL", raising=False)
+
+    assert get_judge_client()._model == "gemma4:26b"
+
+
+def test_judge_client_can_use_a_different_provider(monkeypatch):
+    from forge.extraction.llm_client import OllamaClient, get_judge_client
+
+    monkeypatch.setenv("FORGE_LLM_PROVIDER", "anthropic")
+    monkeypatch.setenv("FORGE_JUDGE_PROVIDER", "ollama")
+    monkeypatch.setenv("FORGE_JUDGE_MODEL", "llama3.1:8b")
+
+    assert isinstance(get_judge_client(), OllamaClient)
+
+
+def test_judge_client_rejects_an_unknown_judge_provider(monkeypatch):
+    from forge.extraction.llm_client import get_judge_client
+
+    monkeypatch.setenv("FORGE_JUDGE_PROVIDER", "not-a-provider")
+
+    with pytest.raises(ValueError):
+        get_judge_client()
