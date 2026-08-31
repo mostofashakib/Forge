@@ -211,6 +211,56 @@ def test_generated_package_actually_imports_and_builds(tmp_path, monkeypatch):
         _clear_generated_envs_modules()
 
 
+def test_generated_verifier_class_does_not_shadow_imported_verifier_of_same_name(
+    tmp_path, monkeypatch
+):
+    # A task named "semantic" (or "event", "policy", "temporal", "negative",
+    # "exact_state") pascal_cases to a generated class name that collides
+    # with the same-named class imported from forge.runtime.verifiers (e.g.
+    # `class SemanticVerifier(Verifier)` rebinding the imported
+    # `SemanticVerifier`). Rendering and ast.parse'ing the template can't
+    # catch this — the module still imports and type-checks fine, it only
+    # breaks at call time. So this builds a real package and CALLS the
+    # generated verify_semantic function.
+    ci = CompilerInput(
+        project_name="semantic_shadow_env",
+        domain="support",
+        entities=[
+            EntityDef(name="ticket", fields=[FieldDef(name="id", type="string")])
+        ],
+        actions=[ActionDef(name="close_ticket", params=[])],
+        tasks=[
+            TaskTemplate(
+                name="semantic",
+                description="Reply satisfies the rubric",
+                success_conditions=[
+                    SuccessCondition(
+                        type="semantic_check",
+                        expression="reply_text",
+                        rubric="Politely acknowledges the customer's issue",
+                    )
+                ],
+            )
+        ],
+    )
+    envs_root = tmp_path / "generated_envs"
+    PackageBuilder(envs_root).build(ci)
+    (envs_root / "__init__.py").touch()
+
+    monkeypatch.syspath_prepend(str(tmp_path))
+    _clear_generated_envs_modules()
+    try:
+        module = importlib.import_module(
+            f"generated_envs.{ci.project_name}.verifiers.semantic"
+        )
+        from forge.contracts import VerificationResult
+
+        result = module.verify_semantic({"reply_text": "hi"}, [], {})
+        assert isinstance(result, VerificationResult)
+    finally:
+        _clear_generated_envs_modules()
+
+
 def test_generated_test_suite_modules_actually_run(tmp_path, monkeypatch):
     # The generated tests/test_transitions.py and tests/test_verifiers.py
     # build initial state via `...InitialStateFactory().create(ctx, {})`.

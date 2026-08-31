@@ -11,10 +11,11 @@ from forge.runtime.env_builder import (
     EnvBuilder,
 )
 from forge.runtime.transition import TransitionResult
+from forge.contracts import InitialStateProvider
 
 
-class CounterFactory:
-    def create(self, ctx, options):
+class CounterFactory(InitialStateProvider):
+    def reset(self, ctx, *, seed: int | None, options: dict) -> dict:
         return {"counter": {"c_0": {"id": "c_0", "value": ctx.rng.randint(0, 1000)}}}
 
 
@@ -42,8 +43,8 @@ def test_build_returns_working_forge_env():
 
 
 def test_build_runs_determinism_check_by_default():
-    class WallClockFactory:
-        def create(self, ctx, options):
+    class WallClockFactory(InitialStateProvider):
+        def reset(self, ctx, *, seed: int | None, options: dict) -> dict:
             import time
             return {"counter": {"c_0": {"id": "c_0", "value": time.time_ns()}}}
 
@@ -52,8 +53,8 @@ def test_build_runs_determinism_check_by_default():
 
 
 def test_build_can_skip_determinism_check():
-    class WallClockFactory:
-        def create(self, ctx, options):
+    class WallClockFactory(InitialStateProvider):
+        def reset(self, ctx, *, seed: int | None, options: dict) -> dict:
             import time
             return {"counter": {"c_0": {"id": "c_0", "value": time.time_ns()}}}
 
@@ -73,8 +74,8 @@ def test_determinism_off_disables_seeded_runtime(monkeypatch):
 
 
 def test_floats_in_initial_state_rejected():
-    class FloatFactory:
-        def create(self, ctx, options):
+    class FloatFactory(InitialStateProvider):
+        def reset(self, ctx, *, seed: int | None, options: dict) -> dict:
             return {"counter": {"c_0": {"id": "c_0", "value": 0.5}}}
 
     env = make_builder(FloatFactory()).build(verify=False)
@@ -100,8 +101,8 @@ def test_floats_in_transition_result_rejected():
 
 
 def test_floats_allowed_when_config_disabled():
-    class FloatFactory:
-        def create(self, ctx, options):
+    class FloatFactory(InitialStateProvider):
+        def reset(self, ctx, *, seed: int | None, options: dict) -> dict:
             return {"counter": {"c_0": {"id": "c_0", "value": 0.5}}}
 
     env = (
@@ -153,7 +154,7 @@ def test_filesystem_access_inside_transition_blocked(tmp_path):
 
 
 def test_fresh_startup_clears_factory_cache_on_reset():
-    class CachingFactory:
+    class CachingFactory(InitialStateProvider):
         def __init__(self):
             self.cache = {"stale": True}
             self.cleared = 0
@@ -162,7 +163,7 @@ def test_fresh_startup_clears_factory_cache_on_reset():
             self.cache.clear()
             self.cleared += 1
 
-        def create(self, ctx, options):
+        def reset(self, ctx, *, seed: int | None, options: dict) -> dict:
             return {"counter": {"c_0": {"id": "c_0", "value": 0}}}
 
     factory = CachingFactory()
@@ -174,8 +175,8 @@ def test_fresh_startup_clears_factory_cache_on_reset():
 
 
 def test_seeded_uuid_generator_reproducible():
-    class UUIDFactory:
-        def create(self, ctx, options):
+    class UUIDFactory(InitialStateProvider):
+        def reset(self, ctx, *, seed: int | None, options: dict) -> dict:
             return {"ids": {"u_0": {"id": ctx.uuid_generator.next(), "value": 0}}}
 
     env = make_builder(UUIDFactory()).build(verify=False)
