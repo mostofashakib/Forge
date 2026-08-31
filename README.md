@@ -472,6 +472,13 @@ train environments, runs only `heldout_envs`, and writes
 `runs/<id>/result.json` with the config, seed, held-out pass rate, reward-hacking
 rate, and reward variance.
 
+The same evaluation is available in **Benchmark → Eval**. Choose **Forge native**,
+enter the checkpoint and experiment paths, and start the run to stream worker output
+and inspect the result metrics in the UI. **Harbor** is available as an optional
+evaluation engine for local Harbor task directories; it remains outside Forge's base
+dependencies. Enable it with `./example_tasks/run.sh setup`, then select the task,
+agent, and model from the Eval page.
+
 ```bash
 # 1. Train one declared seed using only train_envs.
 forge train \
@@ -824,7 +831,8 @@ imports, animated premade UIs, and tests that assert only the happy path.
 | `FORGE_DETERMINISM` | `on` | Set to `off` only for the determinism ablation; disables virtual time, runtime/training seeding, and determinism gates |
 | `FORGE_DEV_NETWORK` | `false` | Set to `true` to bypass network isolation in generated envs |
 | `FORGE_DISABLE_PREWARM` | unset | Set to `1` to skip base-image pre-warm on worker boot |
-| `REDIS_URL` | `redis://localhost:6379/0` | Redis URL for Celery and build/benchmark progress pub/sub |
+| `REDIS_URL` | `redis://localhost:6379/0` | Redis URL for Celery and build/benchmark progress pub/sub; `run.sh` replaces this with a runtime-generated authenticated URL |
+| `FORGE_REDIS_PASSWORD` | generated at startup | Optional local Redis password override used by `run.sh`; must be at least 32 hexadecimal characters and is never logged |
 | `NEXT_PUBLIC_API_URL` | `http://localhost:8000` | Backend URL used by the frontend |
 
 ### Container Images & Resource Limits

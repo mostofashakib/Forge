@@ -59,6 +59,17 @@ def init_db() -> None:
             conn.execute(text(
                 "ALTER TABLE episodes ADD COLUMN termination_reason TEXT DEFAULT 'unknown'"
             ))
+        benchmark_columns = {
+            column["name"] for column in inspect(conn).get_columns("benchmark_runs")
+        }
+        benchmark_migrations = {
+            "kind": "ALTER TABLE benchmark_runs ADD COLUMN kind TEXT DEFAULT 'benchmark'",
+            "engine": "ALTER TABLE benchmark_runs ADD COLUMN engine TEXT DEFAULT 'forge'",
+            "config_json": "ALTER TABLE benchmark_runs ADD COLUMN config_json TEXT",
+        }
+        for column_name, statement in benchmark_migrations.items():
+            if column_name not in benchmark_columns:
+                conn.execute(text(statement))
         conn.commit()
 
 

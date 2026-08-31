@@ -120,6 +120,76 @@ def test_get_benchmark_run_report_with_data(api_client, tmp_path):
     assert body[0]["state_coverage_score"] == 0.8
 
 
+def test_create_forge_evaluation_from_ui(api_client, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "policy_checkpoint").mkdir()
+    (tmp_path / "experiments").mkdir()
+    (tmp_path / "experiments" / "heldout.yaml").write_text("heldout_envs: []\n")
+
+    with patch("backend.app.api.benchmark.run_evaluation_task") as mock_task:
+        response = api_client.post("/api/benchmark/evals", json={
+            "engine": "forge",
+            "checkpoint": "policy_checkpoint",
+            "experiment": "experiments/heldout.yaml",
+            "runs_dir": "runs",
+        })
+
+    assert response.status_code == 202
+    run_id = response.json()["run_id"]
+    mock_task.delay.assert_called_once()
+    status = api_client.get(f"/api/benchmark/evals/{run_id}").json()
+    assert status["kind"] == "evaluation"
+    assert status["engine"] == "forge"
+    assert status["status"] == "queued"
+
+
+def test_create_harbor_evaluation_from_ui(api_client, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    task_path = tmp_path / "tasks" / "sample"
+    task_path.mkdir(parents=True)
+    (task_path / "task.toml").write_text("schema_version = '1.4'\n")
+
+    with patch("backend.app.api.benchmark.run_evaluation_task") as mock_task:
+        response = api_client.post("/api/benchmark/evals", json={
+            "engine": "harbor",
+            "harbor_task_path": "tasks/sample",
+            "harbor_agent": "codex",
+            "harbor_model": "openai/gpt-5",
+        })
+
+    assert response.status_code == 202
+    task_config = mock_task.delay.call_args.kwargs["config"]
+    assert task_config["harbor_task_path"] == str(task_path)
+
+
+def test_evaluation_rejects_paths_outside_forge(api_client):
+    response = api_client.post("/api/benchmark/evals", json={
+        "engine": "forge",
+        "checkpoint": "../checkpoint",
+        "experiment": "experiments/internal_heldout.yaml",
+    })
+
+    assert response.status_code == 422
+
+
+def test_harbor_command_does_not_use_a_shell(tmp_path):
+    from backend.app.worker.tasks import _harbor_command
+
+    task_path = tmp_path / "slack_task_1"
+    command, working_dir = _harbor_command({
+        "harbor_task_path": str(task_path),
+        "harbor_agent": "fleet.agents.rl_agent:SlackExternalAgent",
+        "harbor_model": "gemma4:26b",
+    }, "/opt/bin/harbor")
+
+    assert command == [
+        "/opt/bin/harbor", "run", "-p", "slack_task_1",
+        "--agent-import-path", "fleet.agents.rl_agent:SlackExternalAgent",
+        "--model", "gemma4:26b",
+    ]
+    assert working_dir == tmp_path
+
+
 def test_run_benchmark_task_no_redis(monkeypatch, tmp_path):
     """Task fails gracefully when Redis is unreachable."""
     from backend.app.worker.celery_app import celery as celery_app
