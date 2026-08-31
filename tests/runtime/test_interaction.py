@@ -203,7 +203,7 @@ def test_forge_env_exposes_tool_use_capability():
     assert env.tool_use is not None
     assert env.computer_use is None
     assert env.browser_use is None
-    assert env.tool_use.schema.tool_names() == ["increment"]
+    assert env.tool_use.schema.tool_names() == ["increment", "submit"]
 
 
 def test_env_tool_use_executes_against_the_env():

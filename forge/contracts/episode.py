@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from forge.contracts.types import AgentAdapter
+from forge.contracts.evaluation import EpisodeEvaluation
 from forge.contracts.rollout import RolloutRecord
 
 
@@ -37,6 +38,13 @@ class BaseEpisodeResult:
     total_reward: float = 0.0
     final_objective_score: float = 0.0
     termination_reason: str = "unknown"
+    # None preserves compatibility with older controllers whose success was
+    # encoded only as termination_reason="success". New controllers always
+    # set this from their authoritative final evaluation.
+    passed: bool | None = None
+    verification_results: list[dict] = field(default_factory=list)
+    reward_breakdown: dict = field(default_factory=dict)
+    evaluation: EpisodeEvaluation | None = None
     # Verdicts a model issued during this episode. Observed, not inferred:
     # it is the count of scorer calls, so a step recorded without being
     # scored does not inflate it.
@@ -59,6 +67,9 @@ class BaseEpisodeResult:
             "total_reward": self.total_reward,
             "final_objective_score": self.final_objective_score,
             "termination_reason": self.termination_reason,
+            "passed": self.resolved_passed,
+            "verification_results": self.verification_results,
+            "reward_breakdown": self.reward_breakdown,
             "llm_verdicts": self.llm_verdicts,
             "started_at": self.started_at.isoformat(),
             "completed_at": self.completed_at.isoformat() if self.completed_at else None,
@@ -84,9 +95,15 @@ class BaseEpisodeResult:
         """Convert any controller result to the collector/trainer contract."""
         step_dicts = self._step_dicts()
         rewards = [float(step.get("reward", 0.0)) for step in step_dicts]
-        actions = [step.get("action") for step in step_dicts if step.get("action")]
+        actions = []
+        for step in step_dicts:
+            action = step.get("action")
+            if action:
+                actions.append(action)
+            elif step.get("command"):
+                actions.append({"type": "exec", "command": step["command"]})
         completion = "\n".join(json.dumps(action, sort_keys=True) for action in actions)
-        passed = self.termination_reason == "success"
+        passed = self.resolved_passed
         if passed:
             outcome = "success"
         elif any("error" in step for step in step_dicts):
@@ -111,7 +128,27 @@ class BaseEpisodeResult:
             terminated=bool(last.get("terminated", passed)),
             truncated=bool(last.get("truncated", False)),
             invalid_actions=sum(1 for step in step_dicts if "error" in step),
+            termination_reason=self.termination_reason,
+            verification_results=self.verification_results,
+            reward_breakdown=self.reward_breakdown,
         )
+
+    @property
+    def resolved_passed(self) -> bool:
+        """Final verifier verdict, with a legacy fallback for old results."""
+        if self.passed is not None:
+            return self.passed
+        return self.termination_reason == "success"
+
+    def apply_evaluation(self, evaluation: EpisodeEvaluation) -> None:
+        """Copy the shared final verdict into legacy result summary fields."""
+        self.evaluation = evaluation
+        self.total_reward = evaluation.total_reward
+        self.passed = evaluation.passed
+        self.verification_results = [
+            result.model_dump() for result in evaluation.verification_results
+        ]
+        self.reward_breakdown = evaluation.reward.model_dump()
 
 
 class TrajectoryWriter:

@@ -301,7 +301,9 @@ def test_composed_verifier_and_scoring_run_in_a_live_episode():
 
     partial_env = build(ScoringMode.PARTIAL)
     partial_env.reset(seed=1)
-    _, partial_reward, _, _, info = partial_env.step({"type": "increment"})
+    _, step_reward, terminated, _, info = partial_env.step({"type": "increment"})
+    assert step_reward == 0.0 and terminated is False
+    _, partial_reward, _, _, info = partial_env.step({"type": "submit"})
     # The overall verifier fails (>=100 unmet), so binary would be zero — but
     # partial scoring still credits the state tier that half-passed.
     assert info["verifier_results"][0]["passed"] is False
@@ -309,5 +311,6 @@ def test_composed_verifier_and_scoring_run_in_a_live_episode():
 
     binary_env = build(ScoringMode.BINARY)
     binary_env.reset(seed=1)
-    _, binary_reward, _, _, _ = binary_env.step({"type": "increment"})
+    binary_env.step({"type": "increment"})
+    _, binary_reward, _, _, _ = binary_env.step({"type": "submit"})
     assert binary_reward == 0.0

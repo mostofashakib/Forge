@@ -1,10 +1,4 @@
-"""The container episode runner must disclose how many verdicts a model issued.
-
-Every step of a container episode is scored by :class:`ObjectiveScorer`, so this
-path is LLM-graded regardless of reward preset. The run record has to say so,
-and it must say so from what was observed rather than from what the preset
-implies.
-"""
+"""Container grading runs once after the trajectory and discloses that call."""
 from __future__ import annotations
 
 import httpx
@@ -32,6 +26,11 @@ class _CountingScorer:
 class _FixedAgent:
     def act(self, state, objective, available_actions) -> dict:
         return {"endpoint": "/act", "payload": {}}
+
+
+class _SubmitAgent:
+    def act(self, state, objective, available_actions) -> dict:
+        return {"endpoint": "__forge_submit__", "payload": {}}
 
 
 def _runner(max_steps: int, scorer: _CountingScorer) -> ContainerEpisodeRunner:
@@ -63,13 +62,14 @@ def _run(max_steps: int, scorer: _CountingScorer) -> EpisodeResult:
     return result
 
 
-def test_episode_counts_one_llm_verdict_per_scored_step():
+def test_episode_counts_one_llm_verdict_per_episode():
     scorer = _CountingScorer()
 
     result = _run(max_steps=3, scorer=scorer)
 
-    assert scorer.calls == 3
-    assert result.llm_verdicts == 3
+    assert scorer.calls == 1
+    assert result.llm_verdicts == 1
+    assert len(result.steps) == 3
 
 
 def test_episode_that_runs_no_steps_records_no_llm_verdicts():
@@ -91,7 +91,7 @@ def test_verdict_count_is_observed_not_assumed_from_step_count():
     result = _run(max_steps=2, scorer=scorer)
     result.steps.append(result.steps[-1])
 
-    assert result.llm_verdicts == 2
+    assert result.llm_verdicts == 1
     assert result.llm_verdicts != len(result.steps)
 
 
@@ -99,3 +99,20 @@ def test_episode_summary_discloses_the_verdict_count():
     result = _run(max_steps=1, scorer=_CountingScorer())
 
     assert result.summary()["llm_verdicts"] == 1
+
+
+def test_container_submit_is_intercepted_without_an_http_action():
+    scorer = _CountingScorer(score=1.0)
+    runner = _runner(5, scorer)
+    result = EpisodeResult(episode_id="cep_submit", config=runner._cfg)
+
+    runner._run_steps(
+        _SubmitAgent(), runner._cfg, result, TerminationMonitor(runner._cfg),
+        runner._actions, "cep_submit", None, {"n": 0},
+    )
+
+    assert len(result.steps) == 1
+    assert result.termination_reason == "submitted"
+    assert result.resolved_passed is True
+    assert result.total_reward == 1.0
+    assert scorer.calls == 1

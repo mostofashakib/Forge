@@ -82,7 +82,7 @@ def test_capability_surface_exposes_every_modalitys_actions():
     assert set(surface) == {
         "tool_use", "mcp_use", "rest_use", "orpc_use", "computer_use", "browser_use",
     }
-    assert [s.name for s in surface["tool_use"]] == ["increment"]
+    assert [s.name for s in surface["tool_use"]] == ["increment", "submit"]
     assert [s.name for s in surface["mcp_use"]] == ["search"]
     assert [s.name for s in surface["rest_use"]] == ["GET /items"]
     assert [s.name for s in surface["orpc_use"]] == ["items.list"]

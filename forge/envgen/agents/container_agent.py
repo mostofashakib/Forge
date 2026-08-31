@@ -40,7 +40,7 @@ _AGENT_SYSTEM = (
     "  - A list of available action endpoints with their request schemas\n"
     "\n"
     "Pick the single best action that makes the most progress toward the objective.\n"
-    "If the objective is already achieved, call any no-op action.\n"
+    "If the objective is already achieved, choose the __forge_submit__ control endpoint.\n"
     "Populate the payload with realistic values that match the request schema.\n"
     "Call the extract tool with the chosen endpoint, payload, and your one-sentence reasoning."
 )

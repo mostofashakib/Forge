@@ -15,7 +15,11 @@ class TelemetrySink(Protocol):
     def record_step(self, snapshot: StepSnapshot) -> None: ...
 
     def complete_episode(
-        self, total_reward: float, passed: bool, total_steps: int
+        self,
+        total_reward: float,
+        passed: bool,
+        total_steps: int,
+        termination_reason: str = "unknown",
     ) -> None: ...
 
     def record_policy_violation(
@@ -33,9 +37,13 @@ class NullTelemetrySink:
         del snapshot
 
     def complete_episode(
-        self, total_reward: float, passed: bool, total_steps: int
+        self,
+        total_reward: float,
+        passed: bool,
+        total_steps: int,
+        termination_reason: str = "unknown",
     ) -> None:
-        del total_reward, passed, total_steps
+        del total_reward, passed, total_steps, termination_reason
 
     def record_policy_violation(
         self,

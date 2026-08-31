@@ -33,6 +33,7 @@ def _rollout(
     step_hashes = [canonical_hash(obs)]
     taken: list[dict] = []
     total_reward = 0.0
+    ended = False
 
     if actions is None:
         if not env.action_types:
@@ -60,7 +61,23 @@ def _rollout(
         }))
         taken.append(action)
         if terminated or truncated:
+            ended = True
             break
+    if not ended and hasattr(env, "finalize_episode"):
+        try:
+            evaluation = env.finalize_episode("determinism_probe")
+        except NotImplementedError:
+            evaluation = None
+        if evaluation is not None:
+            total_reward = evaluation.total_reward
+            step_hashes.append(canonical_hash({
+                "final_reward": evaluation.total_reward,
+                "passed": evaluation.passed,
+                "verification_results": [
+                    result.model_dump()
+                    for result in evaluation.verification_results
+                ],
+            }))
     return step_hashes, taken, total_reward
 
 

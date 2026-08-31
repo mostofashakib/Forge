@@ -35,7 +35,7 @@ def build_env():
 def test_tool_surface_lists_every_registered_tool():
     env = build_env()
     surface = env.tool_surface()
-    assert {spec.name for spec in surface} == {"increment", "noop"}
+    assert {spec.name for spec in surface} == {"increment", "noop", "submit"}
     assert all(isinstance(spec, ToolSpec) for spec in surface)
 
 

@@ -31,6 +31,8 @@ _SYSTEM = (
     "InitialStateProvider, ObservationEncoder, ExecutionBackend, StateManager, Rubric,\n"
     "TerminationPolicy); prompt, tools, and transport are optional and default to None.\n"
     "Do not redeclare these — the base class already supplies them.\n\n"
+    "Episode submission is a Forge control-plane action named `submit`; the episode runner "
+    "intercepts it before HTTP execution. Do not add a /submit endpoint or submission state.\n\n"
     "Override ONLY when the domain requires it:\n"
     "  def action_endpoint(self, action: dict) -> str:\n"
     "      # only if an action maps to a different endpoint than /{action['type']}\n\n"

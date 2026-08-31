@@ -13,7 +13,9 @@ import httpx
 from forge.contracts import (
     Action,
     CheckResult,
+    DeadEndTerminationPolicy,
     Environment,
+    EpisodeEvaluation,
     EpisodeController,
     MaxStepsTerminationPolicy,
     StepOutcome,
@@ -25,7 +27,7 @@ from forge.envgen.container_env_base import ContainerEnvBase
 from forge.envgen.episode_base import (
     BaseEpisodeConfig,
     BaseEpisodeResult,
-    TerminationMonitor,
+    TerminationMonitor as TerminationMonitor,
     TrajectoryWriter,
 )
 from forge.envgen.objective import ObjectiveScorer
@@ -36,9 +38,17 @@ from forge.runtime.reward import ObjectiveScoreRubric
 from forge.runtime.task_source import StaticTaskSource
 from forge.runtime.tasks import select_task
 from forge.runtime.trajectory import Trajectory
+from forge.runtime.control import SUBMIT_ENDPOINT, is_submit_action
 from forge.schema.state_schema import StateSchemaManifest
 
 logger = logging.getLogger(__name__)
+
+__all__ = [
+    "ContainerEpisodeRunner",
+    "EpisodeConfig",
+    "EpisodeResult",
+    "TerminationMonitor",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -122,12 +132,9 @@ class ContainerEpisodeRunner(EpisodeController):
       - GET  /openapi.json → discover available action endpoints
       - POST /<action>     → execute an action
 
-    Stopping conditions (evaluated each step, in priority order):
-      1. objective_score >= success_threshold → "success"
-      2. State unchanged for dead_end_patience steps → "dead_end"
-      3. objective_score < divergence_threshold for consecutive_below_threshold
-         steps → "diverged"
-      4. step_index == max_steps - 1 → "max_steps" (truncated)
+    Stopping conditions are cheap and independent of grading: explicit submit,
+    repeated unchanged state, or the step budget. Objective scoring runs once
+    after the loop and supplies the authoritative episode reward.
     """
 
     def __init__(
@@ -286,7 +293,14 @@ class ContainerEpisodeRunner(EpisodeController):
                 result.write_jsonl(jsonl_path)
             return result
 
-        available_actions = self._discover_actions()
+        available_actions = [
+            *self._discover_actions(),
+            {
+                "endpoint": SUBMIT_ENDPOINT,
+                "method": "CONTROL",
+                "description": "Finish the episode and grade the current state",
+            },
+        ]
 
         # Reset the environment
         try:
@@ -297,7 +311,7 @@ class ContainerEpisodeRunner(EpisodeController):
             result.completed_at = datetime.now(timezone.utc)
             return result
 
-        monitor = TerminationMonitor(cfg)
+        dead_end_policy = DeadEndTerminationPolicy(cfg.dead_end_patience)
         max_steps_policy = MaxStepsTerminationPolicy(cfg.max_steps)
         # Write each step as it happens so a crash mid-episode still leaves a
         # durable, replayable partial trace (not just an all-or-nothing dump).
@@ -305,7 +319,7 @@ class ContainerEpisodeRunner(EpisodeController):
 
         try:
             self._run_steps(
-                agent, cfg, result, monitor, available_actions, episode_id,
+                agent, cfg, result, dead_end_policy, available_actions, episode_id,
                 writer, state, max_steps_policy=max_steps_policy
             )
         finally:
@@ -315,7 +329,7 @@ class ContainerEpisodeRunner(EpisodeController):
         return result
 
     def _run_steps(
-        self, agent, cfg, result, monitor, available_actions, episode_id,
+        self, agent, cfg, result, dead_end_policy, available_actions, episode_id,
         writer, state, max_steps_policy=None,
     ):
         max_steps_policy = max_steps_policy or MaxStepsTerminationPolicy(cfg.max_steps)
@@ -334,7 +348,7 @@ class ContainerEpisodeRunner(EpisodeController):
                 }
 
             # Ensure the chosen endpoint is in the discovered set (safety)
-            if available_actions and not any(
+            if not is_submit_action(action) and available_actions and not any(
                 a["endpoint"] == action.get("endpoint") for a in available_actions
             ):
                 logger.debug(
@@ -342,6 +356,30 @@ class ContainerEpisodeRunner(EpisodeController):
                     episode_id, step_idx, action.get("endpoint"),
                 )
                 action = {"endpoint": available_actions[0]["endpoint"], "payload": {}}
+
+            if is_submit_action(action):
+                state_hash = self._normalizer.hash(state)
+                step = StepRecord(
+                    step_index=step_idx,
+                    state_before=state,
+                    action={"endpoint": SUBMIT_ENDPOINT, "payload": {}},
+                    state_after=state,
+                    reward=0.0,
+                    objective_score=0.0,
+                    state_hash_before=state_hash,
+                    state_hash_after=state_hash,
+                    terminated=True,
+                    truncated=False,
+                    termination_reason="submitted",
+                )
+                result.steps.append(step)
+                result.termination_reason = "submitted"
+                self._finalize_result(result, state, action)
+                step.reward = result.total_reward
+                step.objective_score = result.final_objective_score
+                if writer is not None:
+                    writer.record(step)
+                break
 
             # Execute the action
             self._execute_action(action)
@@ -365,54 +403,12 @@ class ContainerEpisodeRunner(EpisodeController):
                         if bv != av:
                             derived_diff[fname] = {"before": bv, "after": av}
 
-            # This score is a model's verdict, and it drives both the step
-            # reward and the success/termination decision. Count it so the run
-            # record can state how much of the grade a model produced.
-            obj_score = self._scorer.score(
-                new_state, cfg.objective,
-                derived_diff=derived_diff or None,
-                action_taken=action or None,
-            )
-            result.llm_verdicts += 1
-
-            state_changed = bool(
-                self._manifest is not None
-                and self._manifest.state_changed(state, new_state)
-            )
-            verification = VerificationResult.from_checks(
-                "objective_scorer",
-                [CheckResult(
-                    name="objective_score",
-                    passed=obj_score >= cfg.success_threshold,
-                    score=obj_score,
-                )],
-            )
-            selected_task = self._selected_task or Task(
-                id="objective", objective=cfg.objective
-            )
-            task = selected_task.model_copy(update={
-                "metadata": {
-                    **selected_task.metadata,
-                    "state_changed": state_changed,
-                }
-            })
-            reward_breakdown = self.environment.rubric.score(
-                new_state,
-                Trajectory(episode_id=episode_id, steps=[]),
-                [verification],
-                task,
-            )
-            reward = reward_breakdown.total_reward
-
-            # Evaluate stopping conditions (state hash is the progress marker
-            # so fluctuating scores over a frozen state still count as dead-end)
+            # Stopping checks use only deterministic state progress and budget.
             outcome = StepOutcome(
                 step_index=step_idx,
-                score=obj_score,
-                reward=reward,
                 state_hash=state_hash_after,
             )
-            decision = monitor.check(outcome) or max_steps_policy.check(outcome)
+            decision = dead_end_policy.check(outcome) or max_steps_policy.check(outcome)
             termination_reason = decision.reason if decision else None
             truncated = bool(decision and decision.truncated)
             terminated = bool(decision and not decision.truncated)
@@ -422,8 +418,8 @@ class ContainerEpisodeRunner(EpisodeController):
                 state_before=state,
                 action=action,
                 state_after=new_state,
-                reward=reward,
-                objective_score=obj_score,
+                reward=0.0,
+                objective_score=0.0,
                 state_hash_before=state_hash_before,
                 state_hash_after=state_hash_after,
                 terminated=terminated,
@@ -431,18 +427,11 @@ class ContainerEpisodeRunner(EpisodeController):
                 termination_reason=termination_reason if (terminated or truncated) else None,
             )
             result.steps.append(step)
-            if writer is not None:
-                writer.record(step)
-            result.total_reward += reward
-            result.final_objective_score = obj_score
-
             logger.info(
-                "[%s] step %02d/%d  score=%.2f  reward=%.2f  hash=%s→%s%s",
+                "[%s] step %02d/%d  hash=%s→%s%s",
                 episode_id,
                 step_idx + 1,
                 cfg.max_steps,
-                obj_score,
-                reward,
                 state_hash_before[:6],
                 state_hash_after[:6],
                 f"  → {termination_reason}" if termination_reason else "",
@@ -454,13 +443,73 @@ class ContainerEpisodeRunner(EpisodeController):
                 result.termination_reason = termination_reason or (
                     "truncated" if truncated else "unknown"
                 )
+                self._finalize_result(
+                    result,
+                    new_state,
+                    action,
+                    derived_diff=derived_diff or None,
+                    state_changed=state_hash_before != state_hash_after,
+                )
+                step.reward = result.total_reward
+                step.objective_score = result.final_objective_score
+                if writer is not None:
+                    writer.record(step)
                 break
+            if writer is not None:
+                writer.record(step)
 
         result.completed_at = datetime.now(timezone.utc)
 
-        # Normalize total_reward to 0–1 (average objective score across steps)
-        if result.steps:
-            result.total_reward = result.total_reward / len(result.steps)
+    def _finalize_result(
+        self,
+        result: EpisodeResult,
+        state: dict,
+        action: dict,
+        *,
+        derived_diff: dict | None = None,
+        state_changed: bool = False,
+    ) -> None:
+        """Run the container's objective judge and rubric exactly once."""
+        state_changed = state_changed or any(
+            step.state_hash_before != step.state_hash_after for step in result.steps
+        )
+        score = self._scorer.score(
+            state,
+            self._cfg.objective,
+            derived_diff=derived_diff,
+            action_taken=action,
+        )
+        result.llm_verdicts += 1
+        verification = VerificationResult.from_checks(
+            "objective_scorer",
+            [CheckResult(
+                name="objective_score",
+                passed=score >= self._cfg.success_threshold,
+                score=score,
+            )],
+        )
+        selected_task = self._selected_task or Task(
+            id="objective", objective=self._cfg.objective
+        )
+        task = selected_task.model_copy(update={
+            "metadata": {
+                **selected_task.metadata,
+                "state_changed": state_changed,
+            }
+        })
+        reward = self.environment.rubric.score(
+            state,
+            Trajectory(episode_id=result.episode_id, steps=[]),
+            [verification],
+            task,
+        )
+        result.final_objective_score = score
+        result.apply_evaluation(EpisodeEvaluation(
+            passed=verification.passed,
+            reward=reward,
+            verification_results=[verification],
+            reason=result.termination_reason,
+        ))
 
     # ------------------------------------------------------------------
     # Multi-episode rollout

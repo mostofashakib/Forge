@@ -24,6 +24,10 @@ def test_load_rollouts_round_trips_grpo_parquet(tmp_path):
         "agent_id": "random", "prompt": "Task: t", "completion": "$ ls",
         "total_reward": 0.8, "passed": True, "total_steps": 3,
         "per_step_rewards": json.dumps([0.1, 0.3, 0.4]),
+        "behavior_model": "vllm:model",
+        "termination_reason": "submitted",
+        "verification_results": json.dumps([{"passed": True}]),
+        "reward_breakdown": json.dumps({"total_reward": 0.8}),
     }])
     records = load_rollouts(path)
     assert len(records) == 1
@@ -31,6 +35,10 @@ def test_load_rollouts_round_trips_grpo_parquet(tmp_path):
     assert r.episode_id == "ep1" and r.task_name == "t"
     assert r.total_reward == 0.8 and r.passed is True
     assert r.per_step_rewards == [0.1, 0.3, 0.4]
+    assert r.behavior_model == "vllm:model"
+    assert r.termination_reason == "submitted"
+    assert r.verification_results == [{"passed": True}]
+    assert r.reward_breakdown == {"total_reward": 0.8}
 
 
 def test_load_rollouts_rejects_missing_columns(tmp_path):
