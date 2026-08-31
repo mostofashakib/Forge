@@ -10,6 +10,7 @@ from pathlib import Path
 
 import httpx
 
+from forge.contracts import EpisodeController
 from forge.envgen.agents.container_agent import ContainerAgentBase
 from forge.envgen.episode_base import (
     BaseEpisodeConfig,
@@ -95,7 +96,7 @@ class EpisodeResult(BaseEpisodeResult):
 # Episode runner
 # ---------------------------------------------------------------------------
 
-class ContainerEpisodeRunner:
+class ContainerEpisodeRunner(EpisodeController):
     """Runs one or more agent episodes against a containerized FastAPI environment.
 
     The runner communicates with the app entirely over HTTP:
@@ -234,9 +235,10 @@ class ContainerEpisodeRunner:
     def run_episode(
         self,
         agent: ContainerAgentBase,
+        *,
         episode_id: str | None = None,
-        jsonl_path: Path | None = None,
         seed: int | None = None,
+        jsonl_path: Path | None = None,
     ) -> EpisodeResult:
         if episode_id is None:
             episode_id = f"cep_{secrets.token_hex(6)}"
