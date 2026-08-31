@@ -206,7 +206,7 @@ def test_default_backend_gates_on_missing_training_deps(tmp_path):
     data_dir = tmp_path / "data"
     _write_grpo(data_dir, [_grpo_row("t", 0.0), _grpo_row("t", 1.0)])
     # No backend injected → the real GPU-gated backend runs and should refuse.
-    with pytest.raises(RuntimeError, match="pip install trl"):
+    with pytest.raises(RuntimeError, match="uv sync --extra training"):
         PolicyTrainer().train(TrainingConfig(
             data_dir=data_dir, base_model="base", output_dir=tmp_path / "out",
             objective=TrainingObjective.GRPO,

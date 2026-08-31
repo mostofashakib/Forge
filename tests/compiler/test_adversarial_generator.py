@@ -79,7 +79,7 @@ def test_generates_negative_check_adversarial():
 
 
 def test_generates_semantic_check_adversarial_with_skip():
-    gen = AdversarialTestGenerator(llm_client=None)
+    gen = AdversarialTestGenerator()
     result = gen.generate(_ci_with_condition("semantic_check", "reply_text", rubric="Must be polite"))
     code = result["my_task_adversarial"]
     assert "test_my_task_adversarial_semantic_1" in code

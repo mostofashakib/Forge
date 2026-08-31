@@ -55,13 +55,17 @@ Every Forge environment implements a shared set of interfaces in
 | `EpisodeController` | Who drives the multi-turn loop? |
 | `Transport` | How does the model talk to the environment? |
 
-`Environment` composes ten of them; `EpisodeController` stays separate because a
-controller drives an environment from outside, and `Verifier` is reached through
-the rubric rather than composed as a separate member. To author an environment by
-hand, implement `Environment` and hand it to any controller.
+`Environment` composes the concerns that describe the world. `EpisodeController`
+stays outside because a benchmark, trainer, or rollout worker drives an environment;
+`Verifier` remains separate from `Rubric` because deciding whether an objective was
+met is different from assigning its reward.
 
-Environments generated before this release use the pre-contract shape and must
-be regenerated.
+Both `ForgeEnv` and container-backed environments implement this facade. Their hot
+paths call the injected collaborators: reset uses `InitialStateProvider`, actions run
+through `ExecutionBackend`, state is owned by `StateManager`, observations pass
+through `ObservationEncoder`, rewards use `Rubric`, and every completed step consults
+`TerminationPolicy`. Container episode controllers use the same facade rather than
+duplicating reset, state, action, or termination plumbing with direct HTTP calls.
 
 ---
 
@@ -399,10 +403,10 @@ Seven export formats from the per-environment **Export Dataset** page:
 
 Closing the RL loop, `forge train` turns Forge's *own* graded experience into a policy update, then the benchmark evaluates that checkpoint on disjoint internal held-out environments. Training consumes the exports above and produces a loadable checkpoint:
 
-- **GRPO** over `grpo_rollouts.parquet` — rewards are mapped to group-relative advantages `(r − mean) / (std + eps)` across rollouts that share a prompt
-- **DPO** over `preference_pairs.jsonl` — chosen/rejected labels are kept only where the chosen trajectory was graded strictly higher
+- **Offline GRPO-style update** over `grpo_rollouts.parquet` — rewards are mapped to group-relative advantages `(r − mean) / (std + eps)` across rollouts that share a prompt, then applied to completion-token causal-LM loss
+- **TRL DPO** over `preference_pairs.jsonl` — chosen/rejected labels are kept only where the chosen trajectory was graded strictly higher and trained with `DPOTrainer`
 
-The reward→signal mapping is a deterministic function of the grades already assigned, and a graded set with **no relative signal** (all rollouts scored the same, or every preference pair a tie) raises `NoTrainingSignalError` and writes no checkpoint — the training backend is never invoked. The heavy backend gates on `trl` + `transformers` and expects a GPU node. A finished run writes a `policy_checkpoint.json` manifest that runtime agents load via `forge.training.checkpoint.load_policy_agent`, so the same policy can collect → grade → export → train → reload.
+The reward→signal mapping is a deterministic function of the grades already assigned, and a graded set with **no relative signal** (all rollouts scored the same, or every preference pair a tie) raises `NoTrainingSignalError` and writes no checkpoint — the training backend is never invoked. Install the optional GPU stack with `uv sync --extra training`. A finished run writes a `policy_checkpoint.json` manifest that runtime agents load via `forge.runtime.policy_loader.load_policy_agent`, so the same policy can collect → grade → export → train → reload.
 
 ```bash
 forge train \
@@ -601,18 +605,19 @@ Browser / API Client
               │           Reverse Proxy → Sandbox Hub (App / Terminal / Observability)
               │                       │
               │                       ▼
-              │           ForgeEnv (Gymnasium-compatible)
+              │           Environment facade (Gymnasium-compatible)
               │           ┌─────────────────────────────────┐
               │           │  reset()                        │
-              │           │    InitialStateFactory          │
-              │           │    ObservationFilter (RBAC)     │
+              │           │    InitialStateProvider         │
+              │           │    StateManager                 │
+              │           │    ObservationEncoder (RBAC)    │
               │           │                                 │
               │           │  step(action)                   │
               │           │    ActionValidator              │
               │           │    PolicyEngine  ──→ AuditLog   │
-              │           │    TransitionEngine             │
-              │           │    VerifierEngine               │
-              │           │    RewardEngine (multi-method)  │
+              │           │    ExecutionBackend             │
+              │           │    Verifier → Rubric            │
+              │           │    TerminationPolicy            │
               │           │    TelemetryClient              │
               │           └─────────────────────────────────┘
               │                       │
@@ -672,8 +677,8 @@ forge/
     dataset.py         # Load grpo_rollouts.parquet / preference_pairs.jsonl exports
     reward_mapping.py  # Reward → GRPO advantage / DPO label (deterministic, no-signal guard)
     trainer.py         # PolicyTrainer: prepare signal → backend → PolicyCheckpoint
-    checkpoint.py      # PolicyCheckpoint manifest + load_policy_agent()
-    _backends.py       # GRPO/DPO backends gated on trl + transformers (GPU node)
+    checkpoint.py      # Serializable PolicyCheckpoint manifest
+    _backends.py       # Offline GRPO and TRL DPO gradient updates (GPU node)
   customization/       # Per-env overrides: decorator hooks, EnvConfig, loader
   schema/              # StateSchemaManifest and related schemas
   settings.py          # Process-wide settings: determinism mode, seeds, paths, URLs
@@ -768,7 +773,7 @@ The development runner configures Redis with a TCP backlog of 128 to match the d
 
 **Run tests:**
 ```bash
-uv run pytest                                  # full suite (1,056 tests)
+uv run pytest                                  # full suite (1,526 tests)
 uv run pytest tests/architecture               # boundary, UI-determinism, and diversity gates only
 uv run pytest tests/runtime tests/envgen       # kernel + generation pipeline
 ```

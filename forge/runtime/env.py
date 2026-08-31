@@ -2,7 +2,23 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 import uuid
 import gymnasium as gym
-from forge.contracts import InitialStateProvider
+from forge.contracts import (
+    Action,
+    CompositeTerminationPolicy,
+    Environment,
+    ExecutionBackend,
+    InitialStateProvider,
+    MaxStepsTerminationPolicy,
+    ObservationEncoder,
+    PromptTemplate,
+    Rubric,
+    StateManager,
+    StepOutcome,
+    TaskSource,
+    TerminationPolicy,
+    ToolProvider,
+    VerifierTerminationPolicy,
+)
 from forge.runtime.action import ActionValidator
 from forge.runtime.context import RuntimeContext
 from forge.runtime.diff import compute_diff
@@ -26,6 +42,8 @@ from forge.settings import determinism_enabled
 
 from forge.runtime.policy_engine import PolicyEngine
 from forge.runtime.observation_filter import ObservationFilter
+from forge.runtime.task_source import StaticTaskSource
+from forge.runtime.tools import SpecToolProvider
 
 if TYPE_CHECKING:
     from forge.runtime.telemetry import TelemetrySink
@@ -35,7 +53,7 @@ if TYPE_CHECKING:
 InitialStateFactory = InitialStateProvider
 
 
-class ForgeEnv(gym.Env):
+class ForgeEnv(gym.Env, Environment):
     metadata = {"render_modes": []}
 
     def __init__(
@@ -55,18 +73,32 @@ class ForgeEnv(gym.Env):
         rest_use: RESTUse | None = None,
         orpc_use: ORPCUse | None = None,
         deterministic: bool | None = None,
+        task_source: TaskSource | None = None,
+        prompt_template: PromptTemplate | None = None,
+        observation_encoder: ObservationEncoder | None = None,
+        execution_backend: ExecutionBackend | None = None,
+        termination_policy: TerminationPolicy | None = None,
     ) -> None:
         super().__init__()
         self.env_spec = env_spec
         self._initial_state = initial_state_provider
-        self._transition_engine = transition_engine
         self._verifier_engine = verifier_engine
         self._reward_engine = reward_engine
+        self._task_source = task_source or StaticTaskSource(
+            [env_spec.default_task] if env_spec.default_task else []
+        )
+        self._prompt_template = prompt_template
+        self._observations = observation_encoder or observation_filter or ObservationFilter()
+        self._backend = execution_backend or transition_engine
+        self._termination = termination_policy or CompositeTerminationPolicy(
+            VerifierTerminationPolicy(),
+            MaxStepsTerminationPolicy(env_spec.max_steps),
+        )
         self._action_validator = ActionValidator(transition_engine.action_types)
         self._telemetry = telemetry
         self._policy_engine = policy_engine
-        self._observation_filter = observation_filter
         self._tool_specs = {spec.name: spec for spec in (tool_specs or [])}
+        self._tools = SpecToolProvider(self._tool_specs.values())
         self._tool_use: ToolUse | None = None
         self.computer_use = computer_use
         self.browser_use = browser_use
@@ -81,13 +113,53 @@ class ForgeEnv(gym.Env):
         self.action_space = gym.spaces.Dict({})
 
         self._ctx: RuntimeContext | None = None
-        self._state_store: InProcessStateManager | None = None
+        self._state_store = InProcessStateManager({})
         self._traj_store: TrajectoryStore | None = None
         self._current_task: dict | None = None
         self._step_count: int = 0
         self._episode_id: str | None = None
         self._invalid_action_count: int = 0
         self._total_reward: float = 0.0
+
+    # ------------------------------------------------------------------
+    # Composed Environment facade
+    # ------------------------------------------------------------------
+
+    @property
+    def task_source(self) -> TaskSource:
+        return self._task_source
+
+    @property
+    def initial_state(self) -> InitialStateProvider:
+        return self._initial_state
+
+    @property
+    def observations(self) -> ObservationEncoder:
+        return self._observations
+
+    @property
+    def backend(self) -> ExecutionBackend:
+        return self._backend
+
+    @property
+    def state(self) -> StateManager:
+        return self._state_store
+
+    @property
+    def rubric(self) -> Rubric:
+        return self._reward_engine
+
+    @property
+    def termination(self) -> TerminationPolicy:
+        return self._termination
+
+    @property
+    def prompt(self) -> PromptTemplate | None:
+        return self._prompt_template
+
+    @property
+    def tools(self) -> ToolProvider:
+        return self._tools
 
     @property
     def action_types(self) -> frozenset:
@@ -187,7 +259,7 @@ class ForgeEnv(gym.Env):
         validation_error = self._action_validator.validate(action)
         if validation_error:
             self._record_invalid_step(hash_before, action)
-            return state_before, 0.0, False, False, {"error": validation_error}
+            return self._observe(state_before), 0.0, False, False, {"error": validation_error}
 
         if self._policy_engine:
             violations = self._policy_engine.check(state_before, action)
@@ -197,10 +269,14 @@ class ForgeEnv(gym.Env):
                 )
 
         try:
-            result = self._transition_engine.apply(state_before, action, self._ctx)
+            result = self._backend.execute(
+                Action.from_dict(action), state_before, self._ctx
+            )
         except InvalidActionError as exc:
             self._record_invalid_step(hash_before, action)
-            return state_before, 0.0, False, False, {"error": exc.to_dict()}
+            return self._observe(state_before), 0.0, False, False, {
+                "error": exc.to_dict()
+            }
 
         self._state_store.apply(result.state)
         state_after = self._state_store.get()
@@ -221,8 +297,17 @@ class ForgeEnv(gym.Env):
 
         self._step_count += 1
         self._total_reward += reward_breakdown.total_reward
-        terminated = any(vr.passed for vr in verifier_results)
-        truncated = self._step_count >= self.env_spec.max_steps
+        termination = self._termination.check(
+            StepOutcome(
+                step_index=self._step_count - 1,
+                score=max((result.score for result in verifier_results), default=0.0),
+                reward=reward_breakdown.total_reward,
+                state_hash=hash_after,
+                verifier_results=verifier_results,
+            )
+        )
+        terminated = termination is not None and not termination.truncated
+        truncated = termination is not None and termination.truncated
 
         snapshot = StepSnapshot(
             episode_id=self._episode_id,
@@ -246,6 +331,7 @@ class ForgeEnv(gym.Env):
             "verifier_results": [vr.model_dump() for vr in verifier_results],
             "reward_breakdown": reward_breakdown.model_dump(),
             "events": result.events,
+            "termination_reason": termination.reason if termination else None,
         }
 
     def _record_invalid_step(self, hash_before: str, action: dict) -> None:
@@ -305,6 +391,6 @@ class ForgeEnv(gym.Env):
             self._telemetry.record_step(snapshot)
 
     def _observe(self, state: dict) -> dict:
-        if self._observation_filter:
-            return self._observation_filter.filter(state)
-        return state
+        if self._ctx is None:
+            raise ResetRequiredError("Must call reset() before observing state")
+        return self._observations.encode(state, self._ctx).payload

@@ -54,7 +54,7 @@ class TaskSuccessRubric(Rubric):
 _TASK_SUCCESS = TaskSuccessRubric()
 
 
-class RewardEngine:
+class RewardEngine(Rubric):
     def __init__(self) -> None:
         self._task_rubrics: dict[str, Rubric] = {}
         self._default: Rubric | None = None
@@ -92,3 +92,7 @@ class RewardEngine:
         if rubric is None:
             rubric = _TASK_SUCCESS
         return rubric.score(state, trajectory, verifier_results, task)
+
+    def score(self, state, trajectory, verifier_results, task) -> RewardBreakdown:
+        """Expose registry-backed scoring through the composed Rubric contract."""
+        return self.compute(state, trajectory, list(verifier_results), task)

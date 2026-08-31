@@ -117,7 +117,9 @@ def test_same_seed_plus_same_actions_produce_same_result():
     for _ in range(3):
         env1.step({"type": "append"})
         env2.step({"type": "append"})
-    assert env1._observe() == env2._observe()
+    assert env1.observations.encode(env1.state.get(), None).payload == env2.observations.encode(
+        env2.state.get(), None
+    ).payload
 
 
 def test_diverging_actions_produce_diverging_results():
@@ -127,4 +129,6 @@ def test_diverging_actions_produce_diverging_results():
     env1.reset(seed=42)
     env2.reset(seed=42)
     env1.step({"type": "append"})
-    assert env1._observe() != env2._observe()
+    assert env1.observations.encode(env1.state.get(), None).payload != env2.observations.encode(
+        env2.state.get(), None
+    ).payload

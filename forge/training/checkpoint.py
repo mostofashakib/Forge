@@ -1,10 +1,9 @@
-"""The checkpoint contract runtime agents load a trained policy from.
+"""The serializable checkpoint contract produced by policy training.
 
 A trained policy is a directory containing a `policy_checkpoint.json` manifest
 that records what was trained, from how many graded examples, and the model
-path/name the runtime agent should serve. ``load_policy_agent`` turns that
-manifest back into a runtime agent, closing the loop: rollouts → grade → export
-→ train → checkpoint → agent.
+path/name the runtime agent should serve. Runtime loading intentionally lives
+outside this training package so training never depends on an agent.
 """
 from __future__ import annotations
 
@@ -45,15 +44,3 @@ class PolicyCheckpoint(BaseModel):
         if not path.exists():
             raise FileNotFoundError(f"no policy checkpoint manifest at {path}")
         return cls.model_validate_json(path.read_text(encoding="utf-8"))
-
-
-def load_policy_agent(checkpoint_dir: Path, client=None):
-    """Build a runtime agent that serves the trained policy in ``checkpoint_dir``.
-
-    The trained checkpoint is served through the vLLM-backed agent (an
-    OpenAI-compatible endpoint), pointed at the manifest's ``model_path``.
-    """
-    checkpoint = PolicyCheckpoint.load(checkpoint_dir)
-    from forge.runtime.agents.vllm_agent import vLLMAgent
-
-    return vLLMAgent(model=checkpoint.model_path, client=client)

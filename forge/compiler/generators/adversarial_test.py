@@ -3,9 +3,6 @@ from forge.extraction.schemas import CompilerInput, SuccessCondition
 
 
 class AdversarialTestGenerator:
-    def __init__(self, llm_client=None) -> None:
-        self._llm_client = llm_client
-
     def generate(self, compiler_input: CompilerInput) -> dict[str, str]:
         return {
             f"{task.name}_adversarial": self._generate_task(task, compiler_input.project_name)

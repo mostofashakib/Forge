@@ -10,8 +10,15 @@ from pathlib import Path
 
 import httpx
 
-from forge.contracts import EpisodeController
+from forge.contracts import (
+    Action,
+    Environment,
+    EpisodeController,
+    MaxStepsTerminationPolicy,
+    StepOutcome,
+)
 from forge.envgen.agents.container_agent import ContainerAgentBase
+from forge.envgen.container_env_base import ContainerEnvBase
 from forge.envgen.episode_base import (
     BaseEpisodeConfig,
     BaseEpisodeResult,
@@ -20,6 +27,7 @@ from forge.envgen.episode_base import (
 )
 from forge.envgen.objective import ObjectiveScorer
 from forge.runtime.tools import OpenAPIToolProvider
+from forge.runtime.context import RuntimeContext
 from forge.schema.state_schema import StateSchemaManifest
 
 logger = logging.getLogger(__name__)
@@ -119,6 +127,7 @@ class ContainerEpisodeRunner(EpisodeController):
         config: EpisodeConfig,
         scorer: ObjectiveScorer | None = None,
         manifest: StateSchemaManifest | None = None,
+        environment: Environment | None = None,
     ) -> None:
         self._cfg = config
         self._scorer = scorer or ObjectiveScorer()
@@ -128,6 +137,8 @@ class ContainerEpisodeRunner(EpisodeController):
             base_url=config.base_url,
             timeout=config.http_timeout,
         )
+        self._environment = environment
+        self._runtime_ctx: RuntimeContext | None = None
         self._tool_provider: OpenAPIToolProvider | None = None  # built on first use
 
     # ------------------------------------------------------------------
@@ -164,18 +175,38 @@ class ContainerEpisodeRunner(EpisodeController):
     # ------------------------------------------------------------------
 
     def _get_state(self) -> dict:
-        resp = self._http.get("/forge/state")
-        resp.raise_for_status()
-        return resp.json()
+        state = self.environment.state.get()
+        ctx = self._runtime_ctx or RuntimeContext(seed=0, deterministic=False)
+        return self.environment.observations.encode(state, ctx).payload
 
     def _reset(self, seed: int | None = None) -> dict:
         # Thread the seed so the app rebuilds a reproducible, seed-specific
         # starting universe; an unseeded reset restores the fixed baseline.
         from forge.settings import determinism_enabled
 
-        body = {"seed": seed} if seed is not None and determinism_enabled() else None
-        self._http.post("/forge/reset", json=body)
-        return self._get_state()
+        actual_seed = seed if seed is not None and determinism_enabled() else 0
+        self._runtime_ctx = RuntimeContext(
+            seed=actual_seed,
+            deterministic=seed is not None and determinism_enabled(),
+        )
+        state = self.environment.initial_state.reset(
+            self._runtime_ctx,
+            seed=seed if seed is not None and determinism_enabled() else None,
+            options={},
+        )
+        return self.environment.observations.encode(state, self._runtime_ctx).payload
+
+    @property
+    def environment(self) -> Environment:
+        """The composed environment driven by this controller."""
+        if self._environment is None:
+            self._environment = ContainerEnvBase(
+                self._cfg.base_url,
+                client=self._http,
+                timeout=self._cfg.http_timeout,
+                max_steps=self._cfg.max_steps,
+            )
+        return self._environment
 
     @property
     def tool_provider(self) -> OpenAPIToolProvider:
@@ -196,14 +227,13 @@ class ContainerEpisodeRunner(EpisodeController):
         endpoint = action.get("endpoint", "")
         payload = action.get("payload", {})
         try:
-            resp = self._http.post(endpoint, json=payload)
-            if resp.is_success:
-                try:
-                    return resp.json()
-                except Exception:
-                    return {}
-            logger.debug("[runner] action %s → HTTP %d", endpoint, resp.status_code)
-            return None
+            ctx = self._runtime_ctx or RuntimeContext(seed=0, deterministic=False)
+            result = self.environment.backend.execute(
+                Action(type=endpoint, params={"__payload__": payload}),
+                self.environment.state.get(),
+                ctx,
+            )
+            return result.state
         except Exception as exc:
             logger.debug("[runner] action %s failed: %s", endpoint, exc)
             return None
@@ -248,13 +278,15 @@ class ContainerEpisodeRunner(EpisodeController):
             return result
 
         monitor = TerminationMonitor(cfg)
+        max_steps_policy = MaxStepsTerminationPolicy(cfg.max_steps)
         # Write each step as it happens so a crash mid-episode still leaves a
         # durable, replayable partial trace (not just an all-or-nothing dump).
         writer = TrajectoryWriter(jsonl_path, result) if jsonl_path is not None else None
 
         try:
             self._run_steps(
-                agent, cfg, result, monitor, available_actions, episode_id, writer, state
+                agent, cfg, result, monitor, available_actions, episode_id,
+                writer, state, max_steps_policy=max_steps_policy
             )
         finally:
             if writer is not None:
@@ -262,7 +294,11 @@ class ContainerEpisodeRunner(EpisodeController):
 
         return result
 
-    def _run_steps(self, agent, cfg, result, monitor, available_actions, episode_id, writer, state):
+    def _run_steps(
+        self, agent, cfg, result, monitor, available_actions, episode_id,
+        writer, state, max_steps_policy=None,
+    ):
+        max_steps_policy = max_steps_policy or MaxStepsTerminationPolicy(cfg.max_steps)
         for step_idx in range(cfg.max_steps):
             state_hash_before = self._normalizer.hash(state)
 
@@ -327,11 +363,16 @@ class ContainerEpisodeRunner(EpisodeController):
 
             # Evaluate stopping conditions (state hash is the progress marker
             # so fluctuating scores over a frozen state still count as dead-end)
-            truncated = step_idx >= cfg.max_steps - 1
-            termination_reason = monitor.observe(obj_score, marker=state_hash_after)
-            terminated = termination_reason is not None
-            if not terminated and truncated:
-                termination_reason = "max_steps"
+            outcome = StepOutcome(
+                step_index=step_idx,
+                score=obj_score,
+                reward=reward,
+                state_hash=state_hash_after,
+            )
+            decision = monitor.check(outcome) or max_steps_policy.check(outcome)
+            termination_reason = decision.reason if decision else None
+            truncated = bool(decision and decision.truncated)
+            terminated = bool(decision and not decision.truncated)
 
             step = StepRecord(
                 step_index=step_idx,
@@ -413,6 +454,8 @@ class ContainerEpisodeRunner(EpisodeController):
     # ------------------------------------------------------------------
 
     def close(self) -> None:
+        if self._environment is not None:
+            self._environment.backend.close()
         self._http.close()
 
     def __enter__(self) -> "ContainerEpisodeRunner":
