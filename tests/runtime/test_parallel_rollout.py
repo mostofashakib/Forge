@@ -9,10 +9,11 @@ from forge.runtime.parallel_rollout import (
 )
 from forge.runtime.transition import TransitionResult
 from forge.runtime.verification import CheckResult, VerificationResult
+from forge.contracts import InitialStateProvider
 
 
-class SeededCounterFactory:
-    def create(self, ctx, options):
+class SeededCounterFactory(InitialStateProvider):
+    def reset(self, ctx, *, seed: int | None, options: dict) -> dict:
         return {"counter": {"c_0": {"id": "c_0", "value": ctx.rng.randint(0, 1000)}}}
 
 

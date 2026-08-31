@@ -3,7 +3,11 @@ import copy
 import pytest
 from forge.runtime.context import RuntimeContext
 from forge.runtime.snapshot import InvalidActionError
-from forge.runtime.transition import TransitionEngine, TransitionResult
+from forge.runtime.transition import (
+    FunctionTransitionHandler,
+    TransitionEngine,
+    TransitionResult,
+)
 
 
 def make_noop_transition(state, action, ctx):
@@ -21,7 +25,7 @@ def make_mutation_transition(state, action, ctx):
 
 def test_registered_action_dispatches_correctly():
     engine = TransitionEngine()
-    engine.register("increment", make_mutation_transition)
+    engine.register("increment", FunctionTransitionHandler(make_mutation_transition))
     ctx = RuntimeContext(seed=0)
     result = engine.apply({"counter": 0}, {"type": "increment"}, ctx)
     assert result.state["counter"] == 1
@@ -38,14 +42,14 @@ def test_unknown_action_raises_invalid_action_error():
 
 def test_action_types_returns_registered_types():
     engine = TransitionEngine()
-    engine.register("a", make_noop_transition)
-    engine.register("b", make_noop_transition)
+    engine.register("a", FunctionTransitionHandler(make_noop_transition))
+    engine.register("b", FunctionTransitionHandler(make_noop_transition))
     assert engine.action_types == {"a", "b"}
 
 
 def test_transition_does_not_mutate_original_state():
     engine = TransitionEngine()
-    engine.register("increment", make_mutation_transition)
+    engine.register("increment", FunctionTransitionHandler(make_mutation_transition))
     ctx = RuntimeContext(seed=0)
     original = {"counter": 0}
     engine.apply(original, {"type": "increment"}, ctx)

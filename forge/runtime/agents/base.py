@@ -1,5 +1,2 @@
-from typing import Protocol
-
-
-class AgentAdapter(Protocol):
-    def act(self, obs: dict, action_types: frozenset[str]) -> dict: ...
+from __future__ import annotations
+from forge.contracts.types import AgentAdapter  # noqa: F401

@@ -1,5 +1,6 @@
 from __future__ import annotations
 from pathlib import Path
+from forge.contracts import RewardBreakdown, Rubric
 from forge.customization.config import load_config
 from forge.runtime.reward import RewardBreakdown, RewardComponent
 
@@ -58,3 +59,8 @@ def compute_{{ task.name }}_reward(
             RewardComponent(name="invalid_action_penalty", value=-invalid_action_penalty),
         ],
     )
+
+
+class {{ task.name | pascal_case }}Rubric(Rubric):
+    def score(self, state, trajectory, verifier_results, task) -> RewardBreakdown:
+        return compute_{{ task.name }}_reward(state, trajectory, verifier_results, task)

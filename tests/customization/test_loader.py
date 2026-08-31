@@ -3,7 +3,7 @@ from pathlib import Path
 from forge.customization.hooks import clear_registry
 from forge.customization.loader import CustomizationLoader
 from forge.runtime.reward import RewardEngine
-from forge.runtime.transition import TransitionEngine
+from forge.runtime.transition import FunctionTransitionHandler, TransitionEngine
 from forge.runtime.verifier import VerifierEngine
 
 
@@ -25,7 +25,9 @@ def test_loader_applies_transition_override(tmp_path):
         "    return None\n"
     )
     te, ve, re = _make_engines()
-    te.register("my_action", lambda s, a, c: None)  # original handler
+    te.register(
+        "my_action", FunctionTransitionHandler(lambda s, a, c: None)
+    )  # original handler
 
     CustomizationLoader(tmp_path).apply(te, ve, re)
 
@@ -60,7 +62,7 @@ def test_loader_applies_reward_override(tmp_path):
     )
     te, ve, re = _make_engines()
     CustomizationLoader(tmp_path).apply(te, ve, re)
-    assert "my_task" in re._task_fns
+    assert "my_task" in re._task_rubrics
 
 
 def test_loader_skips_missing_custom_dir(tmp_path):

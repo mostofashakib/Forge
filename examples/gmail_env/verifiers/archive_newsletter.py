@@ -1,4 +1,4 @@
-from forge.runtime.verification import CheckResult, VerificationResult
+from forge.contracts import CheckResult, Verifier, VerificationResult
 
 
 def verify_archive_newsletter(state: dict, trajectory, task: dict) -> VerificationResult:
@@ -15,3 +15,8 @@ def verify_archive_newsletter(state: dict, trajectory, task: dict) -> Verificati
             evidence=None if passed else f"Email '{email_id}' has not been archived.",
         )],
     )
+
+
+class ArchiveNewsletterVerifier(Verifier):
+    def verify(self, state: dict, trajectory, task) -> VerificationResult:
+        return verify_archive_newsletter(state, trajectory, task)

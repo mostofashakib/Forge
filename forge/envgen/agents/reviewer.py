@@ -170,6 +170,14 @@ class ReviewerAgent(EnvGenAgent):
                     "requirements", f"Declared action {action.name!r} is not implemented"
                 ))
 
+        # Contract conformance. Static, like the determinism gate — it asks
+        # whether the generated code declares the shape the runtime requires,
+        # which the semantic reviewer cannot check reliably.
+        issues.extend(self._contract_issues(
+            artifacts["state_bridge_code"] or "",
+            artifacts["reward_fn_code"] or "",
+        ))
+
         ui = app_code.get("ui.html", "").lower()
         if ui and not all(token in ui for token in ("<html", "<script", "</html>")):
             issues.append(self._error(
@@ -275,3 +283,83 @@ class ReviewerAgent(EnvGenAgent):
             message=message,
             artifact=artifact,
         )
+
+    @staticmethod
+    def _subclasses(source: str, base: str) -> list[ast.ClassDef]:
+        tree = ast.parse(source)
+        return [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ClassDef)
+            and any(
+                (isinstance(b, ast.Name) and b.id == base)
+                or (isinstance(b, ast.Attribute) and b.attr == base)
+                for b in node.bases
+            )
+        ]
+
+    def _contract_issues(
+        self, state_bridge_code: str, reward_fn_code: str
+    ) -> list[ReviewIssue]:
+        # Unparseable source is already reported by the syntax loop above;
+        # do not also report a spurious "no contract subclass found" here.
+        issues: list[ReviewIssue] = []
+
+        if state_bridge_code:
+            try:
+                bridges = self._subclasses(state_bridge_code, "Environment")
+            except SyntaxError:
+                bridges = None
+            if bridges is not None and not bridges:
+                issues.append(self._error(
+                    "contract",
+                    "The state bridge must subclass forge.contracts.Environment",
+                    "state_bridge_code",
+                ))
+
+        if reward_fn_code:
+            try:
+                rubrics = self._subclasses(reward_fn_code, "Rubric")
+            except SyntaxError:
+                rubrics = None
+            if rubrics is not None:
+                if not rubrics:
+                    issues.append(self._error(
+                        "contract",
+                        "The reward must subclass forge.contracts.Rubric",
+                        "reward_fn_code",
+                    ))
+                elif not any(
+                    isinstance(item, ast.FunctionDef) and item.name == "score"
+                    for rubric in rubrics
+                    for item in rubric.body
+                ):
+                    # `score` may be entirely absent, or present but defined
+                    # `async def` (which fails the `ast.FunctionDef` check
+                    # above, since `ast.AsyncFunctionDef` is a distinct node
+                    # type). An automated repair specialist reading "must
+                    # define score()" while `score` is visibly present could
+                    # plausibly "fix" this by adding a second, sync `score`
+                    # rather than removing `async` from the existing one —
+                    # so the two cases get distinct messages.
+                    if any(
+                        isinstance(item, ast.AsyncFunctionDef) and item.name == "score"
+                        for rubric in rubrics
+                        for item in rubric.body
+                    ):
+                        issues.append(self._error(
+                            "contract",
+                            "score() is async; Rubric.score is synchronous — "
+                            "remove `async` from the existing score(), do not "
+                            "add a second one",
+                            "reward_fn_code",
+                        ))
+                    else:
+                        issues.append(self._error(
+                            "contract",
+                            "The Rubric subclass must define score(); without it the "
+                            "reward cannot be registered",
+                            "reward_fn_code",
+                        ))
+
+        return issues

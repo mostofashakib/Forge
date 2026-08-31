@@ -16,10 +16,11 @@ from forge.runtime.interaction import (
 )
 from forge.runtime.snapshot import ToolParam, ToolSpec
 from forge.runtime.transition import TransitionResult
+from forge.contracts import InitialStateProvider
 
 
-class CounterFactory:
-    def create(self, ctx, options):
+class CounterFactory(InitialStateProvider):
+    def reset(self, ctx, *, seed: int | None, options: dict) -> dict:
         return {"counter": {"c_0": {"id": "c_0", "value": 0}}}
 
 
