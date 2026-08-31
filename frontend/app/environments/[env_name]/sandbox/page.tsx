@@ -9,6 +9,7 @@ interface SandboxInfo {
   id: string;
   status: string;
   env_type: string;
+  has_ui: boolean;
   container_port: number | null;
   ttl_days: number;
   expires_at: string;
@@ -132,7 +133,13 @@ export default function SandboxPage({ params }: Props) {
     : null;
 
   const envType = info?.env_type ?? "general";
-  const hasAppUI = envType === "general" || envType.startsWith("premade:");
+  // A Forge-instrumented app: it exposes /forge/reset and the telemetry event
+  // feed whether or not it was built with a UI.
+  const isForgeApp = envType === "general" || envType.startsWith("premade:");
+  // Premade replicas always ship a UI; a generated environment only has one
+  // when it was built with the UI specialist.
+  const hasAppUI = envType.startsWith("premade:")
+    || (envType === "general" && info?.has_ui === true);
   const isRunning = info?.status === "running";
   const canStart  = !isRunning && !starting && !stopping && !deleting
     && info?.status !== "building" && info?.status !== "queued";
@@ -141,7 +148,11 @@ export default function SandboxPage({ params }: Props) {
     ? TABS.filter((t) => t.id === "terminal" || t.id === "observability")
     : envType === "browser"
     ? TABS.filter((t) => t.id === "app" || t.id === "observability")
-    : TABS;
+    // A headless environment has no page to show, so the App tab is dropped
+    // rather than left to render an empty frame.
+    : hasAppUI
+    ? TABS
+    : TABS.filter((t) => t.id !== "app");
 
   const effectiveTab = visibleTabs.find((t) => t.id === activeTab)
     ? activeTab
@@ -183,7 +194,7 @@ export default function SandboxPage({ params }: Props) {
         <div className="flex gap-2 ml-auto items-center">
 
           {/* General / premade: Reset */}
-          {hasAppUI && isRunning && (
+          {isForgeApp && isRunning && (
             <button
               onClick={reset}
               disabled={resetting}
@@ -316,12 +327,12 @@ export default function SandboxPage({ params }: Props) {
         )}
 
         {/* Observability — general / premade use rich event feed */}
-        {effectiveTab === "observability" && hasAppUI && (
+        {effectiveTab === "observability" && isForgeApp && (
           <SandboxEventFeed envName={env_name} />
         )}
 
         {/* Observability — CLI / browser use activity log */}
-        {effectiveTab === "observability" && !hasAppUI && (
+        {effectiveTab === "observability" && !isForgeApp && (
           <ActivityLog envName={env_name} />
         )}
       </div>

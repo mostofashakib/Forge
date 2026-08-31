@@ -50,7 +50,10 @@ def build_source_bundle(env_dir: Path, env_name: str) -> bytes:
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
         for relpath, path in members:
             archive.writestr(f"{env_name}/{relpath}", path.read_bytes())
-        archive.writestr(f"{env_name}/README.md", _render_readme(env_name))
+        has_ui = any(relpath == "app/ui.html" for relpath, _ in members)
+        archive.writestr(
+            f"{env_name}/README.md", _render_readme(env_name, has_ui=has_ui)
+        )
         archive.writestr(f"{env_name}/docker-compose.yml", _render_compose(env_name))
         _write_executable(archive, f"{env_name}/run.sh", _render_run_script(env_name))
     return buffer.getvalue()
@@ -96,7 +99,13 @@ def _is_safe_file(path: Path, root: Path) -> bool:
     return resolved.is_relative_to(root)
 
 
-def _render_readme(env_name: str) -> str:
+def _render_readme(env_name: str, *, has_ui: bool) -> str:
+    app_contents = (
+        "the runnable FastAPI application and its UI (`main.py`, `ui.html`)"
+        if has_ui
+        else "the runnable FastAPI application (`main.py`) — this environment is "
+             "headless, so it exposes the API only"
+    )
     return f"""# {env_name}
 
 A Forge-generated reinforcement-learning environment, exported as a standalone
@@ -155,7 +164,7 @@ docker compose up --build
 
 ## Contents
 
-- `app/` — the runnable FastAPI application and its UI (`main.py`, `ui.html`)
+- `app/` — {app_contents}
 - `container_env.py` — the gymnasium bridge exposing the app as an RL environment
 - `reward_fn.py` — the reward function
 - `custom/` — policies and configuration
