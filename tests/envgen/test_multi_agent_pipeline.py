@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from pydantic import ValidationError
 
@@ -28,6 +30,28 @@ def _ctx() -> EnvGenContext:
             tasks=[],
         ),
     )
+
+
+def _ui_ctx() -> EnvGenContext:
+    ctx = _ctx()
+    ctx.with_ui = True
+    return ctx
+
+
+class _BackendStub(EnvGenAgent):
+    agent_id = "backend_stub"
+    produces = ["backend_code"]
+
+    async def run(self, ctx, bus) -> None:
+        await bus.publish("backend_code", {"main.py": "app = object()"})
+
+
+class _UIStub(EnvGenAgent):
+    agent_id = "ui_stub"
+    produces = ["ui_code"]
+
+    async def run(self, ctx, bus) -> None:
+        await bus.publish("ui_code", {"ui.html": "<html></html>"})
 
 
 class _Producer(EnvGenAgent):
@@ -161,11 +185,47 @@ async def test_app_assembler_keeps_backend_and_ui_separate():
     bus = ArtifactBus()
     await bus.publish("backend_code", {"main.py": "app = object()"})
     await bus.publish("ui_code", {"ui.html": "<html></html>"})
-    await AppAssemblyAgent().run(_ctx(), bus)
+    await AppAssemblyAgent().run(_ui_ctx(), bus)
     assert bus.get("app_code") == {
         "main.py": "app = object()",
         "ui.html": "<html></html>",
     }
+
+
+@pytest.mark.asyncio
+async def test_app_assembler_emits_backend_only_for_a_headless_environment():
+    bus = ArtifactBus()
+    await bus.publish("backend_code", {"main.py": "app = object()"})
+
+    # A headless run has no ui_builder, so ui_code is never published. The
+    # assembler must not block on an artifact that will never arrive.
+    await asyncio.wait_for(AppAssemblyAgent().run(_ctx(), bus), timeout=2)
+
+    assert bus.get("app_code") == {"main.py": "app = object()"}
+
+
+@pytest.mark.asyncio
+async def test_planner_builds_a_valid_graph_when_no_ui_builder_is_present():
+    # ui_code has no producer in a headless pipeline; the assembler must
+    # tolerate that rather than failing the plan for a missing dependency.
+    agents = [_BackendStub(), AppAssemblyAgent()]
+
+    plan = PromptPlannerAgent().create_plan(_ctx(), agents)
+
+    assembler = next(task for task in plan.tasks if task.id == "app_assembler")
+    assert assembler.dependencies == ["backend_stub"]
+    assert "ui_code" in assembler.context_keys
+
+
+def test_planner_wires_the_ui_builder_in_when_one_is_present():
+    # False-positive guard: making ui_code optional must not sever the real
+    # dependency edge when a UI builder is in the pipeline.
+    agents = [_BackendStub(), _UIStub(), AppAssemblyAgent()]
+
+    plan = PromptPlannerAgent().create_plan(_ui_ctx(), agents)
+
+    assembler = next(task for task in plan.tasks if task.id == "app_assembler")
+    assert set(assembler.dependencies) == {"backend_stub", "ui_stub"}
 
 
 async def _review_bus(main_py: str, *, include_research: bool = True) -> ArtifactBus:
@@ -221,6 +281,71 @@ async def test_reviewer_rejects_syntax_and_requirement_failures():
     review = bus.get("review_report")
     assert review.approved is False
     assert {issue.category for issue in review.issues} >= {"syntax", "requirements"}
+
+
+async def _headless_review_bus(main_py: str) -> ArtifactBus:
+    """Artifacts a headless generation produces — no ui.html anywhere."""
+    bus = ArtifactBus()
+    await bus.publish("app_code", {
+        "main.py": main_py,
+        "requirements.txt": "fastapi\n",
+        "Dockerfile": "FROM python:3.12-slim\n",
+    })
+    await bus.publish("instrumented_code", {"main.py": main_py})
+    await bus.publish("state_bridge_code", "class ContainerForgeEnv:\n    pass\n")
+    await bus.publish("state_schema_manifest", {"fields": {}})
+    await bus.publish("policy_dsl", "policies: []\n")
+    await bus.publish("reward_fn_code", "def compute_reward(*args):\n    return 0.0\n")
+    return bus
+
+
+_COMPLETE_ROUTES = " ".join((
+    "/forge/health", "/forge/state", "/forge/reset", "/forge/snapshot",
+    "/forge/restore", "/forge/restore-state", "complete_task",
+))
+
+
+@pytest.mark.asyncio
+async def test_reviewer_approves_a_headless_generation_with_no_ui_html():
+    bus = await _headless_review_bus(f"ROUTES = {_COMPLETE_ROUTES!r}\n")
+
+    await ReviewerAgent(semantic_review=False).run(_ctx(), bus)
+
+    assert bus.get("review_report").approved is True
+
+
+@pytest.mark.asyncio
+async def test_reviewer_rejects_a_ui_generation_missing_its_ui_html():
+    # False-positive guard: relaxing the requirement for headless runs must not
+    # relax it for runs that asked for a UI.
+    bus = await _headless_review_bus(f"ROUTES = {_COMPLETE_ROUTES!r}\n")
+
+    await ReviewerAgent(semantic_review=False).run(_ui_ctx(), bus)
+
+    review = bus.get("review_report")
+    assert review.approved is False
+    assert any(issue.artifact == "ui.html" for issue in review.issues)
+
+
+@pytest.mark.asyncio
+async def test_reviewer_still_requires_the_backend_when_headless():
+    # Negative: dropping the UI requirement must not drop the others with it.
+    bus = ArtifactBus()
+    await bus.publish("app_code", {
+        "requirements.txt": "fastapi\n",
+        "Dockerfile": "FROM python:3.12-slim\n",
+    })
+    await bus.publish("instrumented_code", {})
+    await bus.publish("state_bridge_code", "class ContainerForgeEnv:\n    pass\n")
+    await bus.publish("state_schema_manifest", {"fields": {}})
+    await bus.publish("policy_dsl", "policies: []\n")
+    await bus.publish("reward_fn_code", "def compute_reward(*args):\n    return 0.0\n")
+
+    await ReviewerAgent(semantic_review=False).run(_ctx(), bus)
+
+    review = bus.get("review_report")
+    assert review.approved is False
+    assert any(issue.artifact == "main.py" for issue in review.issues)
 
 
 # ---------------------------------------------------------------------------

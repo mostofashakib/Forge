@@ -1095,3 +1095,95 @@ def test_build_cli_task_pulls_image_and_creates_container(client):
         info = client.get("/api/sandbox/cli_task_test").json()
     assert info["status"] == "running"
     assert info["env_type"] == "cli"
+
+
+def test_create_sandbox_defaults_to_a_headless_environment(client):
+    mocks = _mock_create_deps()
+    with mocks[0], mocks[1] as task_delay:
+        response = client.post("/api/sandbox/", json={
+            "env_name": "headless_env",
+            "description": "A ticket queue",
+        })
+
+    assert response.status_code == 202
+    assert task_delay.call_args.kwargs["with_ui"] is False
+
+
+def test_create_sandbox_forwards_an_opt_in_ui_request(client):
+    # False-positive guard: the default must not swallow an explicit request.
+    mocks = _mock_create_deps()
+    with mocks[0], mocks[1] as task_delay:
+        response = client.post("/api/sandbox/", json={
+            "env_name": "ui_env",
+            "description": "A ticket queue",
+            "with_ui": True,
+        })
+
+    assert response.status_code == 202
+    assert task_delay.call_args.kwargs["with_ui"] is True
+
+
+def test_sandbox_response_reports_whether_it_has_a_ui(client):
+    mocks = _mock_create_deps()
+    with mocks[0], mocks[1]:
+        client.post("/api/sandbox/", json={"env_name": "ui_env", "with_ui": True})
+        client.post("/api/sandbox/", json={"env_name": "api_env", "with_ui": False})
+
+    assert client.get("/api/sandbox/ui_env").json()["has_ui"] is True
+    assert client.get("/api/sandbox/api_env").json()["has_ui"] is False
+
+
+def test_init_db_backfills_has_ui_for_pre_toggle_environments(tmp_path, monkeypatch):
+    """Environments created before the UI toggle existed all had a UI."""
+    from sqlalchemy import text
+
+    db_path = tmp_path / "legacy.db"
+    monkeypatch.setenv("FORGE_DB_URL", f"sqlite:///{db_path}")
+    legacy = create_engine(f"sqlite:///{db_path}")
+    with legacy.connect() as conn:
+        conn.execute(text(
+            "CREATE TABLE sandbox_environments ("
+            "id TEXT PRIMARY KEY, status TEXT, container_id TEXT, "
+            "container_port INTEGER, image_tag TEXT, ttl_days INTEGER, "
+            "expires_at DATETIME, created_at DATETIME, "
+            "policy_requirements TEXT, reward_requirements TEXT)"
+        ))
+        conn.execute(text(
+            "INSERT INTO sandbox_environments (id, status, ttl_days) "
+            "VALUES ('legacy_env', 'running', 30)"
+        ))
+        conn.commit()
+    legacy.dispose()
+
+    from backend.app import database
+    database._engine = None
+    database._SessionLocal = None
+    database.init_db()
+
+    with database.get_engine().connect() as conn:
+        row = conn.execute(text(
+            "SELECT has_ui FROM sandbox_environments WHERE id = 'legacy_env'"
+        )).one()
+    assert bool(row[0]) is True
+
+
+def test_premade_environments_always_report_a_ui(client):
+    """The UI toggle only governs generated apps; premade replicas ship one."""
+    mocks = _mock_create_deps()
+    with mocks[0], mocks[1]:
+        client.post("/api/sandbox/", json={
+            "env_name": "gmail_env", "env_type": "premade:gmail",
+        })
+
+    assert client.get("/api/sandbox/gmail_env").json()["has_ui"] is True
+
+
+def test_cli_environments_never_report_a_ui(client):
+    # Negative: a shell environment has no app page even if with_ui is set.
+    mocks = _mock_create_deps()
+    with mocks[0], mocks[1]:
+        client.post("/api/sandbox/", json={
+            "env_name": "shell_env", "env_type": "cli", "with_ui": True,
+        })
+
+    assert client.get("/api/sandbox/shell_env").json()["has_ui"] is False

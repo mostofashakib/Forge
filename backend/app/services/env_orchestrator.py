@@ -37,6 +37,30 @@ def enforce_generation_gates(bus: ArtifactBus) -> None:
         raise GenerationReviewError(correctness)
 
 
+def default_agent_types(
+    *, with_ui: bool, use_user_researcher: bool = False
+) -> list[type[EnvGenAgent]]:
+    """Specialist classes for the built-in generation pipeline.
+
+    Returned as classes rather than instances so composition can be asserted
+    without constructing LLM clients. ``with_ui`` drops the UI specialist
+    entirely for a headless, API-only environment.
+    """
+    return [
+        *([UserResearchAgent] if use_user_researcher else []),
+        BackendBuilderAgent,
+        *([UIBuilderAgent] if with_ui else []),
+        AppAssemblyAgent,
+        TelemetryAgent,
+        StateBridgeAgent,
+        ScenarioBuilderAgent,
+        PolicyAgent,
+        RewardAgent,
+        *([EnvironmentCorrectnessAgent] if determinism_enabled() else []),
+        ReviewerAgent,
+    ]
+
+
 class EnvironmentOrchestrator:
     def __init__(
         self,
@@ -59,6 +83,7 @@ class EnvironmentOrchestrator:
         use_user_researcher: bool = False,
         source_product_name: str = "",
         source_product_url: str = "",
+        with_ui: bool = False,
     ) -> None:
         ctx = EnvGenContext(
             env_name=env_name,
@@ -69,6 +94,7 @@ class EnvironmentOrchestrator:
             reference_urls=reference_urls or [],
             source_product_name=source_product_name,
             source_product_url=source_product_url,
+            with_ui=with_ui,
         )
         bus = ArtifactBus()
         if self._on_progress:
@@ -77,17 +103,10 @@ class EnvironmentOrchestrator:
             bus.on_log(self._on_log)
 
         agents = self._agents or [
-            *([UserResearchAgent()] if use_user_researcher else []),
-            BackendBuilderAgent(),
-            UIBuilderAgent(),
-            AppAssemblyAgent(),
-            TelemetryAgent(),
-            StateBridgeAgent(),
-            ScenarioBuilderAgent(),
-            PolicyAgent(),
-            RewardAgent(),
-            *([EnvironmentCorrectnessAgent()] if determinism_enabled() else []),
-            ReviewerAgent(),
+            agent_type()
+            for agent_type in default_agent_types(
+                with_ui=with_ui, use_user_researcher=use_user_researcher
+            )
         ]
 
         # Explicitly supplied agents retain the open bus used by extensions and

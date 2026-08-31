@@ -590,6 +590,18 @@
   .manual-builder__ttl button { @apply h-[2.625rem] border border-r-0 border-foreground/25 font-mono text-[0.62rem] text-muted-foreground transition-colors last:border-r disabled:opacity-40; }
   .manual-builder__ttl button:hover { @apply border-foreground text-foreground; }
   .manual-builder__ttl button.is-active { @apply border-foreground bg-foreground text-background; }
+  .interface-choice { @apply grid border border-foreground/30 bg-card lg:grid-cols-[14rem_1fr]; box-shadow: 5px 5px 0 oklch(0.20 0.02 62 / 0.11); }
+  .interface-choice__heading { @apply flex gap-3 border-b border-foreground/20 bg-muted/25 p-5 lg:border-b-0 lg:border-r; }
+  .interface-choice__heading > span { @apply font-mono text-[0.58rem] text-primary; }
+  .interface-choice__heading h2 { @apply text-xs font-semibold uppercase tracking-[0.13em]; }
+  .interface-choice__heading p { @apply mt-2 text-[0.68rem] leading-5 text-muted-foreground; }
+  .interface-choice__options { @apply grid gap-4 p-5 sm:grid-cols-2 sm:p-6; }
+  .interface-choice__options button { @apply flex flex-col gap-1.5 border border-foreground/25 p-4 text-left transition-colors disabled:opacity-40; }
+  .interface-choice__options button:hover:not(:disabled) { @apply border-foreground; }
+  .interface-choice__options button strong { @apply text-[0.68rem] font-semibold uppercase tracking-[0.1em]; }
+  .interface-choice__options button small { @apply text-[0.63rem] leading-4 text-muted-foreground; }
+  .interface-choice__options button.is-active { @apply border-foreground bg-foreground text-background; }
+  .interface-choice__options button.is-active small { @apply text-background/70; }
   .custom-builder__submit { @apply flex w-full items-center justify-between bg-primary px-6 py-4 text-xs font-semibold uppercase tracking-[0.14em] text-primary-foreground transition-all disabled:cursor-not-allowed disabled:opacity-40; box-shadow: 5px 5px 0 var(--foreground); }
   .custom-builder__submit:hover:not(:disabled) { @apply -translate-y-0.5 bg-foreground text-background; box-shadow: 7px 7px 0 var(--primary); }
   .custom-builder__estimate { @apply text-center font-mono text-[0.55rem] leading-5 text-muted-foreground; }
