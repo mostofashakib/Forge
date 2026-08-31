@@ -2,6 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
+from forge.contracts import Verifier
 from forge.runtime.errors import VerifierConfigurationError
 from forge.runtime.verification import CheckResult, VerificationResult
 
@@ -28,7 +29,7 @@ class _JudgeCheck:
     threshold: float
 
 
-class LayeredVerifier:
+class LayeredVerifier(Verifier):
     """Five-layer verifier for agent episodes, runnable under VerifierEngine.
 
     Layers run in order:
@@ -170,6 +171,15 @@ class LayeredVerifier:
     # ------------------------------------------------------------------
 
     def __call__(self, state: dict, trajectory, task: dict) -> VerificationResult:
+        """Alias for :meth:`verify`.
+
+        Kept because callers already invoke verifiers as plain callables —
+        `forge/benchmark/_eval.py` is one — and delegates rather than
+        duplicating, so the two entry points cannot drift apart.
+        """
+        return self.verify(state, trajectory, task)
+
+    def verify(self, state: dict, trajectory, task: dict | None) -> VerificationResult:
         checks: list[CheckResult] = []
         for layer in self.LAYERS:
             if layer == "judge":
