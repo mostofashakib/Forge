@@ -447,6 +447,10 @@
   .benchmark-console__progress strong { @apply text-accent; }
   .benchmark-console__track { @apply h-2 overflow-hidden bg-background/10; }
   .benchmark-console__track > div { @apply h-full bg-primary transition-all duration-500; box-shadow: 0 0 14px var(--primary); }
+  .benchmark-eval-result { @apply grid max-h-52 grid-cols-2 overflow-y-auto border-t border-background/15 sm:grid-cols-3; }
+  .benchmark-eval-result > div { @apply border-b border-r border-background/10 p-3; }
+  .benchmark-eval-result span { @apply block font-mono text-[0.48rem] uppercase tracking-wider text-background/38; }
+  .benchmark-eval-result strong { @apply mt-1 block break-all font-mono text-[0.62rem] font-medium text-accent; }
   .benchmark-notice { @apply flex items-center justify-between border p-5; }
   .benchmark-notice p { @apply text-xs font-semibold uppercase tracking-wider; }
   .benchmark-notice span { @apply mt-1 block text-xs opacity-70; }

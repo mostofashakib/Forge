@@ -45,6 +45,8 @@ FRONTEND_PID=""
 CELERY_PID=""
 REDIS_PID=""
 REDIS_TAIL_PID=""
+REDIS_RUNTIME_DIR=""
+REDIS_CONF=""
 
 cleanup() {
   echo ""
@@ -54,6 +56,8 @@ cleanup() {
   [[ -n "$CELERY_PID" ]]     && kill "$CELERY_PID"     2>/dev/null || true
   [[ -n "$REDIS_PID" ]]      && kill "$REDIS_PID"      2>/dev/null || true
   [[ -n "$REDIS_TAIL_PID" ]] && kill "$REDIS_TAIL_PID" 2>/dev/null || true
+  [[ -n "$REDIS_CONF" && -f "$REDIS_CONF" ]] && rm -f "$REDIS_CONF"
+  [[ -n "$REDIS_RUNTIME_DIR" && -d "$REDIS_RUNTIME_DIR" ]] && rmdir "$REDIS_RUNTIME_DIR" 2>/dev/null || true
   if command -v docker &>/dev/null 2>&1; then
     container_ids=$(docker ps -q --filter "label=forge.managed=true" 2>/dev/null || true)
     [[ -n "$container_ids" ]] && echo "$container_ids" | xargs docker stop 2>/dev/null || true
@@ -103,10 +107,37 @@ if ! command -v redis-server &>/dev/null; then
 fi
 
 REDIS_LOG="/tmp/forge-redis.log"
+if [[ -n "${FORGE_REDIS_PASSWORD:-}" ]]; then
+  REDIS_PASSWORD="$FORGE_REDIS_PASSWORD"
+elif command -v openssl &>/dev/null; then
+  REDIS_PASSWORD="$(openssl rand -hex 32)"
+else
+  REDIS_PASSWORD="$("$VENV_DIR/bin/python" -c 'import secrets; print(secrets.token_hex(32))')"
+fi
+if [[ ${#REDIS_PASSWORD} -lt 32 || ! "$REDIS_PASSWORD" =~ ^[0-9A-Fa-f]+$ ]]; then
+  err "FORGE_REDIS_PASSWORD must contain at least 32 hexadecimal characters"
+  exit 1
+fi
+REDIS_RUNTIME_DIR="$(mktemp -d "${TMPDIR:-/tmp}/forge-redis.XXXXXX")"
+chmod 700 "$REDIS_RUNTIME_DIR"
+REDIS_CONF="$REDIS_RUNTIME_DIR/redis.conf"
+{
+  printf 'bind 127.0.0.1\n'
+  printf 'save ""\n'
+  printf 'appendonly no\n'
+  printf 'tcp-backlog 128\n'
+  printf 'daemonize no\n'
+  printf 'loglevel notice\n'
+  printf 'requirepass %s\n' "$REDIS_PASSWORD"
+} >"$REDIS_CONF"
+chmod 600 "$REDIS_CONF"
+
+# The validated hexadecimal password is safe in Redis URL userinfo.
+# Keep one authoritative URL for the API, Celery broker, and result backend.
+FORGE_LOCAL_REDIS_URL="redis://:${REDIS_PASSWORD}@127.0.0.1:6379/0"
+
 log "Starting Redis on port 6379"
-redis-server --bind 127.0.0.1 --save "" --appendonly no \
-  --tcp-backlog 128 \
-  --daemonize no --loglevel notice \
+redis-server "$REDIS_CONF" \
   >"$REDIS_LOG" 2>&1 &
 REDIS_PID=$!
 
@@ -137,6 +168,9 @@ log "Starting backend on ${CYAN}http://localhost:8000${RESET}"
   else
     warn "backend/.env not found — LLM calls will fail without API keys"
   fi
+  export REDIS_URL="$FORGE_LOCAL_REDIS_URL"
+  export CELERY_BROKER_URL="$FORGE_LOCAL_REDIS_URL"
+  export CELERY_RESULT_BACKEND="$FORGE_LOCAL_REDIS_URL"
   # --reload watches CWD by default; restrict it to backend/forge source so
   # that worker output (generated_envs/), git worktrees, build caches, and
   # the frontend don't trigger a backend restart and tear down WebSockets
@@ -169,6 +203,9 @@ log "Starting Celery worker (quiet; errors: $CELERY_LOG)"
     source backend/.env
     set +a
   fi
+  export REDIS_URL="$FORGE_LOCAL_REDIS_URL"
+  export CELERY_BROKER_URL="$FORGE_LOCAL_REDIS_URL"
+  export CELERY_RESULT_BACKEND="$FORGE_LOCAL_REDIS_URL"
   # Worker chatter obscures the interactive backend/frontend output. Keep the
   # terminal quiet while retaining actionable failures for local diagnosis.
   "$VENV_DIR/bin/celery" -A backend.app.worker.celery_app worker \

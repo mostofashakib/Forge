@@ -127,7 +127,7 @@ export default function BenchmarkRunPage() {
       <header className="benchmark-run__hero">
         <div className="benchmark-run__hero-copy">
           <span className="benchmark-run__eyebrow">Evaluation protocol / 01</span>
-          <h1>RUN THE<br /><em>GAUNTLET.</em></h1>
+          <h1>MEASURE THE<br /><em>EDGE.</em></h1>
           <p>Collect episodes across the task suite and turn raw trajectories into quality signals.</p>
         </div>
         <div className="benchmark-run__readout" aria-label="Current run configuration">
