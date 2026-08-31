@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 import gymnasium
 import httpx
+from pydantic import Field
 
 from forge.contracts import (
     Environment,
@@ -90,11 +91,18 @@ class _HttpActionResult(ActionResult):
     a shared, stateful side channel: each call gets its own result, so two
     interleaved ``execute`` calls never race for it the way a `last_response`
     attribute on the backend would.
+
+    ``exclude=True`` keeps `response` out of `model_dump()` /
+    `model_dump(mode="json")` / `model_dump_json()` — an `httpx.Response`
+    isn't JSON-serializable, and nothing that logs or replays an
+    `ActionResult` generically should have to know this one family attaches
+    something extra. The field itself stays a normal attribute, so `.response`
+    is still readable in-process by `step`.
     """
 
     model_config = {"arbitrary_types_allowed": True}
 
-    response: httpx.Response
+    response: httpx.Response = Field(exclude=True)
 
 
 class _HttpExecutionBackend(ExecutionBackend):
