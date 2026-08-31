@@ -14,6 +14,7 @@ __all__ = [
     "RewardBreakdown",
     "RewardComponent",
     "RewardEngine",
+    "ObjectiveScoreRubric",
     "TaskSuccessRubric",
 ]
 
@@ -46,6 +47,31 @@ class TaskSuccessRubric(Rubric):
         return RewardBreakdown(
             total_reward=value,
             components=[RewardComponent(name="task_success", value=value)],
+        )
+
+
+class ObjectiveScoreRubric(Rubric):
+    """Score a controller's objective verdict, with an optional progress floor."""
+
+    def __init__(self, diff_floor: float = 0.0) -> None:
+        self._diff_floor = diff_floor
+
+    def score(self, state, trajectory, verifier_results, task) -> RewardBreakdown:
+        objective_score = max(
+            (result.score for result in verifier_results), default=0.0
+        )
+        metadata = task.metadata if hasattr(task, "metadata") else (task or {})
+        state_changed = bool(metadata.get("state_changed", False))
+        value = max(objective_score, self._diff_floor) if state_changed else objective_score
+        return RewardBreakdown(
+            total_reward=value,
+            components=[
+                RewardComponent(name="objective_score", value=objective_score),
+                RewardComponent(
+                    name="state_change_floor",
+                    value=max(0.0, value - objective_score),
+                ),
+            ],
         )
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json
+from collections.abc import Sequence
 from forge.contracts.prompting import PromptTemplate
 from forge.contracts.types import Observation, Task, ToolSpec
 from forge.runtime.agents.prompts import FORGE_AGENT_PROMPT
@@ -19,11 +20,13 @@ class OpenAIAgent:
         logger=None,
         prompt_template: PromptTemplate | None = None,
         task: Task | None = None,
+        tool_specs: Sequence[ToolSpec] | None = None,
     ) -> None:
         self._model = model
         self.logger = logger
         self._prompt_template = prompt_template
         self._task = task or Task(id="runtime", objective="advance the workflow")
+        self._tool_specs = {spec.name: spec for spec in (tool_specs or ())}
         if client is not None:
             self._client = client
         else:
@@ -60,7 +63,7 @@ class OpenAIAgent:
     def _tools(self, action_types: frozenset[str]) -> list[dict]:
         if self._prompt_template is not None:
             descriptions = self._prompt_template.tool_descriptions(
-                [ToolSpec(name=name) for name in sorted(action_types)]
+                [self._tool_specs.get(name, ToolSpec(name=name)) for name in sorted(action_types)]
             )
             return [
                 {

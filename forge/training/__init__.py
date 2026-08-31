@@ -13,6 +13,12 @@ from forge.training.reward_mapping import (
     dpo_examples,
     grpo_advantages,
 )
+from forge.training.loop import (
+    ExperienceCollector,
+    PolicyIterationConfig,
+    PolicyIterationLoop,
+    PolicyIterationResult,
+)
 from forge.training.trainer import (
     NoTrainingSignalError,
     PolicyTrainer,
@@ -37,4 +43,8 @@ __all__ = [
     "TrainingConfig",
     "TrainingObjective",
     "TrainingResult",
+    "ExperienceCollector",
+    "PolicyIterationConfig",
+    "PolicyIterationLoop",
+    "PolicyIterationResult",
 ]

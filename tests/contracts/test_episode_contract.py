@@ -47,3 +47,25 @@ def test_episode_config_defaults_match_the_documented_thresholds():
     assert config.consecutive_below_threshold == 3
     assert config.dead_end_patience == 5
     assert config.success_threshold == 0.9
+
+
+def test_episode_results_convert_to_the_shared_rollout_contract():
+    result = BaseEpisodeResult(
+        steps=[{
+            "action": {"type": "close"},
+            "reward": 1.0,
+            "terminated": True,
+            "truncated": False,
+        }],
+        total_reward=1.0,
+        termination_reason="success",
+    )
+
+    record = result.to_rollout_record(
+        env_name="support", task_name="close-ticket", seed=7
+    )
+
+    assert record.outcome == "success"
+    assert record.per_step_rewards == [1.0]
+    assert record.steps == 1
+    assert '\"type\": \"close\"' in record.completion

@@ -9,6 +9,7 @@ from forge.contracts import (
     InitialStateProvider,
     Observation,
     ObservationEncoder,
+    Task,
     ToolSpec,
 )
 from forge.contracts.backend import TransitionHandler
@@ -16,6 +17,7 @@ from forge.runtime.env import ForgeEnv
 from forge.runtime.reward import RewardEngine
 from forge.runtime.snapshot import EnvironmentSpec
 from forge.runtime.transition import TransitionEngine, TransitionResult
+from forge.runtime.task_source import StaticTaskSource
 from forge.runtime.verifier import VerifierEngine
 
 
@@ -115,3 +117,20 @@ def test_default_task_and_tools_are_exposed_through_contracts():
 
     assert env.task_source.get("close").objective == "Close the ticket"
     assert env.tools.tools()[0].description == "Close it"
+
+
+def test_reset_selects_tasks_from_the_source_reproducibly():
+    source = StaticTaskSource([
+        Task(id="first", objective="First task"),
+        Task(id="second", objective="Second task"),
+    ])
+    env = _env(task_source=source)
+
+    _obs, first = env.reset(seed=2)
+    _obs, second = env.reset(seed=3)
+    _obs, explicit = env.reset(seed=3, options={"task_id": "first"})
+
+    assert first["task"]["id"] == "first"
+    assert second["task"]["id"] == "second"
+    assert explicit["task"]["id"] == "first"
+    assert env.current_task.id == "first"

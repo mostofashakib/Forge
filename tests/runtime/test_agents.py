@@ -159,3 +159,31 @@ def test_make_agent_openai():
         agent = make_agent("openai:gpt-4o")
         from forge.runtime.agents.openai_agent import OpenAIAgent
         assert isinstance(agent, OpenAIAgent)
+
+
+def test_make_agent_binds_environment_prompt_task_and_tool_schema():
+    from forge.contracts import Task, ToolParam, ToolSpec
+    from forge.runtime.prompting import ForgeAgentPromptTemplate
+    from forge.runtime.task_source import StaticTaskSource
+    from forge.runtime.tools import SpecToolProvider
+
+    class _Environment:
+        prompt = ForgeAgentPromptTemplate()
+        task_source = StaticTaskSource([Task(id="close", objective="Close ticket 42")])
+        tools = SpecToolProvider([
+            ToolSpec(name="close_ticket", params=[ToolParam(name="ticket_id")])
+        ])
+        current_task = None
+
+    client = MagicMock()
+    choice = MagicMock()
+    choice.message.tool_calls = []
+    client.chat.completions.create.return_value.choices = [choice]
+    agent = make_agent("openai:gpt-4o", environment=_Environment(), client=client)
+
+    agent.act({"ticket": 42}, frozenset(["close_ticket"]))
+
+    request = client.chat.completions.create.call_args.kwargs
+    assert "Close ticket 42" in request["messages"][1]["content"]
+    parameters = request["tools"][0]["function"]["parameters"]
+    assert parameters["required"] == ["ticket_id"]

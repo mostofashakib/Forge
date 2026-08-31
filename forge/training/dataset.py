@@ -11,23 +11,11 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from forge.contracts import RolloutRecord
+
 
 class MalformedExportError(ValueError):
     """An export file exists but does not match the expected schema."""
-
-
-@dataclass
-class RolloutRecord:
-    """One graded episode from `grpo_rollouts.parquet`."""
-
-    episode_id: str
-    task_name: str
-    prompt: str
-    completion: str
-    total_reward: float
-    passed: bool
-    per_step_rewards: list[float]
-    env_name: str = ""
 
 
 @dataclass
