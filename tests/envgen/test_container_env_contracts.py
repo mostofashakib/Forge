@@ -2,8 +2,15 @@
 from __future__ import annotations
 
 import httpx
+import pytest
 
-from forge.contracts import Environment, StateManager, Transport, TransportRequest
+from forge.contracts import (
+    Action,
+    Environment,
+    StateManager,
+    Transport,
+    TransportRequest,
+)
 from forge.envgen.container_env_base import ContainerEnvBase
 
 
@@ -96,7 +103,9 @@ def test_the_backend_actually_executes_the_action_over_http():
     # Pins the fix round 1 defect: `backend.execute` used to echo the input
     # state back unchanged without touching the network at all. It must
     # really POST the action and hand back the state GET /forge/state
-    # returns afterward.
+    # returns afterward. Called with a real `Action`, the way the
+    # `ExecutionBackend` contract declares — not the dict `step()` happens to
+    # hand it internally.
     calls: list[str] = []
     state = {"tickets": []}
 
@@ -112,17 +121,28 @@ def test_the_backend_actually_executes_the_action_over_http():
     client = httpx.Client(transport=httpx.MockTransport(handler))
     env = ContainerEnvBase("http://env", client=client)
 
-    result = env.backend.execute({"type": "close_ticket"}, {}, None)
+    result = env.backend.execute(Action(type="close_ticket"), {}, None)
 
     assert calls == ["/close_ticket", "/forge/state"]
     assert result.state == {"tickets": ["closed"]}
+
+
+def test_the_backend_rejects_a_plain_dict_because_it_takes_a_typed_action():
+    # Pins the fix round 2 defect directly: calling `execute` through its own
+    # declared contract (`action: Action`) must work; a plain dict is not
+    # that contract, even though `step()` happens to hold one internally.
+    env = _env()
+
+    with pytest.raises(AttributeError):
+        env.backend.execute({"type": "close_ticket"}, {}, None)
 
 
 def test_a_subclass_action_endpoint_override_is_honored_by_the_backend():
     # False-positive guard: the backend must route through the env's own
     # action_endpoint hook rather than a hardcoded default, or a subclass's
     # routing customization would silently stop applying once behind the
-    # facade.
+    # facade. `action_endpoint` itself still receives a plain dict — only the
+    # backend's own `execute` boundary takes the typed `Action`.
     calls: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -140,6 +160,18 @@ def test_a_subclass_action_endpoint_override_is_honored_by_the_backend():
     client = httpx.Client(transport=httpx.MockTransport(handler))
     env = TodoEnv("http://env", client=client)
 
-    env.backend.execute({"type": "anything"}, {}, None)
+    env.backend.execute(Action(type="anything"), {}, None)
 
     assert calls[0] == "/create_todo"
+
+
+def test_step_still_works_with_a_plain_dict_action():
+    # False-positive guard: converting to Action at the backend boundary must
+    # not break step()'s public, dict-based entry point.
+    env = _env()
+    env.reset()
+    obs, reward, terminated, truncated, info = env.step(
+        {"type": "close_ticket", "note": "done"}
+    )
+    assert info["status_code"] == 200
+    assert reward == 1.0
