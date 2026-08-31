@@ -4,6 +4,7 @@ import functools
 from typing import TYPE_CHECKING, Callable
 
 from forge.contracts import RewardBreakdown, RewardComponent, Rubric
+from forge.runtime._signature import require_arity
 
 if TYPE_CHECKING:
     from forge.runtime.trajectory import Trajectory
@@ -21,6 +22,9 @@ class FunctionRubric(Rubric):
     """Adapts a plain `(state, trajectory, verifier_results, task)` callable."""
 
     def __init__(self, fn: Callable) -> None:
+        require_arity(
+            fn, "FunctionRubric", ("state", "trajectory", "verifier_results", "task")
+        )
         self._fn = fn
         functools.update_wrapper(self, fn, updated=())
 
@@ -43,6 +47,11 @@ class TaskSuccessRubric(Rubric):
             total_reward=value,
             components=[RewardComponent(name="task_success", value=value)],
         )
+
+
+# One instance, not a fresh one per compute() call: the default rubric is
+# stateless, so there is nothing to allocate per episode step.
+_TASK_SUCCESS = TaskSuccessRubric()
 
 
 class RewardEngine:
@@ -75,5 +84,11 @@ class RewardEngine:
     ) -> RewardBreakdown:
         task_name = task.get("name") if task else None
         rubric = self._task_rubrics.get(task_name) if task_name else None
-        rubric = rubric or self._default or TaskSuccessRubric()
+        # Explicit `is None`, not truthiness: a Rubric is a user-supplied object
+        # and may define __bool__ or __len__ (e.g. over its components), which
+        # would otherwise silently fall through to the default.
+        if rubric is None:
+            rubric = self._default
+        if rubric is None:
+            rubric = _TASK_SUCCESS
         return rubric.score(state, trajectory, verifier_results, task)

@@ -1,6 +1,8 @@
 """Registries must reject non-conforming handlers at registration time."""
 from __future__ import annotations
 
+import functools
+
 import pytest
 
 from forge.contracts import Action, RewardBreakdown, RewardComponent, Rubric, Verifier
@@ -107,3 +109,94 @@ def test_a_wrapped_rubric_overrides_the_default_for_its_task():
     assert scored.components[0].name == "custom"
     # Negative: a task with no registered rubric still falls back to the default.
     assert engine.compute({}, None, [_Passed()], {"name": "other"}).total_reward == 1.0
+
+
+# ---------------------------------------------------------------------------
+# Arity: isinstance proves kind, not shape. The adapters are where a plain
+# callable enters the typed world, so a wrong-signature function must be
+# rejected there — at build time, not mid-rollout.
+# ---------------------------------------------------------------------------
+
+def test_a_wrong_arity_transition_function_is_rejected_when_wrapped():
+    with pytest.raises(TypeError, match="FunctionTransitionHandler"):
+        FunctionTransitionHandler(lambda state, action: state)
+
+
+def test_a_wrong_arity_verifier_function_is_rejected_when_wrapped():
+    with pytest.raises(TypeError, match="FunctionVerifier"):
+        FunctionVerifier(lambda state: None)
+
+
+def test_a_wrong_arity_rubric_function_is_rejected_when_wrapped():
+    with pytest.raises(TypeError, match="FunctionRubric"):
+        FunctionRubric(lambda state, trajectory, verifier_results: None)
+
+
+def test_a_correct_arity_function_is_accepted_by_every_adapter():
+    # False-positive guard: the arity check must not reject the ordinary shape.
+    assert FunctionTransitionHandler(lambda state, action, ctx: None)
+    assert FunctionVerifier(lambda state, trajectory, task: None)
+    assert FunctionRubric(lambda state, trajectory, verifier_results, task: None)
+
+
+def test_varargs_and_defaults_are_accepted():
+    # False-positive guard: *args and trailing defaults are legitimate ways to
+    # write a handler; a raw parameter count would wrongly reject both.
+    assert FunctionTransitionHandler(lambda *args: None)
+    assert FunctionVerifier(lambda state, trajectory, task=None: None)
+    assert FunctionRubric(lambda state, trajectory, verifier_results, task=None: None)
+
+
+def test_a_partial_supplying_leading_arguments_is_accepted():
+    # False-positive guard: functools.partial is how authors bind config into a
+    # handler. The bound arguments are gone from the signature, so what remains
+    # must be what is checked.
+    def _handler(config, state, action, ctx):
+        return TransitionResult(state={"cfg": config}, events=[])
+
+    handler = FunctionTransitionHandler(functools.partial(_handler, "cfg_a"))
+    assert handler.apply({}, Action(type="close_ticket"), None).state == {"cfg": "cfg_a"}
+
+
+def test_a_bound_method_is_accepted():
+    # False-positive guard: `self` is already bound, so the visible arity is 3.
+    class _Handlers:
+        def close(self, state, action, ctx):
+            return TransitionResult(state={"closed": True}, events=[])
+
+    handler = FunctionTransitionHandler(_Handlers().close)
+    assert handler.apply({}, Action(type="close_ticket"), None).state == {"closed": True}
+
+
+def test_the_arity_error_names_the_expected_signature():
+    with pytest.raises(TypeError) as exc_info:
+        FunctionRubric(lambda state: None)
+    message = str(exc_info.value)
+    assert "state, trajectory, verifier_results, task" in message
+
+
+def test_a_falsy_rubric_is_still_the_rubric_that_runs():
+    # A Rubric is a user-supplied object and may define __bool__ — resolving it
+    # by truthiness would silently discard it and score the default instead.
+    class _FalsyRubric(Rubric):
+        def __bool__(self) -> bool:
+            return False
+
+        def score(self, state, trajectory, verifier_results, task):
+            return RewardBreakdown(
+                total_reward=0.25,
+                components=[RewardComponent(name="falsy", value=0.25)],
+            )
+
+    class _Passed:
+        passed = True
+
+    default_engine = RewardEngine()
+    default_engine.set_default(_FalsyRubric())
+    scored = default_engine.compute({}, None, [_Passed()], None)
+    assert scored.total_reward == 0.25
+    assert scored.components[0].name == "falsy"
+
+    task_engine = RewardEngine()
+    task_engine.register("t1", _FalsyRubric())
+    assert task_engine.compute({}, None, [_Passed()], {"name": "t1"}).total_reward == 0.25
