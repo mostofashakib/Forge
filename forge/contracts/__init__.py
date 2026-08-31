@@ -8,6 +8,12 @@ from the outside — the same environment may be run by different controllers.
 """
 from forge.contracts.backend import ExecutionBackend, TransitionHandler
 from forge.contracts.dataset import TaskSource
+from forge.contracts.episode import (
+    BaseEpisodeConfig,
+    BaseEpisodeResult,
+    EpisodeController,
+    TrajectoryWriter,
+)
 from forge.contracts.initial_state import InitialStateProvider
 from forge.contracts.observation import ObservationEncoder
 from forge.contracts.prompting import PromptTemplate
@@ -36,7 +42,10 @@ __all__ = [
     "Action",
     "ActionResult",
     "AgentAdapter",
+    "BaseEpisodeConfig",
+    "BaseEpisodeResult",
     "CheckResult",
+    "EpisodeController",
     "ExecutionBackend",
     "InitialStateProvider",
     "Observation",
@@ -54,6 +63,7 @@ __all__ = [
     "ToolParam",
     "ToolProvider",
     "ToolSpec",
+    "TrajectoryWriter",
     "TransitionHandler",
     "Transport",
     "TransportRequest",
