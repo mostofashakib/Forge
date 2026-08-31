@@ -186,3 +186,6 @@ class BenchmarkRun(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     report_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    kind: Mapped[str] = mapped_column(String, default="benchmark")
+    engine: Mapped[str] = mapped_column(String, default="forge")
+    config_json: Mapped[str | None] = mapped_column(Text, nullable=True)
