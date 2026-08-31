@@ -1,0 +1,34 @@
+[
+  {
+    "task_id": "custom_slack_search",
+    "environment_name": "slack",
+    "instruction": "Search Alice incident messages.",
+    "acting_user_id": "U002",
+    "steps": [
+      {
+        "thought": "Search Alice incident messages.",
+        "tool_name": "search_messages",
+        "input_payload": {
+          "query": "alice incidents"
+        }
+      }
+    ],
+    "final_answer": "searched",
+    "expected_answer": "searched"
+  },
+  {
+    "task_id": "custom_task_list",
+    "environment_name": "task_manager",
+    "instruction": "List tasks.",
+    "acting_user_id": "__admin__",
+    "steps": [
+      {
+        "thought": "Inspect tasks.",
+        "tool_name": "list_tasks",
+        "input_payload": {}
+      }
+    ],
+    "final_answer": "listed",
+    "expected_answer": "listed"
+  }
+]
