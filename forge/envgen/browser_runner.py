@@ -7,6 +7,7 @@ from functools import partial
 from datetime import datetime, timezone
 from pathlib import Path
 
+from forge.contracts import EpisodeController
 from forge.envgen.episode_base import (
     BaseEpisodeConfig,
     BaseEpisodeResult,
@@ -31,7 +32,7 @@ class BrowserEpisodeResult(BaseEpisodeResult):
     pass
 
 
-class BrowserEpisodeRunner:
+class BrowserEpisodeRunner(EpisodeController):
     def __init__(self, config: BrowserEpisodeConfig, scorer: ObjectiveScorer | None = None) -> None:
         self._cfg = config
         self._scorer = scorer or ObjectiveScorer()
@@ -107,9 +108,20 @@ class BrowserEpisodeRunner:
         elif atype == "scroll":
             page.mouse.wheel(action.get("delta_x", 0), action.get("delta_y", 0))
 
-    def run_episode(self, agent, episode_id: str | None = None, jsonl_path: Path | None = None) -> BrowserEpisodeResult:
+    def run_episode(
+        self,
+        agent,
+        *,
+        episode_id: str | None = None,
+        seed: int | None = None,
+        jsonl_path: Path | None = None,
+    ) -> BrowserEpisodeResult:
         from playwright.sync_api import sync_playwright
 
+        # A browser session has no seeded reset: the loaded page is its
+        # initial state. The keyword is accepted for a uniform controller
+        # signature and deliberately unused.
+        del seed
         result = BrowserEpisodeResult()
 
         if not self._wait_for_cdp():

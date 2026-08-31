@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from forge.contracts import EpisodeController
 from forge.envgen.episode_base import (
     BaseEpisodeConfig,
     BaseEpisodeResult,
@@ -50,7 +51,7 @@ class CliEpisodeResult(BaseEpisodeResult):
         }
 
 
-class CliEpisodeRunner:
+class CliEpisodeRunner(EpisodeController):
     def __init__(
         self,
         config: CliEpisodeConfig,
@@ -99,7 +100,18 @@ class CliEpisodeRunner:
             "recent_history": self._history[-5:],
         }
 
-    def run_episode(self, agent, episode_id: str | None = None, jsonl_path: Path | None = None) -> CliEpisodeResult:
+    def run_episode(
+        self,
+        agent,
+        *,
+        episode_id: str | None = None,
+        seed: int | None = None,
+        jsonl_path: Path | None = None,
+    ) -> CliEpisodeResult:
+        # A CLI sandbox has no seeded reset: the container's filesystem is its
+        # initial state. The keyword is accepted for a uniform controller
+        # signature and deliberately unused.
+        del seed
         result = CliEpisodeResult()
 
         # Tier 1: derive an end-state spec from the natural-language objective.
