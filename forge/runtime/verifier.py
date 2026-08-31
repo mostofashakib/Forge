@@ -4,6 +4,7 @@ import functools
 from typing import Callable
 
 from forge.contracts import Verifier
+from forge.runtime._signature import require_arity
 from forge.runtime.verification import VerificationResult
 
 
@@ -11,6 +12,7 @@ class FunctionVerifier(Verifier):
     """Adapts a plain `(state, trajectory, task) -> VerificationResult` callable."""
 
     def __init__(self, fn: Callable) -> None:
+        require_arity(fn, "FunctionVerifier", ("state", "trajectory", "task"))
         self._fn = fn
         functools.update_wrapper(self, fn, updated=())
 

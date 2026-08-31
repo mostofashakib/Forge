@@ -336,7 +336,7 @@ class EnvBuilder:
             ve.register(verifier_id, _as_verifier(fn))
 
         re = RewardEngine()
-        if self._default_reward:
+        if self._default_reward is not None:
             re.set_default(_as_rubric(self._default_reward))
         for task_name, fn in self._task_rewards.items():
             re.register(task_name, _as_rubric(fn))

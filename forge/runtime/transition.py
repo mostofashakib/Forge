@@ -6,6 +6,7 @@ from typing import Callable
 
 from forge.contracts import Action
 from forge.contracts.backend import TransitionHandler
+from forge.runtime._signature import require_arity
 from forge.runtime.context import RuntimeContext
 from forge.runtime.snapshot import InvalidActionError
 
@@ -26,6 +27,9 @@ class FunctionTransitionHandler(TransitionHandler):
     """
 
     def __init__(self, fn: Callable) -> None:
+        # The registry can only check kind; arity is knowable here, so a
+        # mis-declared handler fails at decoration/build time, not mid-episode.
+        require_arity(fn, "FunctionTransitionHandler", ("state", "action", "ctx"))
         self._fn = fn
         # Carry the author's name/doc onto the adapter so tracebacks and
         # registry introspection still identify the original function.
