@@ -150,6 +150,114 @@ def test_intermediate_rubric_subclass_not_defining_method_stays_abstract():
         IntermediateRubric()
 
 
+# --- Decorator forms and MRO resolution (fix round 1) ----------------------
+#
+# Round 1 review found three gaps, all in how the method was located and
+# introspected rather than in the bind-based check itself:
+#   1. `inspect.signature()` raises TypeError on a raw `classmethod`
+#      descriptor, which the old code's fallback silently treated as
+#      "not introspectable, accept" — reopening the exact defect this task
+#      closes for `@classmethod`-shaped subclasses.
+#   2. The old code always assumed an implicit `self`, so a correct
+#      `@staticmethod` (no implicit first argument) was wrongly rejected.
+#   3. The old code read only `cls.__dict__`, so a concrete method arriving
+#      from a mixin base (not `cls` itself) bypassed the check entirely,
+#      even though `@abstractmethod` considers it satisfied and the class
+#      instantiates.
+
+
+def test_transition_handler_wrong_arity_classmethod_apply_raises_at_class_definition():
+    with pytest.raises(TypeError) as exc_info:
+
+        class BadClassmethodHandler(TransitionHandler):
+            @classmethod
+            def apply(cls, state):
+                return state
+
+    message = str(exc_info.value)
+    assert "BadClassmethodHandler" in message
+    assert "apply" in message
+    assert "state, action, ctx" in message
+
+
+def test_transition_handler_wrong_arity_staticmethod_apply_raises_at_class_definition():
+    with pytest.raises(TypeError) as exc_info:
+
+        class BadStaticmethodHandler(TransitionHandler):
+            @staticmethod
+            def apply(state):
+                return state
+
+    message = str(exc_info.value)
+    assert "BadStaticmethodHandler" in message
+    assert "apply" in message
+    assert "state, action, ctx" in message
+
+
+def test_wrong_arity_method_from_mixin_base_raises_at_class_definition():
+    class _BadMixin:
+        def apply(self, state):
+            return state
+
+    with pytest.raises(TypeError) as exc_info:
+
+        class BadMixinHandler(_BadMixin, TransitionHandler):
+            """Supplies no `apply` of its own; inherits the mixin's."""
+
+    message = str(exc_info.value)
+    assert "BadMixinHandler" in message
+    assert "apply" in message
+    assert "state, action, ctx" in message
+
+
+def test_correct_staticmethod_apply_defines_without_error():
+    class GoodStaticmethodHandler(TransitionHandler):
+        @staticmethod
+        def apply(state, action, ctx):
+            return state
+
+    assert GoodStaticmethodHandler is not None
+    # And it behaves the way the engine actually calls it: instance.apply(...).
+    assert GoodStaticmethodHandler().apply({"n": 1}, None, None) == {"n": 1}
+
+
+def test_correct_classmethod_apply_defines_without_error():
+    class GoodClassmethodHandler(TransitionHandler):
+        @classmethod
+        def apply(cls, state, action, ctx):
+            return state
+
+    assert GoodClassmethodHandler is not None
+    assert GoodClassmethodHandler().apply({"n": 1}, None, None) == {"n": 1}
+
+
+def test_correct_method_from_mixin_base_defines_without_error():
+    class _GoodMixin:
+        def apply(self, state, action, ctx):
+            return state
+
+    class GoodMixinHandler(_GoodMixin, TransitionHandler):
+        """Supplies no `apply` of its own; inherits the mixin's correct one."""
+
+    assert GoodMixinHandler is not None
+    assert GoodMixinHandler().apply({"n": 1}, None, None) == {"n": 1}
+
+
+def test_subclass_inheriting_correct_concrete_apply_from_parent_defines_without_error():
+    # Not a mixin: a plain single-inheritance chain where the child adds
+    # nothing. `apply` is resolved through `getattr`, so this must not be
+    # treated any differently from the mixin case above.
+    class BaseHandler(TransitionHandler):
+        def apply(self, state, action, ctx):
+            return state
+
+    class ChildHandler(BaseHandler):
+        """Defines nothing new; inherits the correct concrete `apply`."""
+
+    assert ChildHandler is not None
+    assert ChildHandler().apply({"n": 1}, None, None) == {"n": 1}
+
+
 # --- Real in-tree implementations must still define cleanly ----------------
 
 
