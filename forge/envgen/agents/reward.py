@@ -34,10 +34,12 @@ _SYSTEM = (
     "Import RewardBreakdown and RewardComponent from forge.runtime.reward.\n"
     "Base the logic on the user's requirements. Return a complete Python file.\n"
     "\n"
-    "This mirrors the forge.contracts.Rubric contract: a Rubric subclass implements\n"
+    "Forge wraps compute_reward in a thin forge.contracts.Rubric subclass whose\n"
     "  def score(self, state, trajectory, verifier_results, task) -> RewardBreakdown\n"
-    "with exactly these parameter names — Rubric subclasses are arity-checked at class\n"
-    "definition time, so the names and count must match exactly.\n"
+    "delegates straight to compute_reward(state, trajectory, verifier_results, task).\n"
+    "Keep compute_reward's four parameters in this order so the delegation lines up —\n"
+    "Rubric subclasses are arity-checked at class definition time (parameter count and\n"
+    "positional shape, not names), so a mismatched count breaks the wrapper at import time.\n"
     "Call the extract tool with the result."
 )
 

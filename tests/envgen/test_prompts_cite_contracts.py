@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import inspect
+import re
 
 from forge.contracts.reward import Rubric
 from forge.envgen.agents.app_generator import AppGeneratorPrompts
@@ -54,7 +55,14 @@ def test_reward_prompt_does_not_mention_unrelated_contracts():
 def test_reward_prompt_signature_matches_the_real_rubric_score_signature():
     """Accuracy guard: introspect the real Rubric.score signature and assert
     every one of its parameter names appears in the prompt's `def score(`
-    line, so the prompt cannot silently drift from the contract."""
+    line, so the prompt cannot silently drift from the contract.
+
+    Uses a word-boundary regex rather than plain substring containment: a
+    substring check is blind to one rename direction — if `verifier_results`
+    were renamed to `results`, the new name `results` is itself a substring
+    of the stale prompt text `verifier_results`, so plain `in` would keep
+    passing against a prompt that no longer matches the real contract.
+    """
     real_params = list(inspect.signature(Rubric.score).parameters)
     assert real_params[0] == "self"
 
@@ -66,7 +74,7 @@ def test_reward_prompt_signature_matches_the_real_rubric_score_signature():
     for param in real_params:
         if param == "self":
             continue
-        assert param in score_line, (
+        assert re.search(rf"\b{re.escape(param)}\b", score_line), (
             f"prompt's `def score(` line is missing real parameter {param!r}: "
             f"{score_line!r}"
         )
