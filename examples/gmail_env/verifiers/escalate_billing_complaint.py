@@ -1,4 +1,4 @@
-from forge.runtime.verification import CheckResult, VerificationResult
+from forge.contracts import CheckResult, Verifier, VerificationResult
 
 
 def verify_escalate_billing_complaint(state: dict, trajectory, task: dict) -> VerificationResult:
@@ -15,3 +15,8 @@ def verify_escalate_billing_complaint(state: dict, trajectory, task: dict) -> Ve
             evidence=None if passed else f"Thread '{thread_id}' has not been escalated.",
         )],
     )
+
+
+class EscalateBillingComplaintVerifier(Verifier):
+    def verify(self, state: dict, trajectory, task) -> VerificationResult:
+        return verify_escalate_billing_complaint(state, trajectory, task)
