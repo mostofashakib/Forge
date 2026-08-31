@@ -8,6 +8,7 @@ from the outside — the same environment may be run by different controllers.
 """
 from forge.contracts.backend import ExecutionBackend, TransitionHandler
 from forge.contracts.dataset import TaskSource
+from forge.contracts.environment import Environment
 from forge.contracts.episode import (
     BaseEpisodeConfig,
     BaseEpisodeResult,
@@ -45,6 +46,7 @@ __all__ = [
     "BaseEpisodeConfig",
     "BaseEpisodeResult",
     "CheckResult",
+    "Environment",
     "EpisodeController",
     "ExecutionBackend",
     "InitialStateProvider",
