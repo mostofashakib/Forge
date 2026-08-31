@@ -1,0 +1,5 @@
+services:
+  main:
+    build:
+      context: ../..
+      dockerfile: slack_task_2/environment/Dockerfile

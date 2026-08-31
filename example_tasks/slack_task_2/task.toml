@@ -1,0 +1,48 @@
+schema_version = "1.3"
+artifacts = ["/logs/agent/trajectory.json", "/logs/agent/trajectory.txt"]
+
+[task]
+name = "forge/slack-task-2"
+description = "Resolve a channel/group name collision while creating and renaming a group, posting to a channel, replying in a thread, reacting to the reply, and returning the new group ID."
+authors = []
+keywords = ["slack", "sqlite", "tool-use", "deterministic", "harbor"]
+
+[metadata]
+difficulty_explanation = "The public channel and newly created group share the name security-alerts. The agent must preserve entity identity across multiple operations, react to the reply it created, rename the correct group, and return that group's ID."
+category = "agent-environment"
+environment_service = "slack"
+database = "sqlite"
+
+[verifier]
+timeout_sec = 120.0
+environment_mode = "separate"
+user = "root"
+
+[agent]
+timeout_sec = 600.0
+user = "agent"
+
+[verifier.environment]
+network_mode = "no-network"
+build_timeout_sec = 600.0
+os = "linux"
+cpus = 1
+memory_mb = 1024
+storage_mb = 2048
+
+[verifier.environment.env]
+PYTHONPATH = "/opt/fleet"
+
+[environment]
+network_mode = "public"
+build_timeout_sec = 600.0
+os = "linux"
+cpus = 1
+memory_mb = 1024
+storage_mb = 4096
+mcp_servers = []
+
+[environment.env]
+PYTHONPATH = "/opt/fleet"
+
+[solution.env]
