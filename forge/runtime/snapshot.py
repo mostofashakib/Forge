@@ -1,6 +1,7 @@
 from __future__ import annotations
 from pydantic import BaseModel
 
+from forge.contracts.types import ToolParam, ToolSpec  # noqa: F401
 from forge.runtime.errors import InvalidActionError
 
 __all__ = [
@@ -10,21 +11,6 @@ __all__ = [
     "EnvironmentSpec",
     "StepSnapshot",
 ]
-
-
-class ToolParam(BaseModel):
-    name: str
-    type: str = "string"
-    description: str = ""
-    required: bool = True
-
-
-class ToolSpec(BaseModel):
-    """Schema describing one tool an agent may call — the env's tool use surface."""
-
-    name: str
-    description: str = ""
-    params: list[ToolParam] = []
 
 
 class EnvironmentSpec(BaseModel):

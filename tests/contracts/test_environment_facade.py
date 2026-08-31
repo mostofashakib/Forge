@@ -24,7 +24,6 @@ from forge.contracts import (
     TerminationPolicy,
     ToolProvider,
     ToolSpec,
-    VerificationResult,
 )
 
 
