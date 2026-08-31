@@ -37,6 +37,7 @@ class Episode(Base):
     total_steps: Mapped[int] = mapped_column(Integer, default=0)
     total_reward: Mapped[float] = mapped_column(Float, default=0.0)
     passed: Mapped[bool] = mapped_column(Boolean, default=False)
+    termination_reason: Mapped[str] = mapped_column(String, default="unknown")
     started_at: Mapped[datetime] = mapped_column(DateTime)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     jsonl_path: Mapped[str | None] = mapped_column(String, nullable=True)

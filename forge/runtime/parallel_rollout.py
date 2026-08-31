@@ -77,6 +77,10 @@ class ParallelRolloutRunner:
         steps = 0
         invalid_actions = 0
         terminated = truncated = False
+        passed = False
+        termination_reason = "unknown"
+        verification_results: list[dict] = []
+        reward_breakdown: dict = {}
         error: str | None = None
 
         env = self._env_factory()
@@ -93,6 +97,11 @@ class ParallelRolloutRunner:
                 if "error" in step_info:
                     invalid_actions += 1
                 if terminated or truncated:
+                    passed = bool(step_info.get("passed", False))
+                    termination_reason = step_info.get("termination_reason") or "unknown"
+                    verification_results = step_info.get("verifier_results", [])
+                    reward_breakdown = step_info.get("reward_breakdown", {})
+                if terminated or truncated:
                     break
         except Exception as exc:
             error = repr(exc)
@@ -102,22 +111,26 @@ class ParallelRolloutRunner:
         return RolloutRecord(
             seed=spec.seed,
             episode_id=episode_id or f"rollout-{spec.seed}",
-            outcome=self._classify(terminated, total_reward, invalid_actions, error),
+            outcome=self._classify(passed, total_reward, invalid_actions, error),
             total_reward=total_reward,
             steps=steps,
             terminated=terminated,
             truncated=truncated,
             invalid_actions=invalid_actions,
             error=error,
+            passed=passed,
+            termination_reason=termination_reason,
+            verification_results=verification_results,
+            reward_breakdown=reward_breakdown,
         )
 
     @staticmethod
     def _classify(
-        terminated: bool, total_reward: float, invalid_actions: int, error: str | None
+        passed: bool, total_reward: float, invalid_actions: int, error: str | None
     ) -> str:
         if error is not None:
             return "edge_case"
-        if terminated:
+        if passed:
             return "success"
         if invalid_actions > 0:
             return "edge_case"

@@ -32,3 +32,7 @@ class RolloutRecord(BaseModel):
     truncated: bool = False
     invalid_actions: int = 0
     error: str | None = None
+    behavior_model: str = ""
+    termination_reason: str = "unknown"
+    verification_results: list[dict] = Field(default_factory=list)
+    reward_breakdown: dict = Field(default_factory=dict)

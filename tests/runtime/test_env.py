@@ -69,12 +69,18 @@ def test_step_returns_five_tuple():
     assert isinstance(reward, float)
 
 
-def test_task_completion_terminates_episode():
+def test_task_completion_is_graded_only_after_submit():
     env = build_env()
     task = {"name": "reach_1", "verifier_id": "check_counter", "inputs": {"target": 1}}
     env.reset(seed=1, options={"task": task})
-    _, _, terminated, _, _ = env.step({"type": "increment"})
+    _, reward, terminated, _, info = env.step({"type": "increment"})
+    assert terminated is False
+    assert reward == 0.0
+    assert "verifier_results" not in info
+    _, reward, terminated, _, info = env.step({"type": "submit"})
     assert terminated is True
+    assert reward == 1.0
+    assert info["passed"] is True
 
 
 def test_invalid_action_does_not_mutate_state():
@@ -131,14 +137,15 @@ def test_invalid_action_count_in_task_dict_passed_to_reward():
 
     def capturing_reward(state, trajectory, verifier_results, task=None):
         received_task.update(task or {})
-        from forge.runtime.reward import RewardBreakdown, RewardComponent
+        from forge.runtime.reward import RewardBreakdown
         return RewardBreakdown(total_reward=0.0, components=[])
 
     env = build_env()
     env._reward_engine.set_default(FunctionRubric(capturing_reward))
     env.reset(seed=1)
     env.step({"type": "nonexistent_action"})  # invalid — increments count
-    env.step({"type": "increment"})           # valid step — reward is called
+    env.step({"type": "increment"})
+    env.step({"type": "submit"})              # finalization calls the rubric
     assert received_task.get("invalid_action_count") == 1
 
 
@@ -152,8 +159,13 @@ class MockTelemetry:
     def record_step(self, snapshot):
         self.steps.append(snapshot)
 
-    def complete_episode(self, total_reward, passed, total_steps):
-        self.completions.append({"total_reward": total_reward, "passed": passed, "total_steps": total_steps})
+    def complete_episode(self, total_reward, passed, total_steps, termination_reason="unknown"):
+        self.completions.append({
+            "total_reward": total_reward,
+            "passed": passed,
+            "total_steps": total_steps,
+            "termination_reason": termination_reason,
+        })
 
 
 def build_env_with_telemetry(telemetry, max_steps: int = 10) -> ForgeEnv:

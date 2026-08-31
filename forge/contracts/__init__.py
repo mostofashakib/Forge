@@ -15,6 +15,7 @@ from forge.contracts.episode import (
     EpisodeController,
     TrajectoryWriter,
 )
+from forge.contracts.evaluation import EpisodeEvaluation
 from forge.contracts.initial_state import InitialStateProvider
 from forge.contracts.observation import ObservationEncoder
 from forge.contracts.prompting import PromptTemplate
@@ -23,6 +24,7 @@ from forge.contracts.rollout import RolloutOutcome, RolloutRecord
 from forge.contracts.state import StateManager
 from forge.contracts.termination import (
     CompositeTerminationPolicy,
+    DeadEndTerminationPolicy,
     MaxStepsTerminationPolicy,
     TerminationMonitor,
     TerminationPolicy,
@@ -55,8 +57,10 @@ __all__ = [
     "BaseEpisodeResult",
     "CheckResult",
     "CompositeTerminationPolicy",
+    "DeadEndTerminationPolicy",
     "Environment",
     "EpisodeController",
+    "EpisodeEvaluation",
     "ExecutionBackend",
     "InitialStateProvider",
     "MaxStepsTerminationPolicy",

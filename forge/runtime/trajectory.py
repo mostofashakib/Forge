@@ -43,6 +43,13 @@ class TrajectoryStore:
             traj = _TrajectoryWithExtraEvents(traj, current_events)
         return traj
 
+    def to_trajectory_with_step(self, current_step: StepSnapshot) -> Trajectory:
+        """Return the recorded trajectory plus one not-yet-committed step."""
+        return Trajectory(
+            episode_id=self.episode_id,
+            steps=[*self._steps, current_step],
+        )
+
     def to_jsonl(self) -> str:
         return "\n".join(step.model_dump_json() for step in self._steps)
 

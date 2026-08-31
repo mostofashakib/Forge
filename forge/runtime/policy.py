@@ -12,7 +12,8 @@ def seeded_random_policy(seed: int | None) -> Callable[[dict, frozenset], dict]:
     rng = random.Random(seed)
 
     def policy(obs: dict, action_types: frozenset) -> dict:
-        return {"type": rng.choice(sorted(action_types))}
+        domain_actions = sorted(action_types - {"submit"})
+        return {"type": rng.choice(domain_actions or sorted(action_types))}
 
     return policy
 
