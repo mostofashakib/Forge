@@ -1,7 +1,7 @@
 """Root-test-only Harbor verifier checks.
 
 These intentionally do not import task-local ``slack_task_*/tests/check.py`` so
-the repository tests verify Harbor plumbing independently from task verifier
+the Forge test suite verifies Harbor plumbing independently from task verifier
 implementations. Generic checks come from the shared verifier library
 (:mod:`fleet.verifiers.verifier_specs.slack`); only checks with no shared
 equivalent are defined here.
