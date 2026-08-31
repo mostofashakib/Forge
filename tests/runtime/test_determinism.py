@@ -4,9 +4,13 @@ import itertools
 import pytest
 from forge.runtime.determinism import DeterminismError, run_determinism_check
 from forge.runtime.env import ForgeEnv
-from forge.runtime.reward import RewardEngine
+from forge.runtime.reward import FunctionRubric, RewardEngine
 from forge.runtime.snapshot import EnvironmentSpec
-from forge.runtime.transition import TransitionEngine, TransitionResult
+from forge.runtime.transition import (
+    FunctionTransitionHandler,
+    TransitionEngine,
+    TransitionResult,
+)
 from forge.runtime.verifier import VerifierEngine
 
 
@@ -32,7 +36,7 @@ def increment_transition(state, action, ctx):
 def build_env(factory, max_steps: int = 10) -> ForgeEnv:
     spec = EnvironmentSpec(name="test_env", domain="test", max_steps=max_steps)
     te = TransitionEngine()
-    te.register("increment", increment_transition)
+    te.register("increment", FunctionTransitionHandler(increment_transition))
     return ForgeEnv(
         env_spec=spec,
         initial_state_factory=factory,
@@ -99,7 +103,7 @@ def test_nondeterministic_reward_fails_check():
         )
 
     spec_env = build_env(SeededStateFactory())
-    spec_env._reward_engine.set_default(flaky_reward)
+    spec_env._reward_engine.set_default(FunctionRubric(flaky_reward))
     with pytest.raises(DeterminismError):
         run_determinism_check(spec_env, seed=42, num_steps=3)
 

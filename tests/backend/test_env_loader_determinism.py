@@ -10,7 +10,11 @@ _DETERMINISTIC_WRAPPER = textwrap.dedent("""
     from forge.runtime.env import ForgeEnv
     from forge.runtime.reward import RewardEngine
     from forge.runtime.snapshot import EnvironmentSpec
-    from forge.runtime.transition import TransitionEngine, TransitionResult
+    from forge.runtime.transition import (
+        FunctionTransitionHandler,
+        TransitionEngine,
+        TransitionResult,
+    )
     from forge.runtime.verifier import VerifierEngine
 
 
@@ -27,7 +31,7 @@ _DETERMINISTIC_WRAPPER = textwrap.dedent("""
 
     def build_ENVNAME_env(max_steps: int = 10) -> ForgeEnv:
         te = TransitionEngine()
-        te.register("increment", increment)
+        te.register("increment", FunctionTransitionHandler(increment))
         return ForgeEnv(
             env_spec=EnvironmentSpec(name="ENVNAME", domain="test", max_steps=max_steps),
             initial_state_factory=Factory(),

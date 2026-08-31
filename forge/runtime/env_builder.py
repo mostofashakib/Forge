@@ -6,6 +6,8 @@ from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from typing import Callable
 
+from forge.contracts import Rubric, Verifier
+from forge.contracts.backend import TransitionHandler
 from forge.runtime.env import ForgeEnv, InitialStateFactory
 from forge.runtime.determinism import run_determinism_check
 from forge.runtime.errors import DeterminismViolation, EnvironmentBuildError
@@ -21,11 +23,37 @@ from forge.runtime.interaction import (
     RESTUse,
     RESTUseSchema,
 )
-from forge.runtime.reward import RewardEngine
+from forge.runtime.reward import FunctionRubric, RewardEngine
 from forge.runtime.snapshot import EnvironmentSpec, ToolParam, ToolSpec
-from forge.runtime.transition import TransitionEngine, TransitionResult
-from forge.runtime.verifier import VerifierEngine
+from forge.runtime.transition import (
+    FunctionTransitionHandler,
+    TransitionEngine,
+    TransitionResult,
+)
+from forge.runtime.verifier import FunctionVerifier, VerifierEngine
 from forge.settings import determinism_enabled
+
+
+# The builder's public surface stays plain-callable, so the callables it was
+# handed are adapted into the contracts here — at the boundary where they enter
+# the typed world — rather than by loosening the engines' registries. Anything
+# that already implements the contract is passed through untouched.
+def _as_transition_handler(handler) -> TransitionHandler:
+    if isinstance(handler, TransitionHandler):
+        return handler
+    return FunctionTransitionHandler(handler)
+
+
+def _as_verifier(fn) -> Verifier:
+    if isinstance(fn, Verifier):
+        return fn
+    return FunctionVerifier(fn)
+
+
+def _as_rubric(fn) -> Rubric:
+    if isinstance(fn, Rubric):
+        return fn
+    return FunctionRubric(fn)
 
 
 @dataclass(frozen=True)
@@ -301,17 +329,17 @@ class EnvBuilder:
 
         te = TransitionEngine()
         for action_type, handler in self._transitions.items():
-            te.register(action_type, handler)
+            te.register(action_type, _as_transition_handler(handler))
 
         ve = VerifierEngine()
         for verifier_id, fn in self._verifiers.items():
-            ve.register(verifier_id, fn)
+            ve.register(verifier_id, _as_verifier(fn))
 
         re = RewardEngine()
         if self._default_reward:
-            re.set_default(self._default_reward)
+            re.set_default(_as_rubric(self._default_reward))
         for task_name, fn in self._task_rewards.items():
-            re.register(task_name, fn)
+            re.register(task_name, _as_rubric(fn))
 
         env = ForgeEnv(
             env_spec=EnvironmentSpec(

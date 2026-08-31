@@ -4,7 +4,7 @@ from forge.runtime.layered_verifier import LayeredVerifier
 from forge.runtime.snapshot import StepSnapshot
 from forge.runtime.trajectory import Trajectory
 from forge.runtime.verification import VerificationResult
-from forge.runtime.verifier import VerifierEngine
+from forge.runtime.verifier import FunctionVerifier, VerifierEngine
 
 
 def make_step(index: int, action_type: str, events: list[dict] | None = None) -> StepSnapshot:
@@ -152,7 +152,7 @@ def test_registers_with_verifier_engine():
     v.add_state_check("email_replied", lambda s, tr, t: s["emails"]["e_0"]["replied"])
 
     engine = VerifierEngine()
-    engine.register("reply_task", v)
+    engine.register("reply_task", FunctionVerifier(v))
     results = engine.run_all(STATE, make_trajectory(), TASK)
     assert len(results) == 1
     assert results[0].passed is True

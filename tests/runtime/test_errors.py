@@ -115,11 +115,14 @@ def test_env_step_before_reset_raises_reset_required():
     from forge.runtime.env import ForgeEnv
     from forge.runtime.reward import RewardEngine
     from forge.runtime.snapshot import EnvironmentSpec
-    from forge.runtime.transition import TransitionEngine
+    from forge.runtime.transition import (
+        FunctionTransitionHandler,
+        TransitionEngine,
+    )
     from forge.runtime.verifier import VerifierEngine
 
     te = TransitionEngine()
-    te.register("noop", lambda s, a, c: None)
+    te.register("noop", FunctionTransitionHandler(lambda s, a, c: None))
     env = ForgeEnv(
         env_spec=EnvironmentSpec(name="e", domain="t"),
         initial_state_factory=None,

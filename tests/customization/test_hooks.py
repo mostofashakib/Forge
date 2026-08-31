@@ -1,3 +1,4 @@
+from forge.contracts.backend import TransitionHandler
 from forge.customization.hooks import (
     override_transition, verifier, reward, observation_transform, policy_rule,
     clear_registry, get_registry,
@@ -10,7 +11,11 @@ def test_override_transition_registers_function():
     def my_fn(state, action, ctx):
         return None
     assert "my_action" in get_registry()["transitions"]
-    assert get_registry()["transitions"]["my_action"] is my_fn
+    # The registry stores the contract instance the decorator wrapped the
+    # author's function in; the function itself is still what it holds.
+    stored = get_registry()["transitions"]["my_action"]
+    assert isinstance(stored, TransitionHandler)
+    assert stored.fn is my_fn
 
 
 def test_verifier_registers_function():
