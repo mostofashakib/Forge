@@ -168,6 +168,22 @@ async def test_app_assembler_keeps_backend_and_ui_separate():
     }
 
 
+# Contract-conforming boilerplate for the reviewer's static contract gate.
+# These fixtures exist to exercise unrelated review paths (syntax, ui.html,
+# backend presence, research context), so the state bridge and reward here
+# just need to satisfy forge.contracts.Environment / Rubric, not be realistic.
+_CONFORMING_BRIDGE = (
+    "from forge.contracts import Environment\n"
+    "class ContainerForgeEnv(Environment):\n    pass\n"
+)
+_CONFORMING_REWARD = (
+    "from forge.contracts import Rubric\n"
+    "class TicketRubric(Rubric):\n"
+    "    def score(self, state, trajectory, verifier_results, task):\n"
+    "        return None\n"
+)
+
+
 async def _review_bus(main_py: str, *, include_research: bool = True) -> ArtifactBus:
     bus = ArtifactBus()
     app_code = {
@@ -178,10 +194,10 @@ async def _review_bus(main_py: str, *, include_research: bool = True) -> Artifac
     }
     await bus.publish("app_code", app_code)
     await bus.publish("instrumented_code", {"main.py": main_py})
-    await bus.publish("state_bridge_code", "class ContainerForgeEnv:\n    pass\n")
+    await bus.publish("state_bridge_code", _CONFORMING_BRIDGE)
     await bus.publish("state_schema_manifest", {"fields": {}})
     await bus.publish("policy_dsl", "policies: []\n")
-    await bus.publish("reward_fn_code", "def compute_reward(*args):\n    return 0.0\n")
+    await bus.publish("reward_fn_code", _CONFORMING_REWARD)
     if include_research:
         await bus.publish("reviewer_research", SpecialistResearchContext(
             role="reviewer",
