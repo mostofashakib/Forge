@@ -4,6 +4,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
+from forge.contracts._arity import check_subclass_arity
 from forge.contracts.types import Action, ActionResult
 
 if TYPE_CHECKING:
@@ -18,6 +19,14 @@ class TransitionHandler(ABC):
     the wrong signature is now rejected when it is registered rather than when
     it is first invoked, mid-episode.
     """
+
+    def __init_subclass__(cls, **kwargs) -> None:
+        super().__init_subclass__(**kwargs)
+        # `@abstractmethod` only checks that `apply` exists, never its shape.
+        # A generated subclass with the wrong arity would otherwise register
+        # cleanly and fail mid-rollout, so the check runs at class-definition
+        # time instead — earlier and stricter than registration.
+        check_subclass_arity(cls, "apply", ("state", "action", "ctx"))
 
     @abstractmethod
     def apply(

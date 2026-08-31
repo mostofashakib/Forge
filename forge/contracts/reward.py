@@ -5,6 +5,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
+from forge.contracts._arity import check_subclass_arity
 from forge.contracts.types import RewardBreakdown, Task, VerificationResult
 
 if TYPE_CHECKING:
@@ -18,6 +19,10 @@ class Verifier(ABC):
     a verifier answers "did it happen", a rubric answers "how much is that
     worth". Keeping them apart lets one rubric weigh several verifiers.
     """
+
+    def __init_subclass__(cls, **kwargs) -> None:
+        super().__init_subclass__(**kwargs)
+        check_subclass_arity(cls, "verify", ("state", "trajectory", "task"))
 
     @abstractmethod
     def verify(
@@ -33,6 +38,12 @@ class Rubric(ABC):
     or any combination — the contract does not care which, only that a
     breakdown comes back so the components are auditable.
     """
+
+    def __init_subclass__(cls, **kwargs) -> None:
+        super().__init_subclass__(**kwargs)
+        check_subclass_arity(
+            cls, "score", ("state", "trajectory", "verifier_results", "task")
+        )
 
     @abstractmethod
     def score(
