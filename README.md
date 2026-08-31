@@ -29,6 +29,33 @@ on environments the policy never trained on → reload the checkpoint and collec
 | **CLI** | Ubuntu 22.04 shell | Shell scripting, sysadmin, package management tasks |
 | **Browser** | Chromium + KasmVNC | Web automation, form filling, navigation |
 
+### Environment Contracts
+
+Every Forge environment implements a shared set of interfaces in
+`forge/contracts/`, one per concern:
+
+| Contract | Answers |
+|---|---|
+| `TaskSource` | What problems should the model solve? |
+| `InitialStateProvider` | How is per-episode state set up? |
+| `PromptTemplate` | How is the task presented to the model? |
+| `ToolProvider` | What can the model do? |
+| `ObservationEncoder` | What does the model see back? |
+| `ExecutionBackend` | Where do actions actually run? |
+| `StateManager` | How is state tracked across turns? |
+| `Rubric` / `Verifier` | How is the model's behavior scored? |
+| `TerminationPolicy` | How does the episode end? |
+| `EpisodeController` | Who drives the multi-turn loop? |
+| `Transport` | How does the model talk to the environment? |
+
+`Environment` composes ten of them; `EpisodeController` stays separate because a
+controller drives an environment from outside, and `Verifier` is reached through
+the rubric rather than composed as a separate member. To author an environment by
+hand, implement `Environment` and hand it to any controller.
+
+Environments generated before this release use the pre-contract shape and must
+be regenerated.
+
 ---
 
 ## Premade Environments
