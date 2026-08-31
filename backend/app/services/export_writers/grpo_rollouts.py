@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 from sqlalchemy.orm import Session
 import pandas as pd
+from forge.contracts import RolloutRecord
 from ._queries import get_episodes, get_steps
 from .common import action_to_command
 
@@ -22,19 +23,24 @@ def write(env_name: str, db: Session, out_dir: Path) -> None:
         steps = get_steps(ep.id, db)
         commands = [action_to_command(s.action) for s in steps]
         per_step_rewards = [s.reward for s in steps]
-        rows.append({
-            "episode_id": ep.id,
-            "env_name": ep.env_name,
-            "task_name": ep.task_name,
-            "seed": ep.seed,
-            "agent_id": ep.agent_id,
-            "prompt": f"Task: {ep.task_name}\nEnvironment: {ep.env_name}",
-            "completion": "\n".join(f"$ {c}" for c in commands),
-            "total_reward": ep.total_reward,
-            "passed": ep.passed,
-            "total_steps": ep.total_steps,
-            "per_step_rewards": json.dumps(per_step_rewards),
-        })
+        record = RolloutRecord(
+            episode_id=ep.id,
+            env_name=ep.env_name,
+            task_name=ep.task_name,
+            seed=ep.seed,
+            prompt=f"Task: {ep.task_name}\nEnvironment: {ep.env_name}",
+            completion="\n".join(f"$ {c}" for c in commands),
+            total_reward=ep.total_reward,
+            passed=ep.passed,
+            outcome="success" if ep.passed else "failure",
+            steps=ep.total_steps,
+            per_step_rewards=per_step_rewards,
+        )
+        row = record.model_dump()
+        row["agent_id"] = ep.agent_id
+        row["total_steps"] = ep.total_steps
+        row["per_step_rewards"] = json.dumps(per_step_rewards)
+        rows.append(row)
 
     cols = [
         "episode_id", "env_name", "task_name", "seed", "agent_id",

@@ -159,6 +159,7 @@ def run_logged_episode(
     *,
     seed: int | None = None,
     max_steps: int | None = None,
+    task: Any = None,
 ) -> AgentRunLogger:
     """Drive an agent against an env, recording a full trace into ``logger``.
 
@@ -172,7 +173,10 @@ def run_logged_episode(
 
     logger.start_run(metadata={"seed": seed})
     try:
-        obs, _info = env.reset(seed=seed)
+        if task is None:
+            obs, _info = env.reset(seed=seed)
+        else:
+            obs, _info = env.reset(seed=seed, options={"task": task})
         step = 0
         terminated = truncated = False
         while not (terminated or truncated):

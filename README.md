@@ -66,6 +66,10 @@ through `ExecutionBackend`, state is owned by `StateManager`, observations pass
 through `ObservationEncoder`, rewards use `Rubric`, and every completed step consults
 `TerminationPolicy`. Container episode controllers use the same facade rather than
 duplicating reset, state, action, or termination plumbing with direct HTTP calls.
+At reset, `TaskSource` selects an explicit task id or deterministically distributes
+seeded episodes across its task set. `make_agent(..., environment=env)` binds that
+selected task, the environment prompt, and full tool schemas to OpenAI, Anthropic,
+or vLLM adapters, so the model-facing context cannot drift from the environment.
 
 ---
 
@@ -397,6 +401,11 @@ Seven export formats from the per-environment **Export Dataset** page:
 | **Rewards** | `rewards.jsonl` | Analysis, custom reward models |
 | **Verifier Results** | `verifier_results.jsonl` | Debugging, custom reward models |
 
+All environment-specific episode results convert to the shared
+`forge.contracts.RolloutRecord`. Runtime collectors, Parquet export, and training
+loaders therefore exchange one rollout shape while retaining richer controller
+results internally.
+
 **Runnable source export** — separately from the datasets, any generated environment can be downloaded as a self-contained zip (`GET /api/envs/{env_name}/download`, or the download action on the environment page). `build_source_bundle` packages the generated app, `container_env.py`, `reward_fn.py`, `state_schema.json`, and any `custom/` overrides alongside a README and a `docker-compose.yml`, while filtering runtime artifacts (`episodes/`, `__pycache__`, `.pyc`). The result runs with one command on a machine that has never seen Forge, so an environment can be published, reviewed, or archived independently of this platform.
 
 ### Policy Training
@@ -407,6 +416,12 @@ Closing the RL loop, `forge train` turns Forge's *own* graded experience into a 
 - **TRL DPO** over `preference_pairs.jsonl` — chosen/rejected labels are kept only where the chosen trajectory was graded strictly higher and trained with `DPOTrainer`
 
 The reward→signal mapping is a deterministic function of the grades already assigned, and a graded set with **no relative signal** (all rollouts scored the same, or every preference pair a tie) raises `NoTrainingSignalError` and writes no checkpoint — the training backend is never invoked. Install the optional GPU stack with `uv sync --extra training`. A finished run writes a `policy_checkpoint.json` manifest that runtime agents load via `forge.runtime.policy_loader.load_policy_agent`, so the same policy can collect → grade → export → train → reload.
+
+For repeated policy improvement, `PolicyIterationLoop` supplies the missing feedback
+edge: an injected collector exports graded experience, `PolicyTrainer` updates the
+policy, the runtime loader binds the checkpoint back to its environment, and Forge
+collects again with the updated agent. Multiple iterations continue training from
+the preceding checkpoint rather than restarting from the original base model.
 
 ```bash
 forge train \
@@ -636,7 +651,17 @@ Browser / API Client
 
 ```
 forge/
+  contracts/           # The interfaces every environment family implements
+    types.py           # Shared shapes: Task, Action, Observation, ToolSpec, results
+    environment.py     # Environment facade composing ten of the eleven contracts
+    dataset.py         # TaskSource; initial_state.py, prompting.py, tools.py
+    observation.py     # ObservationEncoder; backend.py, state.py, transport.py
+    reward.py          # Verifier and Rubric; termination.py, episode.py
+    rollout.py         # RolloutRecord: the shared collector → exporter → trainer record
   runtime/             # Gymnasium env, state, trajectory, verifiers, agents
+    prompting.py       # ForgeAgentPromptTemplate: the default PromptTemplate
+    tools.py           # Spec / Capability / OpenAPI ToolProviders
+    tasks.py           # Seeded, reproducible task selection from a TaskSource
     interaction.py     # Capability contracts: tool / MCP / REST / oRPC / computer / browser use
     verifier_composer.py  # Per-task LayeredVerifier composition + binary/partial scoring
     agent_logger.py    # Unified per-run trace (LLM calls + actions + state changes)
@@ -678,6 +703,7 @@ forge/
     reward_mapping.py  # Reward → GRPO advantage / DPO label (deterministic, no-signal guard)
     trainer.py         # PolicyTrainer: prepare signal → backend → PolicyCheckpoint
     checkpoint.py      # Serializable PolicyCheckpoint manifest
+    loop.py            # Collect → train → reload → recollect policy iteration
     _backends.py       # Offline GRPO and TRL DPO gradient updates (GPU node)
   customization/       # Per-env overrides: decorator hooks, EnvConfig, loader
   schema/              # StateSchemaManifest and related schemas
