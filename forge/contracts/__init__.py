@@ -6,6 +6,7 @@ composes the ten that describe an environment's state and behavior.
 `EpisodeController` is not part of the facade because it drives an environment
 from the outside — the same environment may be run by different controllers.
 """
+from forge.contracts.backend import ExecutionBackend, TransitionHandler
 from forge.contracts.dataset import TaskSource
 from forge.contracts.initial_state import InitialStateProvider
 from forge.contracts.observation import ObservationEncoder
@@ -13,6 +14,7 @@ from forge.contracts.prompting import PromptTemplate
 from forge.contracts.state import StateManager
 from forge.contracts.termination import TerminationPolicy
 from forge.contracts.tools import ToolProvider
+from forge.contracts.transport import Transport, TransportRequest, TransportResponse
 from forge.contracts.types import (
     Action,
     ActionResult,
@@ -34,6 +36,7 @@ __all__ = [
     "ActionResult",
     "AgentAdapter",
     "CheckResult",
+    "ExecutionBackend",
     "InitialStateProvider",
     "Observation",
     "ObservationEncoder",
@@ -49,5 +52,9 @@ __all__ = [
     "ToolParam",
     "ToolProvider",
     "ToolSpec",
+    "TransitionHandler",
+    "Transport",
+    "TransportRequest",
+    "TransportResponse",
     "VerificationResult",
 ]
