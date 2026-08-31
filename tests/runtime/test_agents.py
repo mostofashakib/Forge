@@ -124,6 +124,27 @@ def test_openai_agent_calls_api():
     assert result == {"type": "close_ticket", "ticket_id": "t_1"}
 
 
+def test_openai_agent_uses_an_injected_prompt_template():
+    from forge.runtime.agents.openai_agent import OpenAIAgent
+    from forge.runtime.prompting import ForgeAgentPromptTemplate
+
+    mock_client = MagicMock()
+    mock_choice = MagicMock()
+    mock_choice.message.tool_calls = []
+    mock_client.chat.completions.create.return_value.choices = [mock_choice]
+    agent = OpenAIAgent(
+        model="gpt-4o",
+        client=mock_client,
+        prompt_template=ForgeAgentPromptTemplate(),
+    )
+
+    agent.act({"b": 2, "a": 1}, frozenset(["close_ticket"]))
+
+    request = mock_client.chat.completions.create.call_args.kwargs
+    assert request["messages"][1]["content"].find('"a": 1') < request["messages"][1]["content"].find('"b": 2')
+    assert request["tools"][0]["function"]["name"] == "close_ticket"
+
+
 def test_make_agent_anthropic():
     with patch("forge.runtime.agents.anthropic_agent.anthropic") as mock_anthropic:
         mock_anthropic.Anthropic.return_value = MagicMock()

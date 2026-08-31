@@ -74,5 +74,28 @@ class MaxStepsTerminationPolicy(TerminationPolicy):
         return None
 
 
+class VerifierTerminationPolicy(TerminationPolicy):
+    """End naturally when any verifier reports task success."""
+
+    def check(self, outcome: StepOutcome) -> Termination | None:
+        if any(result.passed for result in outcome.verifier_results):
+            return Termination(reason="success")
+        return None
+
+
+class CompositeTerminationPolicy(TerminationPolicy):
+    """Apply independent termination policies in a stable priority order."""
+
+    def __init__(self, *policies: TerminationPolicy) -> None:
+        self._policies = policies
+
+    def check(self, outcome: StepOutcome) -> Termination | None:
+        for policy in self._policies:
+            decision = policy.check(outcome)
+            if decision is not None:
+                return decision
+        return None
+
+
 # The pre-contracts name, kept so the runners and their tests keep working.
 TerminationMonitor = ThresholdTerminationPolicy

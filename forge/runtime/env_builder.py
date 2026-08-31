@@ -6,7 +6,7 @@ from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from typing import Callable
 
-from forge.contracts import Rubric, Verifier
+from forge.contracts import Action, ActionResult, ExecutionBackend, Rubric, Verifier
 from forge.contracts.backend import TransitionHandler
 from forge.runtime.env import ForgeEnv, InitialStateProvider
 from forge.runtime.determinism import run_determinism_check
@@ -23,6 +23,7 @@ from forge.runtime.interaction import (
     RESTUse,
     RESTUseSchema,
 )
+from forge.runtime.prompting import ForgeAgentPromptTemplate
 from forge.runtime.reward import FunctionRubric, RewardEngine
 from forge.runtime.snapshot import EnvironmentSpec, ToolParam, ToolSpec
 from forge.runtime.transition import (
@@ -162,7 +163,7 @@ class _DeterministicFactory:
         return state
 
 
-class _DeterministicTransitionEngine:
+class _DeterministicTransitionEngine(ExecutionBackend):
     """Wraps a TransitionEngine to enforce the determinism config on every step."""
 
     def __init__(self, inner: TransitionEngine, config: DeterminismConfig) -> None:
@@ -179,6 +180,10 @@ class _DeterministicTransitionEngine:
             with self._lock:
                 return self._apply(state, action, ctx)
         return self._apply(state, action, ctx)
+
+    def execute(self, action: Action, state: dict, ctx) -> ActionResult:
+        result = self.apply(state, action.to_dict(), ctx)
+        return ActionResult(state=result.state, events=result.events)
 
     def _apply(self, state: dict, action: dict, ctx) -> TransitionResult:
         with _guards(self._config):
@@ -363,6 +368,7 @@ class EnvBuilder:
             rest_use=self._rest_use,
             orpc_use=self._orpc_use,
             deterministic=self._config.runtime_enabled,
+            prompt_template=ForgeAgentPromptTemplate(),
         )
         if verify and self._config.runtime_enabled:
             run_determinism_check(env, seed=verify_seed)

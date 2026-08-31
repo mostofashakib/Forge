@@ -37,7 +37,7 @@ VERIFIERS = [
 ]
 TRAINING = sorted(
     str(p.relative_to(ROOT))
-    for d in ("backend/app/services/export_writers", "forge/benchmark")
+    for d in ("backend/app/services/export_writers", "forge/benchmark", "forge/training")
     for p in (ROOT / d).glob("*.py")
 )
 
@@ -79,7 +79,12 @@ def test_agents_only_depend_on_the_agent_package(rel_path):
     for module in imports_of(rel_path):
         if module.startswith(("forge.", "backend.")):
             assert module.startswith(
-                ("forge.runtime.agents", "forge.runtime.errors", "forge.contracts.types")
+                (
+                    "forge.runtime.agents",
+                    "forge.runtime.errors",
+                    "forge.runtime.prompting",
+                    "forge.contracts",
+                )
             ), (
                 f"{rel_path} imports {module} — agents must interact with environments "
                 "only through observations and action types"

@@ -1,5 +1,5 @@
 """Train Forge's own policy from its own graded rollouts (closes the RL loop)."""
-from forge.training.checkpoint import PolicyCheckpoint, load_policy_agent
+from forge.training.checkpoint import PolicyCheckpoint
 from forge.training.dataset import (
     MalformedExportError,
     PreferenceRecord,
@@ -23,7 +23,6 @@ from forge.training.trainer import (
 
 __all__ = [
     "PolicyCheckpoint",
-    "load_policy_agent",
     "MalformedExportError",
     "PreferenceRecord",
     "RolloutRecord",
