@@ -20,6 +20,7 @@ from forge.training.loop import (
     PolicyIterationResult,
 )
 from forge.training.trainer import (
+    BehaviorPolicyMismatchError,
     NoTrainingSignalError,
     PolicyTrainer,
     TrainingConfig,
@@ -39,6 +40,7 @@ __all__ = [
     "dpo_examples",
     "grpo_advantages",
     "NoTrainingSignalError",
+    "BehaviorPolicyMismatchError",
     "PolicyTrainer",
     "TrainingConfig",
     "TrainingObjective",

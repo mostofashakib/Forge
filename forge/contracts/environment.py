@@ -13,6 +13,7 @@ from forge.contracts.state import StateManager
 from forge.contracts.termination import TerminationPolicy
 from forge.contracts.tools import ToolProvider
 from forge.contracts.transport import Transport
+from forge.contracts.evaluation import EpisodeEvaluation
 
 
 class Environment(ABC):
@@ -70,3 +71,9 @@ class Environment(ABC):
     @property
     def transport(self) -> Transport | None:
         return None
+
+    def finalize_episode(self, reason: str = "external") -> EpisodeEvaluation:
+        """Return the authoritative final grade when this family supports it."""
+        raise NotImplementedError(
+            f"{type(self).__name__} finalizes through its EpisodeController"
+        )

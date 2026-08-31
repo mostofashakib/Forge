@@ -282,16 +282,13 @@ def _container_episode_runner(
             passed=verdict.passed,
             reward=reward,
             reward_hacking=_has_reward_hacking_pattern(result, verdict.passed),
-            # ObjectiveScorer still runs every step to shape the reward, so the
-            # count is honest even when the pass/fail came from a computed
-            # check rather than a model.
+            # The post-episode ObjectiveScorer call is counted even when the
+            # authoritative pass/fail came from a computed structural check.
             llm_verdicts=result.llm_verdicts,
             indeterminate=verdict.indeterminate,
         )
 
-    # ContainerEpisodeRunner scores every step with ObjectiveScorer to shape the
-    # per-step reward, so a model issues verdicts on this path regardless of how
-    # pass/fail is decided.
+    # ContainerEpisodeRunner issues one post-episode objective verdict.
     run.issues_llm_verdicts = True
     return run
 

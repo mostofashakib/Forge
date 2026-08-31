@@ -30,6 +30,7 @@ class GRPOExample:
     completion: str
     reward: float
     advantage: float
+    behavior_model: str = ""
 
 
 @dataclass
@@ -60,6 +61,7 @@ def grpo_advantages(rollouts: list[RolloutRecord], eps: float = _EPS) -> list[GR
                 completion=r.completion,
                 reward=r.total_reward,
                 advantage=(r.total_reward - mean) / (spread + eps),
+                behavior_model=r.behavior_model,
             ))
     return examples
 

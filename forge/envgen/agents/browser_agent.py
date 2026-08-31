@@ -20,9 +20,10 @@ _BROWSER_SYSTEM = (
     '  navigate — {"action_type": "navigate", "url": "<full url>"}\n'
     '  scroll   — {"action_type": "scroll", "delta_x": <int>, "delta_y": <int>}\n'
     '  noop     — {"action_type": "noop"}\n'
+    '  submit   — {"action_type": "submit"} (grade the current state and finish)\n'
     "\n"
     "Coordinates (x, y) are pixels from the top-left corner of the viewport.\n"
-    "If the objective is already achieved, use noop.\n"
+    "If the objective is already achieved, use submit.\n"
     "Include your one-sentence reasoning."
 )
 

@@ -14,6 +14,7 @@ import pytest
 from forge.training.checkpoint import PolicyCheckpoint
 from forge.training.dataset import MalformedExportError
 from forge.training.trainer import (
+    BehaviorPolicyMismatchError,
     NoTrainingSignalError,
     PolicyTrainer,
     TrainingConfig,
@@ -117,6 +118,21 @@ def test_training_filters_rollouts_to_experiment_train_envs(tmp_path):
     assert checkpoint.train_envs == ["train"]
     assert checkpoint.seed == 3
     assert checkpoint.run_id == "run-3"
+
+
+def test_grpo_rejects_rollouts_from_a_different_behavior_policy(tmp_path):
+    data_dir = tmp_path / "data"
+    rows = [_grpo_row("t", 0.0), _grpo_row("t", 1.0)]
+    for row in rows:
+        row["behavior_model"] = "vllm:other-model"
+    _write_grpo(data_dir, rows)
+
+    with pytest.raises(BehaviorPolicyMismatchError, match="base_model"):
+        PolicyTrainer(backend=_FakeBackend()).train(TrainingConfig(
+            data_dir=data_dir,
+            base_model="expected-model",
+            output_dir=tmp_path / "out",
+        ))
 
 
 def test_determinism_off_does_not_seed_training_libraries(tmp_path, monkeypatch):

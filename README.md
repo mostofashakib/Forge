@@ -10,7 +10,7 @@ Forge lets you spin up isolated, observable app environments — Gmail-like emai
 
 1. **Creates sandboxed app environments** — Docker containers running real apps (or realistic replicas) with full state access
 2. **Runs agents inside them** — Random, scripted, or LLM-powered agents interact with the app via a clean API
-3. **Records and rewards every step** — Policy enforcement, multi-method reward scoring, and a unified per-run trace (LLM calls, actions, state changes, verifier decisions) written durably so any run is replayable — even one that crashed mid-episode
+3. **Records every step and grades each episode once** — Policy enforcement and state changes are written durably as they happen; one post-rollout evaluation produces the authoritative verifier verdict and reward
 4. **Exports training data** — SFT pairs, DPO preference pairs, GRPO rollouts, failure datasets, and more
 5. **Trains a policy on its own experience** — `forge train` turns graded rollouts into a GRPO or DPO update and writes a checkpoint the runtime agents can load back
 6. **Measures held-out generalization** — Trains on an explicit environment split, evaluates only unseen environments, and records reproducible per-seed outcomes
@@ -63,8 +63,9 @@ met is different from assigning its reward.
 Both `ForgeEnv` and container-backed environments implement this facade. Their hot
 paths call the injected collaborators: reset uses `InitialStateProvider`, actions run
 through `ExecutionBackend`, state is owned by `StateManager`, observations pass
-through `ObservationEncoder`, rewards use `Rubric`, and every completed step consults
-`TerminationPolicy`. Container episode controllers use the same facade rather than
+through `ObservationEncoder`, final rewards use `Rubric`, and every completed step consults
+`TerminationPolicy`. The reserved `submit` control action ends an episode without
+being sent to a domain backend. Container episode controllers use the same facade rather than
 duplicating reset, state, action, or termination plumbing with direct HTTP calls.
 At reset, `TaskSource` selects an explicit task id or deterministically distributes
 seeded episodes across its task set. `make_agent(..., environment=env)` binds that
@@ -201,7 +202,7 @@ Agent execution and data collection are separate layers. Runtime agents choose a
 - **Five agent adapters** — `random`, `scripted:<path>`, `anthropic:<model>`, `openai:<model>`, `vllm:<model>`
 - **AgentContext** — per-episode agent memory with a compact deterministic digest for prompt injection, stuck-vs-context-limit diagnosis, and automatic pruning of error spam and revisited-state noise
 - **Trajectory recording** — every step's state, action, and reward persisted to JSONL and DB
-- **Objective progress scoring** — `ObjectiveScorer` grades how far the current app/CLI/browser state is from the stated objective on a 0.0–1.0 scale with one-sentence reasoning; the container, CLI, and browser episode runners all use it, so dense per-step signal exists even for environments whose only ground truth is a natural-language goal
+- **Post-episode objective scoring** — container and browser runners call `ObjectiveScorer` once on the final state; CLI uses its final tiered grader. Cheap state-hash and loop monitors may stop stuck runs without exposing grader feedback to the agent
 - **Cross-run episode selection** — pick episodes from multiple runs, export as a single merged dataset
 - **Parallel rollouts** — launch batched episode rollouts across any compiled environment from the global Rollouts page; `ParallelRolloutRunner` runs the same task across many isolated env copies concurrently (one fresh instance per rollout, millisecond start/teardown) and classifies each outcome as success, failure, partial success, or edge case so a single batch yields diverse training scenarios
 - **Per-environment dashboard** — pass rate, average reward, step efficiency, termination-reason breakdown
@@ -230,7 +231,7 @@ Agent execution and data collection are separate layers. Runtime agents choose a
 
 ### Verifiers
 
-Six built-in verifier types compose into a `RewardBreakdown` returned on every step:
+Six built-in verifier types compose into the final `EpisodeEvaluation` and its auditable `RewardBreakdown`:
 
 | Verifier | Checks |
 |---|---|
@@ -292,13 +293,13 @@ For the paths that *do* consult a model, independence is configurable and enforc
 }
 ```
 
-**Declared before, counted after.** The reward preset describes which verifier layers are enabled; it does not describe what a grading path actually does. So the run asks the episode runner first (`issues_llm_verdicts`), falls back to the preset only when the runner is silent, and then counts what really happened: every `ObjectiveScorer` call increments `EpisodeResult.llm_verdicts`, and the total lands in the record.
+**Declared before, counted after.** The reward preset describes which verifier layers are enabled; it does not describe what a grading path actually does. Each post-episode `ObjectiveScorer` call increments `EpisodeResult.llm_verdicts`, and the observed count lands in the record.
 
 The two must agree. A run that declared itself structural and then issued model verdicts raises instead of writing the record — an under-declaring grading path is a bug, and a result file that understates model involvement is worse than no file, because it is what a reader trusts when they cannot re-run the experiment.
 
-**Pass/fail is computed, not asked.** Held-out episodes are graded by `structural_verdict`, which composes a `LayeredVerifier` from the environment's own compiled `success_conditions` and `failure_conditions` and runs it against the recorded final state and trajectory. Reaching the right final state by a forbidden route still fails. `ObjectiveScorer` remains only as dense per-step reward shaping — it no longer decides whether an episode succeeded.
+**Pass/fail is computed, not inferred from stopping.** Held-out episodes are graded by `structural_verdict`, which composes a `LayeredVerifier` from the environment's own compiled `success_conditions` and `failure_conditions` and runs it against the recorded final state and trajectory. Reaching the right final state by a forbidden route still fails. Termination reasons such as `submitted`, `dead_end`, and `max_steps` never stand in for verifier success.
 
-When a task carries no compiled ground truth, the verdict falls back to the run's termination reason, which the objective scorer drives. That fallback is recorded as LLM-derived rather than quietly presented as a computed result: absent ground truth is *unknown*, never a free pass.
+When a task carries no compiled ground truth, the final objective verdict is recorded as LLM-derived rather than quietly presented as computed ground truth: absent structural ground truth is *unknown*, never a free pass.
 
 ### Verdict Quorum
 
@@ -395,7 +396,7 @@ Seven export formats from the per-environment **Export Dataset** page:
 |---|---|---|
 | **SFT Pairs** | `sft_pairs.jsonl` | TRL SFTTrainer, OpenAI fine-tuning, Axolotl |
 | **Preference Pairs** | `preference_pairs.jsonl` | TRL DPOTrainer, LlamaFactory |
-| **RL Trajectories** | `grpo_rollouts.parquet` | TRL GRPOTrainer, veRL, OpenRLHF |
+| **RL Trajectories** | `grpo_rollouts.parquet` | Forge batch-GRPO, custom RL pipelines |
 | **Failure Dataset** | `failure_dataset.jsonl` | Contrastive training, red-teaming |
 | **Raw Trajectories** | `trajectories.jsonl` | Custom pipelines |
 | **Rewards** | `rewards.jsonl` | Analysis, custom reward models |
@@ -412,7 +413,7 @@ results internally.
 
 Closing the RL loop, `forge train` turns Forge's *own* graded experience into a policy update, then the benchmark evaluates that checkpoint on disjoint internal held-out environments. Training consumes the exports above and produces a loadable checkpoint:
 
-- **Offline GRPO-style update** over `grpo_rollouts.parquet` — rewards are mapped to group-relative advantages `(r − mean) / (std + eps)` across rollouts that share a prompt, then applied to completion-token causal-LM loss
+- **Clipped batch-GRPO update** over `grpo_rollouts.parquet` — rewards become group-relative advantages `(r − mean) / (std + eps)`, behavior-policy token log-probabilities are frozen before the update, and training applies the clipped current/old policy ratio with a sampled KL penalty
 - **TRL DPO** over `preference_pairs.jsonl` — chosen/rejected labels are kept only where the chosen trajectory was graded strictly higher and trained with `DPOTrainer`
 
 The reward→signal mapping is a deterministic function of the grades already assigned, and a graded set with **no relative signal** (all rollouts scored the same, or every preference pair a tie) raises `NoTrainingSignalError` and writes no checkpoint — the training backend is never invoked. Install the optional GPU stack with `uv sync --extra training`. A finished run writes a `policy_checkpoint.json` manifest that runtime agents load via `forge.runtime.policy_loader.load_policy_agent`, so the same policy can collect → grade → export → train → reload.

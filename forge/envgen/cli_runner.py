@@ -5,16 +5,24 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from forge.contracts import EpisodeController
+from forge.contracts import (
+    CheckResult,
+    EpisodeController,
+    EpisodeEvaluation,
+    RewardBreakdown,
+    RewardComponent,
+    VerificationResult,
+)
 from forge.envgen.episode_base import (
     BaseEpisodeConfig,
     BaseEpisodeResult,
-    TerminationMonitor,
+    TerminationMonitor as TerminationMonitor,
     TrajectoryWriter,
 )
 from forge.envgen.objective import ObjectiveScorer
 from forge.runtime.interaction import ComputerUse, ComputerUseSchema
 from forge.runtime.snapshot import InvalidActionError
+from forge.runtime.control import is_submit_action
 from forge.envgen.tiered_reward import (
     EndStateSpec,
     LoopDetector,
@@ -24,6 +32,13 @@ from forge.envgen.tiered_reward import (
 )
 
 logger = logging.getLogger(__name__)
+
+__all__ = [
+    "CliEpisodeConfig",
+    "CliEpisodeResult",
+    "CliEpisodeRunner",
+    "TerminationMonitor",
+]
 
 
 @dataclass(kw_only=True)
@@ -130,7 +145,6 @@ class CliEpisodeRunner(EpisodeController):
             window_size=self._cfg.loop_window_size,
         ))
 
-        monitor = TerminationMonitor(self._cfg)
         early_termination: str | None = None
         computer_use = self.computer_use()
         # Persist each step as it happens so a crash mid-episode still leaves a
@@ -147,21 +161,30 @@ class CliEpisodeRunner(EpisodeController):
                     logger.warning("[cli-ep] step %d: agent.act failed: %s", step_idx, exc)
                     command = "echo 'agent error'"
 
+                if is_submit_action(command):
+                    step_record = {
+                        "step_index": step_idx,
+                        "command": command,
+                        "stdout": "",
+                        "stderr": "",
+                        "exit_code": 0,
+                        "objective_score": 0.0,
+                        "reward": 0.0,
+                        "terminated": True,
+                        "truncated": False,
+                        "termination_reason": "submitted",
+                    }
+                    result.steps.append(step_record)
+                    if writer is not None:
+                        writer.record(step_record)
+                    result.termination_reason = "submitted"
+                    break
+
                 try:
                     exec_result = computer_use.execute({"action_type": "exec", "command": command})
                 except InvalidActionError as exc:
                     exec_result = {"command": command, "stdout": "", "stderr": exc.detail, "exit_code": -1}
                 self._history.append(exec_result)
-
-                score_state = {
-                    "command": command,
-                    "output": exec_result["stdout"][:500],
-                    "exit_code": exec_result["exit_code"],
-                    "step": step_idx + 1,
-                }
-                # Per-step score remains useful as a live signal in the UI even
-                # though the FINAL reward now comes from the tiered grader.
-                score = self._scorer.score(score_state, self._cfg.objective)
 
                 step_record = {
                     "step_index": step_idx,
@@ -169,17 +192,15 @@ class CliEpisodeRunner(EpisodeController):
                     "stdout": exec_result["stdout"],
                     "stderr": exec_result["stderr"],
                     "exit_code": exec_result["exit_code"],
-                    "objective_score": score,
-                    "reward": score,
+                    "objective_score": 0.0,
+                    "reward": 0.0,
                 }
                 result.steps.append(step_record)
                 if writer is not None:
                     writer.record(step_record)
-                result.final_objective_score = score
-
                 logger.info(
-                    "[cli-ep] step %02d/%d  cmd=%r  score=%.2f  exit=%d",
-                    step_idx + 1, self._cfg.max_steps, command[:50], score,
+                    "[cli-ep] step %02d/%d  cmd=%r  exit=%d",
+                    step_idx + 1, self._cfg.max_steps, command[:50],
                     exec_result["exit_code"],
                 )
 
@@ -192,10 +213,6 @@ class CliEpisodeRunner(EpisodeController):
                     result.termination_reason = loop_termination
                     break
 
-                reason = monitor.observe(score)
-                if reason is not None:
-                    result.termination_reason = reason
-                    break
             else:
                 result.termination_reason = "max_steps"
 
@@ -209,7 +226,40 @@ class CliEpisodeRunner(EpisodeController):
                 early_termination=early_termination,
             )
             result.grade = grade.to_dict()
-            result.total_reward = grade.final_reward
+            result.final_objective_score = grade.test_pass_rate
+            passed = grade.test_pass_rate >= self._cfg.success_threshold
+            verification = VerificationResult.from_checks(
+                "tiered_cli_grader",
+                [CheckResult(
+                    name="assertion_pass_rate",
+                    passed=passed,
+                    score=grade.test_pass_rate,
+                )],
+            )
+            reward = RewardBreakdown(
+                total_reward=grade.final_reward,
+                components=[
+                    RewardComponent(name="test_pass_rate", value=grade.test_pass_rate),
+                    RewardComponent(name="efficiency_factor", value=grade.efficiency_factor),
+                    RewardComponent(name="partial_credit", value=grade.partial_credit),
+                ],
+            )
+            result.apply_evaluation(EpisodeEvaluation(
+                passed=passed,
+                reward=reward,
+                verification_results=[verification],
+                reason=result.termination_reason,
+            ))
+            if result.steps:
+                result.steps[-1]["reward"] = grade.final_reward
+                result.steps[-1]["objective_score"] = grade.test_pass_rate
+                result.steps[-1]["termination_reason"] = result.termination_reason
+                result.steps[-1]["terminated"] = (
+                    result.termination_reason == "submitted"
+                )
+                result.steps[-1]["truncated"] = (
+                    result.termination_reason != "submitted"
+                )
             result.completed_at = datetime.now(timezone.utc)
             logger.info(
                 "[cli-ep] graded: pass_rate=%.2f efficiency=%.2f partial=%.2f → reward=%.2f (%s)",

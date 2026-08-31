@@ -69,3 +69,17 @@ def test_episode_results_convert_to_the_shared_rollout_contract():
     assert record.per_step_rewards == [1.0]
     assert record.steps == 1
     assert '\"type\": \"close\"' in record.completion
+
+
+def test_rollout_success_comes_from_verdict_not_termination_reason():
+    result = BaseEpisodeResult(
+        total_reward=1.0,
+        termination_reason="submitted",
+        passed=True,
+    )
+
+    record = result.to_rollout_record(task_name="done")
+
+    assert record.passed is True
+    assert record.outcome == "success"
+    assert record.termination_reason == "submitted"

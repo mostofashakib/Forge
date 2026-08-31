@@ -81,8 +81,12 @@ def test_episode_task_completion_produces_positive_reward():
     _, reward, terminated, _, _ = env.step(
         {"type": "reply_email", "thread_id": thread_id, "body": "Thank you for reaching out."}
     )
+    assert terminated is False
+    assert reward == 0.0
+    _, reward, terminated, _, info = env.step({"type": "submit"})
     assert terminated is True
     assert reward > 0.0
+    assert info["passed"] is True
 
 
 def test_five_seeds_all_produce_distinct_state_hashes():

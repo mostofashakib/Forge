@@ -63,6 +63,10 @@ def load_rollouts(path: Path) -> list[RolloutRecord]:
             total_reward=float(row["total_reward"]),
             passed=bool(row["passed"]),
             per_step_rewards=_parse_per_step(row.get("per_step_rewards")),
+            behavior_model=str(row.get("behavior_model") or ""),
+            termination_reason=str(row.get("termination_reason") or "unknown"),
+            verification_results=_parse_json_list(row.get("verification_results")),
+            reward_breakdown=_parse_json_dict(row.get("reward_breakdown")),
         ))
     return records
 
@@ -79,6 +83,27 @@ def _parse_per_step(value) -> list[float]:
         return [float(x) for x in value]
     except (TypeError, ValueError):
         return []
+
+
+def _parse_json_list(value) -> list[dict]:
+    parsed = _parse_json(value)
+    return parsed if isinstance(parsed, list) else []
+
+
+def _parse_json_dict(value) -> dict:
+    parsed = _parse_json(value)
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _parse_json(value):
+    if value is None:
+        return None
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return None
+    return value
 
 
 def load_preferences(path: Path) -> list[PreferenceRecord]:

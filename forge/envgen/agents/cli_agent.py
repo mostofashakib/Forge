@@ -17,7 +17,7 @@ _CLI_SYSTEM = (
     "\n"
     "Return the single best shell command to make progress toward the objective.\n"
     "Use common Linux tools (ls, cat, grep, mkdir, touch, echo, pip, python, etc.).\n"
-    "Keep commands focused. If the objective is already achieved, run a no-op like 'echo done'.\n"
+    "Keep commands focused. If the objective is already achieved, return exactly FORGE_SUBMIT.\n"
     "Call the extract tool with the command and your one-sentence reasoning."
 )
 

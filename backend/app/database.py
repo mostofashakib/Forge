@@ -52,6 +52,13 @@ def init_db() -> None:
         for column_name, statement in migrations.items():
             if column_name not in existing_columns:
                 conn.execute(text(statement))
+        episode_columns = {
+            column["name"] for column in inspect(conn).get_columns("episodes")
+        }
+        if "termination_reason" not in episode_columns:
+            conn.execute(text(
+                "ALTER TABLE episodes ADD COLUMN termination_reason TEXT DEFAULT 'unknown'"
+            ))
         conn.commit()
 
 
