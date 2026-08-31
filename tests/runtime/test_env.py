@@ -15,7 +15,7 @@ from forge.runtime.verification import CheckResult, VerificationResult
 
 
 class FixedStateFactory:
-    def create(self, ctx: RuntimeContext, options: dict) -> dict:
+    def reset(self, ctx: RuntimeContext, *, seed: int | None, options: dict) -> dict:
         ctx.actor_id = "u_0000"
         return {"counter": {"c_0": {"id": "c_0", "value": 0}}}
 
@@ -43,7 +43,7 @@ def build_env(max_steps: int = 10) -> ForgeEnv:
     re = RewardEngine()
     return ForgeEnv(
         env_spec=spec,
-        initial_state_factory=FixedStateFactory(),
+        initial_state_provider=FixedStateFactory(),
         transition_engine=te,
         verifier_engine=ve,
         reward_engine=re,
@@ -165,7 +165,7 @@ def build_env_with_telemetry(telemetry, max_steps: int = 10) -> ForgeEnv:
     re = RewardEngine()
     return ForgeEnv(
         env_spec=spec,
-        initial_state_factory=FixedStateFactory(),
+        initial_state_provider=FixedStateFactory(),
         transition_engine=te,
         verifier_engine=ve,
         reward_engine=re,
@@ -233,7 +233,7 @@ def _build_env_m7(policy_engine=None, observation_filter=None, max_steps=10):
     re = RewardEngine()
     return ForgeEnv(
         env_spec=spec,
-        initial_state_factory=FixedStateFactory(),
+        initial_state_provider=FixedStateFactory(),
         transition_engine=te,
         verifier_engine=ve,
         reward_engine=re,

@@ -8,7 +8,7 @@ from typing import Callable
 
 from forge.contracts import Rubric, Verifier
 from forge.contracts.backend import TransitionHandler
-from forge.runtime.env import ForgeEnv, InitialStateFactory
+from forge.runtime.env import ForgeEnv, InitialStateProvider
 from forge.runtime.determinism import run_determinism_check
 from forge.runtime.errors import DeterminismViolation, EnvironmentBuildError
 from forge.runtime.interaction import (
@@ -148,11 +148,11 @@ def _guards(config: DeterminismConfig):
 class _DeterministicFactory:
     """Wraps an initial-state factory to enforce the determinism config."""
 
-    def __init__(self, inner: InitialStateFactory, config: DeterminismConfig) -> None:
+    def __init__(self, inner: InitialStateProvider, config: DeterminismConfig) -> None:
         self._inner = inner
         self._config = config
 
-    def create(self, ctx, options: dict) -> dict:
+    def reset(self, ctx, *, seed: int | None, options: dict) -> dict:
         if self._config.fresh_startup and hasattr(self._inner, "clear_cache"):
             self._inner.clear_cache()
         with _guards(self._config):
@@ -201,7 +201,7 @@ class EnvBuilder:
         self._domain = domain
         self._max_steps = max_steps
         self._default_task: dict | None = None
-        self._factory: InitialStateFactory | None = None
+        self._factory: InitialStateProvider | None = None
         self._transitions: dict[str, Callable] = {}
         self._tool_specs: dict[str, ToolSpec] = {}
         self._verifiers: dict[str, Callable] = {}
@@ -214,7 +214,7 @@ class EnvBuilder:
         self._rest_use: RESTUse | None = None
         self._orpc_use: ORPCUse | None = None
 
-    def with_initial_state(self, factory: InitialStateFactory) -> "EnvBuilder":
+    def with_initial_state(self, factory: InitialStateProvider) -> "EnvBuilder":
         self._factory = factory
         return self
 
@@ -348,7 +348,7 @@ class EnvBuilder:
                 max_steps=self._max_steps,
                 default_task=self._default_task,
             ),
-            initial_state_factory=_DeterministicFactory(self._factory, self._config),
+            initial_state_provider=_DeterministicFactory(self._factory, self._config),
             transition_engine=_DeterministicTransitionEngine(te, self._config),
             verifier_engine=ve,
             reward_engine=re,

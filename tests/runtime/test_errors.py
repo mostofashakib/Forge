@@ -125,7 +125,7 @@ def test_env_step_before_reset_raises_reset_required():
     te.register("noop", FunctionTransitionHandler(lambda s, a, c: None))
     env = ForgeEnv(
         env_spec=EnvironmentSpec(name="e", domain="t"),
-        initial_state_factory=None,
+        initial_state_provider=None,
         transition_engine=te,
         verifier_engine=VerifierEngine(),
         reward_engine=RewardEngine(),
