@@ -2,11 +2,13 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+from typing import Literal
 from sqlalchemy.orm import Session
 
 from backend.app.database import get_db
@@ -19,9 +21,10 @@ logger = logging.getLogger(__name__)
 # Lazy module-level reference so tests can patch backend.app.api.benchmark.run_benchmark_task.
 # The actual import is deferred to avoid circular-import issues at package load time.
 try:
-    from backend.app.worker.tasks import run_benchmark_task  # noqa: F401
+    from backend.app.worker.tasks import run_benchmark_task, run_evaluation_task  # noqa: F401
 except Exception:  # pragma: no cover
     run_benchmark_task = None  # type: ignore[assignment]
+    run_evaluation_task = None  # type: ignore[assignment]
 router = APIRouter(prefix="/api/benchmark", tags=["benchmark"])
 
 
@@ -30,6 +33,29 @@ class CreateBenchmarkRunRequest(BaseModel):
     depth: int = Field(default=5, ge=1, le=5)
     seeds: int = Field(default=5, ge=1, le=100)
     output_dir: str = Field(default="benchmark_results", min_length=1, max_length=255)
+
+
+class CreateEvaluationRequest(BaseModel):
+    engine: Literal["forge", "harbor"] = "forge"
+    checkpoint: str | None = "policy_checkpoint"
+    experiment: str | None = "experiments/internal_heldout.yaml"
+    seed: int | None = None
+    runs_dir: str = Field(default="runs", min_length=1, max_length=255)
+    harbor_task_path: str | None = "example_tasks/slack_task_1"
+    harbor_agent: str | None = "fleet.agents.rl_agent:SlackExternalAgent"
+    harbor_model: str | None = "gemma4:26b"
+
+    @model_validator(mode="after")
+    def validate_engine_fields(self):
+        required = (
+            ("checkpoint", "experiment")
+            if self.engine == "forge"
+            else ("harbor_task_path", "harbor_agent", "harbor_model")
+        )
+        missing = [name for name in required if not getattr(self, name)]
+        if missing:
+            raise ValueError(f"{self.engine} evaluation requires: {', '.join(missing)}")
+        return self
 
 
 @router.post("/runs", status_code=202)
@@ -64,8 +90,82 @@ def create_benchmark_run(body: CreateBenchmarkRunRequest, db: Session = Depends(
 
 @router.get("/runs")
 def list_benchmark_runs(db: Session = Depends(get_db)):
-    runs = db.query(BenchmarkRun).order_by(BenchmarkRun.created_at.desc()).all()
+    runs = (
+        db.query(BenchmarkRun)
+        .filter(BenchmarkRun.kind == "benchmark")
+        .order_by(BenchmarkRun.created_at.desc())
+        .all()
+    )
     return [_run_to_dict(r) for r in runs]
+
+
+@router.get("/evals/capabilities")
+def evaluation_capabilities():
+    bundled_harbor = Path.cwd() / "example_tasks" / ".venv" / "bin" / "harbor"
+    return {
+        "engines": {
+            "forge": {"available": True},
+            "harbor": {
+                "available": bool(shutil.which("harbor") or bundled_harbor.is_file()),
+                "setup_hint": "Run ./example_tasks/run.sh setup to enable Harbor.",
+            },
+        }
+    }
+
+
+@router.post("/evals", status_code=202)
+def create_evaluation(body: CreateEvaluationRequest, db: Session = Depends(get_db)):
+    root = Path.cwd()
+    config = body.model_dump()
+    path_fields = (
+        ("checkpoint", "experiment", "runs_dir")
+        if body.engine == "forge"
+        else ("harbor_task_path",)
+    )
+    try:
+        for field_name in path_fields:
+            value = config.get(field_name)
+            if value:
+                config[field_name] = str(confined_relative_path(root, value))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    required_existing = (
+        ("checkpoint", "experiment")
+        if body.engine == "forge"
+        else ("harbor_task_path",)
+    )
+    for field_name in required_existing:
+        if not Path(config[field_name]).exists():
+            raise HTTPException(status_code=422, detail=f"{field_name} does not exist")
+
+    run_id = f"eval_{uuid.uuid4().hex[:12]}"
+    run = BenchmarkRun(
+        id=run_id,
+        status="queued",
+        domains="heldout" if body.engine == "forge" else str(body.harbor_task_path),
+        depth=body.seed or 0,
+        seeds=1,
+        output_dir=config.get("runs_dir") or "jobs",
+        created_at=datetime.now(timezone.utc),
+        kind="evaluation",
+        engine=body.engine,
+        config_json=json.dumps(config),
+    )
+    db.add(run)
+    db.commit()
+    run_evaluation_task.delay(run_id=run_id, engine=body.engine, config=config)
+    return {"run_id": run_id}
+
+
+@router.get("/evals/{run_id}")
+def get_evaluation(run_id: str, db: Session = Depends(get_db)):
+    run = db.get(BenchmarkRun, run_id)
+    if run is None or run.kind != "evaluation":
+        raise HTTPException(status_code=404, detail="Evaluation not found")
+    payload = _run_to_dict(run)
+    payload["result"] = json.loads(run.report_json) if run.report_json else None
+    return payload
 
 
 @router.get("/runs/{run_id}")
@@ -174,4 +274,6 @@ def _run_to_dict(run: BenchmarkRun) -> dict:
         "created_at": run.created_at.isoformat() if run.created_at else None,
         "completed_at": run.completed_at.isoformat() if run.completed_at else None,
         "error": run.error,
+        "kind": run.kind,
+        "engine": run.engine,
     }

@@ -64,7 +64,9 @@ def test_compose_defines_app_and_redis_services(tmp_path):
     )
     assert "redis" in compose
     assert "8000" in compose
-    assert "REDIS_URL" in compose
+    assert "REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0" in compose
+    assert "requirepass" in compose
+    assert '"6379:6379"' not in compose
 
 
 def test_bundle_includes_a_centralized_run_script(tmp_path):
@@ -75,6 +77,9 @@ def test_bundle_includes_a_centralized_run_script(tmp_path):
     assert "requirements.txt" in script                 # install dependencies
     assert "uvicorn" in script                          # serve the app
     assert "REDIS_URL" in script                        # telemetry backend
+    assert "requirepass" in script                      # Redis authentication
+    assert "chmod 600" in script                        # password config is private
+    assert "redis://:$REDIS_PASSWORD@localhost:6379/0" in script
 
 
 def test_run_script_is_marked_executable(tmp_path):

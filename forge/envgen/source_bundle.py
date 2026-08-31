@@ -132,15 +132,17 @@ and serves the app. The app comes up at http://localhost:8000
 ## Run with Docker
 
 ```bash
-docker compose up --build
+REDIS_PASSWORD="$(openssl rand -hex 32)" docker compose up --build
 ```
 
 ## Run locally without Docker
 
-1. Start Redis and point the app at it:
+1. Start an authenticated Redis server and point the app at it:
 
    ```bash
-   export REDIS_URL=redis://localhost:6379/0
+   export REDIS_PASSWORD="$(openssl rand -hex 32)"
+   redis-server --daemonize yes --requirepass "$REDIS_PASSWORD"
+   export REDIS_URL="redis://:${{REDIS_PASSWORD}}@localhost:6379/0"
    ```
 
 2. Install dependencies:
@@ -180,6 +182,19 @@ def _render_run_script(env_name: str) -> str:
 set -euo pipefail
 cd "$(dirname "$0")"
 
+if [ -z "${{REDIS_PASSWORD:-}}" ]; then
+  if command -v openssl >/dev/null 2>&1; then
+    REDIS_PASSWORD="$(openssl rand -hex 32)"
+  else
+    REDIS_PASSWORD="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+  fi
+  export REDIS_PASSWORD
+fi
+if [ "${{#REDIS_PASSWORD}}" -lt 32 ] || printf '%s' "$REDIS_PASSWORD" | grep -q '[^0-9A-Fa-f]'; then
+  echo "[run] ERROR: REDIS_PASSWORD must contain at least 32 hexadecimal characters." >&2
+  exit 1
+fi
+
 # --- Docker path: brings up the app + Redis together ----------------------
 if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
   echo "[run] Docker detected — starting app + Redis via Docker Compose…"
@@ -192,8 +207,16 @@ echo "[run] Docker not available — running locally."
 if [ -z "${{REDIS_URL:-}}" ]; then
   if command -v redis-server >/dev/null 2>&1; then
     echo "[run] Starting a local redis-server…"
-    redis-server --daemonize yes >/dev/null 2>&1 || true
-    export REDIS_URL="redis://localhost:6379/0"
+    REDIS_CONFIG="$(mktemp "${{TMPDIR:-/tmp}}/{env_name}-redis.XXXXXX.conf")"
+    chmod 600 "$REDIS_CONFIG"
+    printf 'bind 127.0.0.1\nrequirepass %s\n' "$REDIS_PASSWORD" >"$REDIS_CONFIG"
+    if ! redis-server "$REDIS_CONFIG" --daemonize yes >/dev/null 2>&1; then
+      rm -f "$REDIS_CONFIG"
+      echo "[run] ERROR: could not start the authenticated local Redis server." >&2
+      exit 1
+    fi
+    rm -f "$REDIS_CONFIG"
+    export REDIS_URL="redis://:$REDIS_PASSWORD@localhost:6379/0"
   else
     echo "[run] ERROR: REDIS_URL is not set and redis-server is not installed." >&2
     echo "       Install Redis or Docker, or set REDIS_URL to a running instance." >&2
@@ -226,13 +249,14 @@ def _render_compose(env_name: str) -> str:
 services:
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
+    command: ["sh", "-c", "exec redis-server --requirepass \"$$REDIS_PASSWORD\""]
+    environment:
+      REDIS_PASSWORD: ${{REDIS_PASSWORD:?set REDIS_PASSWORD or use ./run.sh}}
 
   app:
     build: ./app
     environment:
-      REDIS_URL: redis://redis:6379/0
+      REDIS_URL: redis://:${{REDIS_PASSWORD}}@redis:6379/0
     ports:
       - "8000:8000"
     depends_on:

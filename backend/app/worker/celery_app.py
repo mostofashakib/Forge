@@ -8,10 +8,12 @@ from celery.signals import worker_ready
 
 log = logging.getLogger(__name__)
 
+default_redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+
 celery = Celery(
     "forge",
-    broker=os.environ.get("CELERY_BROKER_URL", "redis://localhost:6379/0"),
-    backend=os.environ.get("CELERY_RESULT_BACKEND", "redis://localhost:6379/0"),
+    broker=os.environ.get("CELERY_BROKER_URL", default_redis_url),
+    backend=os.environ.get("CELERY_RESULT_BACKEND", default_redis_url),
     include=["backend.app.worker.tasks"],
 )
 
