@@ -1,8 +1,8 @@
-# Forge RL Environment Examples
+# Forge Example RL Tasks
 
-Deterministic reinforcement-learning environments for testing whether an agent can inspect state, use tools, preserve invariants, and return a verifiable answer.
+This Forge module contains deterministic reinforcement-learning environments for testing whether an agent can inspect state, use tools, preserve invariants, and return a verifiable answer.
 
-The repository includes two SQLite-backed environment families and three Harbor tasks:
+Forge includes two SQLite-backed example environment families and three Harbor tasks:
 
 | Task | Environment | Core challenge |
 | --- | --- | --- |
@@ -44,7 +44,7 @@ Only `setup` installs dependencies. All other commands expect the environment th
 ```text
 ./run.sh setup                 Create .venv and sync uv.lock
 ./run.sh doctor                Check uv, Docker, Harbor, and Ollama
-./run.sh validate              Run dependency-free repository checks
+./run.sh validate              Run dependency-free example-task checks
 ./run.sh test                  Run deterministic/unit verifier tests
 ./run.sh smoke                 Run live Ollama smoke tests
 ./run.sh driver                Run deterministic scripted simulations
