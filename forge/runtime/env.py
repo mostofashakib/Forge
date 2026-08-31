@@ -4,8 +4,8 @@ import uuid
 import gymnasium as gym
 from forge.contracts import (
     Action,
-    CompositeTerminationPolicy,
     Environment,
+    EpisodeEvaluation,
     ExecutionBackend,
     InitialStateProvider,
     MaxStepsTerminationPolicy,
@@ -18,7 +18,6 @@ from forge.contracts import (
     TerminationPolicy,
     ToolProvider,
     Task,
-    VerifierTerminationPolicy,
 )
 from forge.runtime.action import ActionValidator
 from forge.runtime.context import RuntimeContext
@@ -46,6 +45,7 @@ from forge.runtime.observation_filter import ObservationFilter
 from forge.runtime.task_source import StaticTaskSource
 from forge.runtime.tools import SpecToolProvider
 from forge.runtime.tasks import select_task, task_payload
+from forge.runtime.control import SUBMIT_ACTION, is_submit_action
 
 if TYPE_CHECKING:
     from forge.runtime.telemetry import TelemetrySink
@@ -80,6 +80,7 @@ class ForgeEnv(gym.Env, Environment):
         observation_encoder: ObservationEncoder | None = None,
         execution_backend: ExecutionBackend | None = None,
         termination_policy: TerminationPolicy | None = None,
+        online_verifier_engine: VerifierEngine | None = None,
     ) -> None:
         super().__init__()
         self.env_spec = env_spec
@@ -92,10 +93,12 @@ class ForgeEnv(gym.Env, Environment):
         self._prompt_template = prompt_template
         self._observations = observation_encoder or observation_filter or ObservationFilter()
         self._backend = execution_backend or transition_engine
-        self._termination = termination_policy or CompositeTerminationPolicy(
-            VerifierTerminationPolicy(),
-            MaxStepsTerminationPolicy(env_spec.max_steps),
+        self._termination = termination_policy or MaxStepsTerminationPolicy(
+            env_spec.max_steps
         )
+        # Final verification is authoritative. An explicitly injected online
+        # engine may run cheap monitors, but its results never become reward.
+        self._online_verifier_engine = online_verifier_engine
         self._action_validator = ActionValidator(transition_engine.action_types)
         self._telemetry = telemetry
         self._policy_engine = policy_engine
@@ -123,6 +126,7 @@ class ForgeEnv(gym.Env, Environment):
         self._episode_id: str | None = None
         self._invalid_action_count: int = 0
         self._total_reward: float = 0.0
+        self._evaluation: EpisodeEvaluation | None = None
 
     # ------------------------------------------------------------------
     # Composed Environment facade
@@ -166,7 +170,7 @@ class ForgeEnv(gym.Env, Environment):
 
     @property
     def action_types(self) -> frozenset:
-        return frozenset(self._action_validator._valid_types)
+        return frozenset({*self._action_validator._valid_types, SUBMIT_ACTION})
 
     @property
     def current_task(self) -> Task | None:
@@ -181,10 +185,16 @@ class ForgeEnv(gym.Env, Environment):
 
     def tool_surface(self) -> list[ToolSpec]:
         """Every tool the agent may call, with params — bare spec if undocumented."""
-        return [
-            self._tool_specs.get(name, ToolSpec(name=name))
-            for name in sorted(self.action_types)
-        ]
+        specs = []
+        for name in sorted(self.action_types):
+            if name == SUBMIT_ACTION:
+                specs.append(ToolSpec(
+                    name=SUBMIT_ACTION,
+                    description="Finish the episode and grade the current state",
+                ))
+            else:
+                specs.append(self._tool_specs.get(name, ToolSpec(name=name)))
+        return specs
 
     @property
     def tool_use(self) -> ToolUse:
@@ -256,6 +266,7 @@ class ForgeEnv(gym.Env, Environment):
         self._step_count = 0
         self._invalid_action_count = 0
         self._total_reward = 0.0
+        self._evaluation = None
 
         return self._observe(self._state_store.get()), {
             "episode_id": self._episode_id,
@@ -266,14 +277,25 @@ class ForgeEnv(gym.Env, Environment):
     def step(self, action: dict) -> tuple[dict, float, bool, bool, dict]:
         if self._ctx is None:
             raise ResetRequiredError("Must call reset() before step()")
+        if self._evaluation is not None:
+            raise RuntimeError("Episode is finalized; call reset() before stepping again")
 
         state_before = self._state_store.get()
         hash_before = self._state_store.hash()
 
+        if is_submit_action(action):
+            return self._submit(state_before, hash_before)
+
         validation_error = self._action_validator.validate(action)
         if validation_error:
-            self._record_invalid_step(hash_before, action)
-            return self._observe(state_before), 0.0, False, False, {"error": validation_error}
+            return self._stationary_step_result(
+                state_before,
+                hash_before,
+                action,
+                events=[],
+                info={"error": validation_error},
+                invalid=True,
+            )
 
         if self._policy_engine:
             violations = self._policy_engine.check(state_before, action)
@@ -287,10 +309,14 @@ class ForgeEnv(gym.Env, Environment):
                 Action.from_dict(action), state_before, self._ctx
             )
         except InvalidActionError as exc:
-            self._record_invalid_step(hash_before, action)
-            return self._observe(state_before), 0.0, False, False, {
-                "error": exc.to_dict()
-            }
+            return self._stationary_step_result(
+                state_before,
+                hash_before,
+                action,
+                events=[],
+                info={"error": exc.to_dict()},
+                invalid=True,
+            )
 
         self._state_store.apply(result.state)
         state_after = self._state_store.get()
@@ -298,31 +324,7 @@ class ForgeEnv(gym.Env, Environment):
         self._ctx.clock.advance()
 
         diff = compute_diff(state_before, state_after)
-        # Build a trajectory that includes the current step's events so verifiers
-        # can see actions taken in this step (e.g. email_replied for reply_to_customer).
-        trajectory = self._traj_store.to_trajectory_with_events(result.events)
-        verifier_results = self._verifier_engine.run_all(
-            state_after, trajectory, self._current_task
-        )
-        task_with_meta = {**(self._current_task or {}), "invalid_action_count": self._invalid_action_count}
-        reward_breakdown = self._reward_engine.compute(
-            state_after, trajectory, verifier_results, task_with_meta
-        )
-
         self._step_count += 1
-        self._total_reward += reward_breakdown.total_reward
-        termination = self._termination.check(
-            StepOutcome(
-                step_index=self._step_count - 1,
-                score=max((result.score for result in verifier_results), default=0.0),
-                reward=reward_breakdown.total_reward,
-                state_hash=hash_after,
-                verifier_results=verifier_results,
-            )
-        )
-        terminated = termination is not None and not termination.truncated
-        truncated = termination is not None and termination.truncated
-
         snapshot = StepSnapshot(
             episode_id=self._episode_id,
             step_index=self._step_count - 1,
@@ -330,41 +332,207 @@ class ForgeEnv(gym.Env, Environment):
             state_hash_after=hash_after,
             action=action,
             events=result.events,
-            reward=reward_breakdown.total_reward,
-            verifier_results=[vr.model_dump() for vr in verifier_results],
+            reward=0.0,
+            verifier_results=[],
             diff=diff,
-            terminated=terminated,
-            truncated=truncated,
+            terminated=False,
+            truncated=False,
         )
+        trajectory = self._traj_store.to_trajectory_with_step(snapshot)
+        monitor_results = (
+            self._online_verifier_engine.run_all(
+                state_after, trajectory, self._current_task
+            )
+            if self._online_verifier_engine is not None
+            else []
+        )
+        termination = self._termination.check(
+            StepOutcome(
+                step_index=self._step_count - 1,
+                score=max((item.score for item in monitor_results), default=0.0),
+                reward=0.0,
+                state_hash=hash_after,
+                verifier_results=monitor_results,
+            )
+        )
+        terminated = termination is not None and not termination.truncated
+        truncated = termination is not None and termination.truncated
+        reward = 0.0
+        verifier_results = monitor_results
+        reward_breakdown = None
+        if termination is not None:
+            evaluation = self._evaluate_trajectory(
+                state_after, trajectory, termination.reason
+            )
+            reward = evaluation.total_reward
+            verifier_results = evaluation.verification_results
+            reward_breakdown = evaluation.reward
+        snapshot.reward = reward
+        snapshot.verifier_results = [item.model_dump() for item in verifier_results]
+        snapshot.terminated = terminated
+        snapshot.truncated = truncated
         self._record_snapshot(snapshot)
         if (terminated or truncated) and self._telemetry:
-            self._telemetry.complete_episode(self._total_reward, terminated, self._step_count)
+            self._telemetry.complete_episode(
+                self._total_reward,
+                bool(self._evaluation and self._evaluation.passed),
+                self._step_count,
+                termination.reason,
+            )
 
-        return self._observe(state_after), reward_breakdown.total_reward, terminated, truncated, {
+        info = {
             "episode_id": self._episode_id,
-            "verifier_results": [vr.model_dump() for vr in verifier_results],
-            "reward_breakdown": reward_breakdown.model_dump(),
             "events": result.events,
             "termination_reason": termination.reason if termination else None,
         }
+        if termination is not None and reward_breakdown is not None:
+            info.update({
+                "passed": self._evaluation.passed,
+                "verifier_results": [item.model_dump() for item in verifier_results],
+                "reward_breakdown": reward_breakdown.model_dump(),
+            })
+        return self._observe(state_after), reward, terminated, truncated, info
 
-    def _record_invalid_step(self, hash_before: str, action: dict) -> None:
+    def finalize_episode(self, reason: str = "external") -> EpisodeEvaluation:
+        """Grade the active episode once; repeated calls return the same verdict."""
+        if self._ctx is None or self._traj_store is None:
+            raise ResetRequiredError("Must call reset() before finalizing an episode")
+        return self._evaluate_trajectory(
+            self._state_store.get(), self._traj_store.to_trajectory(), reason
+        )
+
+    def _evaluate_trajectory(self, state, trajectory, reason: str) -> EpisodeEvaluation:
+        if self._evaluation is not None:
+            return self._evaluation
+        verifier_results = self._verifier_engine.run_all(
+            state, trajectory, self._current_task
+        )
+        task_with_meta = {
+            **(self._current_task or {}),
+            "invalid_action_count": self._invalid_action_count,
+        }
+        reward = self._reward_engine.compute(
+            state, trajectory, verifier_results, task_with_meta
+        )
+        self._evaluation = EpisodeEvaluation(
+            passed=any(result.passed for result in verifier_results),
+            reward=reward,
+            verification_results=verifier_results,
+            reason=reason,
+        )
+        self._total_reward = reward.total_reward
+        return self._evaluation
+
+    def _submit(self, state: dict, state_hash: str):
         self._step_count += 1
-        self._invalid_action_count += 1
         snapshot = StepSnapshot(
             episode_id=self._episode_id,
             step_index=self._step_count - 1,
-            state_hash_before=hash_before,
-            state_hash_after=hash_before,
-            action=action,
+            state_hash_before=state_hash,
+            state_hash_after=state_hash,
+            action={"type": SUBMIT_ACTION},
             events=[],
+            reward=0.0,
+            verifier_results=[],
+            diff={"added": {}, "changed": {}, "removed": {}},
+            terminated=True,
+            truncated=False,
+        )
+        trajectory = self._traj_store.to_trajectory_with_step(snapshot)
+        evaluation = self._evaluate_trajectory(state, trajectory, "submitted")
+        snapshot.reward = evaluation.total_reward
+        snapshot.verifier_results = [
+            item.model_dump() for item in evaluation.verification_results
+        ]
+        self._record_snapshot(snapshot)
+        if self._telemetry:
+            self._telemetry.complete_episode(
+                evaluation.total_reward,
+                evaluation.passed,
+                self._step_count,
+                "submitted",
+            )
+        return self._observe(state), evaluation.total_reward, True, False, {
+            "episode_id": self._episode_id,
+            "passed": evaluation.passed,
+            "verifier_results": snapshot.verifier_results,
+            "reward_breakdown": evaluation.reward.model_dump(),
+            "events": [],
+            "termination_reason": "submitted",
+        }
+
+    def _stationary_step_result(
+        self,
+        state: dict,
+        state_hash: str,
+        action: dict,
+        *,
+        events: list[dict],
+        info: dict,
+        invalid: bool = False,
+    ) -> tuple[dict, float, bool, bool, dict]:
+        """Record a rejected/no-op action while still enforcing episode budgets."""
+        self._step_count += 1
+        if invalid:
+            self._invalid_action_count += 1
+        snapshot = StepSnapshot(
+            episode_id=self._episode_id,
+            step_index=self._step_count - 1,
+            state_hash_before=state_hash,
+            state_hash_after=state_hash,
+            action=action,
+            events=events,
             reward=0.0,
             verifier_results=[],
             diff={"added": {}, "changed": {}, "removed": {}},
             terminated=False,
             truncated=False,
         )
+        termination = self._termination.check(
+            StepOutcome(step_index=snapshot.step_index, state_hash=state_hash)
+        )
+        reward = 0.0
+        if termination is not None:
+            snapshot.terminated = not termination.truncated
+            snapshot.truncated = termination.truncated
+            trajectory = self._traj_store.to_trajectory_with_step(snapshot)
+            evaluation = self._evaluate_trajectory(
+                state, trajectory, termination.reason
+            )
+            reward = evaluation.total_reward
+            snapshot.reward = reward
+            snapshot.verifier_results = [
+                item.model_dump() for item in evaluation.verification_results
+            ]
+            info.update({
+                "passed": evaluation.passed,
+                "verifier_results": snapshot.verifier_results,
+                "reward_breakdown": evaluation.reward.model_dump(),
+                "termination_reason": termination.reason,
+            })
         self._record_snapshot(snapshot)
+        if termination is not None and self._telemetry:
+            self._telemetry.complete_episode(
+                reward, self._evaluation.passed, self._step_count, termination.reason
+            )
+        return (
+            self._observe(state),
+            reward,
+            bool(termination and not termination.truncated),
+            bool(termination and termination.truncated),
+            info,
+        )
+
+    def _record_invalid_step(self, hash_before: str, action: dict) -> None:
+        """Legacy helper retained for callers that only need to record a step."""
+        self._stationary_step_result(
+            self._state_store.get(),
+            hash_before,
+            action,
+            events=[],
+            info={},
+            invalid=True,
+        )
 
     def _policy_violation_result(
         self, state: dict, state_hash: str, action: dict, violations: list
@@ -373,31 +541,23 @@ class ForgeEnv(gym.Env, Environment):
             {"type": "policy_violation", "rule_id": item.rule_id, "severity": item.severity}
             for item in violations
         ]
-        self._step_count += 1
-        snapshot = StepSnapshot(
-            episode_id=self._episode_id,
-            step_index=self._step_count - 1,
-            state_hash_before=state_hash,
-            state_hash_after=state_hash,
-            action=action,
+        result = self._stationary_step_result(
+            state,
+            state_hash,
+            action,
             events=violation_events,
-            reward=0.0,
-            verifier_results=[],
-            diff={"added": {}, "changed": {}, "removed": {}},
-            terminated=False,
-            truncated=False,
+            info={
+                "policy_violations": [item.__dict__ for item in violations],
+                "events": violation_events,
+            },
         )
-        self._record_snapshot(snapshot)
         if self._telemetry:
             self._telemetry.record_policy_violation(
-                step_index=snapshot.step_index,
+                step_index=self._step_count - 1,
                 action_type=action.get("type", ""),
                 violations=violations,
             )
-        return self._observe(state), 0.0, False, False, {
-            "policy_violations": [item.__dict__ for item in violations],
-            "events": violation_events,
-        }
+        return result
 
     def _record_snapshot(self, snapshot: StepSnapshot) -> None:
         self._traj_store.record(snapshot)

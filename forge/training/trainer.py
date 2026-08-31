@@ -36,6 +36,10 @@ class NoTrainingSignalError(RuntimeError):
     """
 
 
+class BehaviorPolicyMismatchError(ValueError):
+    """Rollouts were not sampled by the policy supplied as GRPO's base model."""
+
+
 @dataclass
 class TrainingConfig:
     data_dir: Path
@@ -79,6 +83,21 @@ class PolicyTrainer:
                 f"no {objective.value} training signal in {config.data_dir}: "
                 "the graded rollouts are empty, all-failing, or carry no relative signal"
             )
+        if objective is TrainingObjective.GRPO:
+            mismatched = sorted({
+                example.behavior_model
+                for example in examples
+                if example.behavior_model
+                and example.behavior_model not in {
+                    config.base_model,
+                    f"vllm:{config.base_model}",
+                }
+            })
+            if mismatched:
+                raise BehaviorPolicyMismatchError(
+                    "batch GRPO requires rollouts sampled by base_model "
+                    f"{config.base_model!r}; found {mismatched}"
+                )
 
         backend = self._backend or self._default_backend(objective)
         from forge.settings import determinism_enabled

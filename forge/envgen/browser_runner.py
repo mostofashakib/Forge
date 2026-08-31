@@ -1,5 +1,6 @@
 from __future__ import annotations
 import base64
+import hashlib
 import logging
 import time
 from dataclasses import dataclass
@@ -7,17 +8,35 @@ from functools import partial
 from datetime import datetime, timezone
 from pathlib import Path
 
-from forge.contracts import EpisodeController
+from forge.contracts import (
+    CheckResult,
+    DeadEndTerminationPolicy,
+    EpisodeController,
+    EpisodeEvaluation,
+    MaxStepsTerminationPolicy,
+    RewardBreakdown,
+    RewardComponent,
+    StepOutcome,
+    VerificationResult,
+)
 from forge.envgen.episode_base import (
     BaseEpisodeConfig,
     BaseEpisodeResult,
-    TerminationMonitor,
+    TerminationMonitor as TerminationMonitor,
     TrajectoryWriter,
 )
 from forge.envgen.objective import ObjectiveScorer
 from forge.runtime.interaction import BrowserUse, BrowserUseSchema
+from forge.runtime.control import is_submit_action
 
 logger = logging.getLogger(__name__)
+
+__all__ = [
+    "BrowserEpisodeConfig",
+    "BrowserEpisodeResult",
+    "BrowserEpisodeRunner",
+    "TerminationMonitor",
+]
 
 
 @dataclass(kw_only=True)
@@ -131,7 +150,8 @@ class BrowserEpisodeRunner(EpisodeController):
                 result.write_jsonl(jsonl_path)
             return result
 
-        monitor = TerminationMonitor(self._cfg)
+        dead_end = DeadEndTerminationPolicy(self._cfg.dead_end_patience)
+        max_steps = MaxStepsTerminationPolicy(self._cfg.max_steps)
         # Persist each step as it happens so a crash mid-episode still leaves a
         # durable, replayable partial trace.
         writer = TrajectoryWriter(jsonl_path, result) if jsonl_path is not None else None
@@ -158,6 +178,27 @@ class BrowserEpisodeRunner(EpisodeController):
                         logger.warning("[browser-ep] step %d: agent.act failed: %s", step_idx, exc)
                         action = {"action_type": "noop", "reasoning": f"agent error: {exc}"}
 
+                    if is_submit_action(action):
+                        result.termination_reason = "submitted"
+                        score = self._finalize_result(result, ss_before, page.url)
+                        step_record = {
+                            "step_index": step_idx,
+                            "action": action,
+                            "screenshot_before": ss_before,
+                            "screenshot_after": ss_before,
+                            "url_before": current_url,
+                            "url_after": current_url,
+                            "objective_score": score,
+                            "reward": result.total_reward,
+                            "terminated": True,
+                            "truncated": False,
+                            "termination_reason": "submitted",
+                        }
+                        result.steps.append(step_record)
+                        if writer is not None:
+                            writer.record(step_record)
+                        break
+
                     try:
                         browser_use.execute(action)
                         time.sleep(self._cfg.action_settle_s)
@@ -165,9 +206,6 @@ class BrowserEpisodeRunner(EpisodeController):
                         logger.debug("[browser-ep] step %d: action failed: %s", step_idx, exc)
 
                     ss_after = self._screenshot(page)
-                    score = self._scorer.score_with_image(ss_after, page.url, self._cfg.objective)
-                    result.total_reward += score
-
                     step_record = {
                         "step_index": step_idx,
                         "action": action,
@@ -175,24 +213,36 @@ class BrowserEpisodeRunner(EpisodeController):
                         "screenshot_after": ss_after,
                         "url_before": current_url,
                         "url_after": page.url,
-                        "objective_score": score,
-                        "reward": score,
+                        "objective_score": 0.0,
+                        "reward": 0.0,
                     }
                     result.steps.append(step_record)
-                    if writer is not None:
-                        writer.record(step_record)
-                    result.final_objective_score = score
-
                     logger.info(
-                        "[browser-ep] step %02d/%d  action=%s  score=%.2f  url=%s",
+                        "[browser-ep] step %02d/%d  action=%s  url=%s",
                         step_idx + 1, self._cfg.max_steps,
-                        action.get("action_type"), score, page.url[:60],
+                        action.get("action_type"), page.url[:60],
                     )
 
-                    reason = monitor.observe(score)
-                    if reason is not None:
-                        result.termination_reason = reason
+                    outcome = StepOutcome(
+                        step_index=step_idx,
+                        state_hash=hashlib.sha256(ss_after.encode()).hexdigest(),
+                    )
+                    decision = dead_end.check(outcome) or max_steps.check(outcome)
+                    if decision is not None:
+                        result.termination_reason = decision.reason
+                        score = self._finalize_result(result, ss_after, page.url)
+                        step_record.update({
+                            "objective_score": score,
+                            "reward": result.total_reward,
+                            "terminated": not decision.truncated,
+                            "truncated": decision.truncated,
+                            "termination_reason": decision.reason,
+                        })
+                        if writer is not None:
+                            writer.record(step_record)
                         break
+                    if writer is not None:
+                        writer.record(step_record)
                 else:
                     result.termination_reason = "max_steps"
 
@@ -201,8 +251,31 @@ class BrowserEpisodeRunner(EpisodeController):
             result.termination_reason = f"runner_error: {exc}"
 
         result.completed_at = datetime.now(timezone.utc)
-        if result.steps:
-            result.total_reward = result.total_reward / len(result.steps)
         if writer is not None:
             writer.close()
         return result
+
+    def _finalize_result(self, result, screenshot: str, url: str) -> float:
+        """Issue the single authoritative visual verdict for the episode."""
+        score = self._scorer.score_with_image(screenshot, url, self._cfg.objective)
+        result.llm_verdicts += 1
+        verification = VerificationResult.from_checks(
+            "objective_scorer",
+            [CheckResult(
+                name="objective_score",
+                passed=score >= self._cfg.success_threshold,
+                score=score,
+            )],
+        )
+        reward = RewardBreakdown(
+            total_reward=score,
+            components=[RewardComponent(name="objective_score", value=score)],
+        )
+        result.final_objective_score = score
+        result.apply_evaluation(EpisodeEvaluation(
+            passed=verification.passed,
+            reward=reward,
+            verification_results=[verification],
+            reason=result.termination_reason,
+        ))
+        return score

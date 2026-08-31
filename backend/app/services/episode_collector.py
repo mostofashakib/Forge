@@ -41,7 +41,11 @@ class EpisodeDataCollector:
                 output.write(snapshot.model_dump_json() + "\n")
 
     def complete_episode(
-        self, total_reward: float, passed: bool, total_steps: int
+        self,
+        total_reward: float,
+        passed: bool,
+        total_steps: int,
+        termination_reason: str = "unknown",
     ) -> None:
         episode = self._db.get(Episode, self._episode_id)
         if episode is None:
@@ -50,6 +54,7 @@ class EpisodeDataCollector:
         episode.total_reward = total_reward
         episode.passed = passed
         episode.total_steps = total_steps
+        episode.termination_reason = termination_reason
         episode.completed_at = datetime.now(timezone.utc)
         self._db.commit()
 

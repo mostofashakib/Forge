@@ -74,6 +74,25 @@ class MaxStepsTerminationPolicy(TerminationPolicy):
         return None
 
 
+class DeadEndTerminationPolicy(TerminationPolicy):
+    """Truncate after the same progress marker repeats for a configured window."""
+
+    def __init__(self, patience: int) -> None:
+        if patience < 1:
+            raise ValueError("dead-end patience must be at least 1")
+        self._patience = patience
+        self._markers: list[str | None] = []
+
+    def check(self, outcome: StepOutcome) -> Termination | None:
+        self._markers.append(outcome.state_hash)
+        if len(self._markers) < self._patience:
+            return None
+        recent = self._markers[-self._patience:]
+        if recent[0] is not None and len(set(recent)) == 1:
+            return Termination(reason="dead_end", truncated=True)
+        return None
+
+
 class VerifierTerminationPolicy(TerminationPolicy):
     """End naturally when any verifier reports task success."""
 

@@ -101,6 +101,17 @@ class _IncAgent:
         return {"endpoint": "/inc", "payload": {}}
 
 
+class _SubmitThirdAgent:
+    def __init__(self):
+        self.calls = 0
+
+    def act(self, state, objective, actions):
+        self.calls += 1
+        if self.calls == 3:
+            return {"endpoint": "__forge_submit__", "payload": {}}
+        return {"endpoint": "/inc", "payload": {}}
+
+
 def _runner(scorer, tmp_path) -> ContainerEpisodeRunner:
     runner = ContainerEpisodeRunner(
         EpisodeConfig(base_url="http://c", objective="increment n", max_steps=10),
@@ -112,11 +123,11 @@ def _runner(scorer, tmp_path) -> ContainerEpisodeRunner:
 
 def test_crash_mid_episode_leaves_replayable_partial_trace(tmp_path):
     jsonl = tmp_path / "ep.jsonl"
-    runner = _runner(_ExplodingScorer(explode_on=3), tmp_path)
+    runner = _runner(_ExplodingScorer(explode_on=1), tmp_path)
     with pytest.raises(RuntimeError):
-        runner.run_episode(_IncAgent(), episode_id="ep1", jsonl_path=jsonl)
+        runner.run_episode(_SubmitThirdAgent(), episode_id="ep1", jsonl_path=jsonl)
 
-    # Two steps completed before the 3rd scoring call blew up — both are on disk.
+    # Two domain steps were persisted before the one final scoring call failed.
     lines = [json.loads(x) for x in jsonl.read_text().splitlines()]
     steps = [x for x in lines if x.get("type") != "episode_summary"]
     assert len(steps) == 2
