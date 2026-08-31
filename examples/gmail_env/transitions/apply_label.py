@@ -1,4 +1,6 @@
 import copy
+from forge.contracts import Action
+from forge.contracts.backend import TransitionHandler
 from forge.runtime.context import RuntimeContext
 from forge.runtime.snapshot import InvalidActionError
 from forge.runtime.transition import TransitionResult
@@ -25,3 +27,8 @@ def apply_apply_label(state: dict, action: dict, ctx: RuntimeContext) -> Transit
             "timestamp": ctx.clock.now().isoformat(),
         }],
     )
+
+
+class ApplyLabelHandler(TransitionHandler):
+    def apply(self, state: dict, action: Action, ctx: RuntimeContext) -> TransitionResult:
+        return apply_apply_label(state, action.to_dict(), ctx)

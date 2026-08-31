@@ -15,7 +15,7 @@ from examples.gmail_env.verifiers.escalate_billing_complaint import verify_escal
 
 def make_state(seed: int = 0):
     ctx = RuntimeContext(seed=seed)
-    state = GmailInitialStateFactory().create(ctx, {})
+    state = GmailInitialStateFactory().reset(ctx, seed=None, options={})
     return state, ctx
 
 

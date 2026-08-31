@@ -10,7 +10,7 @@ from examples.gmail_env.transitions.archive_email import apply_archive_email
 
 def make_state(seed: int = 0) -> tuple[dict, RuntimeContext]:
     ctx = RuntimeContext(seed=seed)
-    state = GmailInitialStateFactory().create(ctx, {})
+    state = GmailInitialStateFactory().reset(ctx, seed=None, options={})
     return state, ctx
 
 

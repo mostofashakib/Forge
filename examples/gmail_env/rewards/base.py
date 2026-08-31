@@ -1,4 +1,5 @@
-from forge.runtime.reward import RewardBreakdown, RewardComponent
+from forge.contracts import RewardBreakdown, Rubric
+from forge.runtime.reward import RewardComponent
 
 
 def compute_gmail_reward(
@@ -30,3 +31,15 @@ def compute_gmail_reward(
             RewardComponent(name="policy_compliance", value=-violation_penalty),
         ],
     )
+
+
+class GmailRubric(Rubric):
+    """Contract form of the generated rubric.
+
+    Gmail has a single rubric shared across all four tasks, so unlike the
+    per-task template output there is one class here rather than one per
+    task — the plain function above stays the implementation.
+    """
+
+    def score(self, state, trajectory, verifier_results, task) -> RewardBreakdown:
+        return compute_gmail_reward(state, trajectory, verifier_results, task)

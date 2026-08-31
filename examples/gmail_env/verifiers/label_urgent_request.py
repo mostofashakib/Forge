@@ -1,4 +1,4 @@
-from forge.runtime.verification import CheckResult, VerificationResult
+from forge.contracts import CheckResult, Verifier, VerificationResult
 
 
 def verify_label_urgent_request(state: dict, trajectory, task: dict) -> VerificationResult:
@@ -15,3 +15,8 @@ def verify_label_urgent_request(state: dict, trajectory, task: dict) -> Verifica
             evidence=None if passed else f"Email '{email_id}' does not have 'urgent' label.",
         )],
     )
+
+
+class LabelUrgentRequestVerifier(Verifier):
+    def verify(self, state: dict, trajectory, task) -> VerificationResult:
+        return verify_label_urgent_request(state, trajectory, task)

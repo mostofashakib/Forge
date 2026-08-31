@@ -1,14 +1,13 @@
+from forge.contracts import InitialStateProvider
 from forge.runtime.context import RuntimeContext
 
 
-class GmailInitialStateFactory:
+class GmailInitialStateFactory(InitialStateProvider):
     def reset(self, ctx: RuntimeContext, *, seed: int | None, options: dict) -> dict:
         # The seed already reached ctx via RuntimeContext(seed=...); this
-        # factory has always derived its state from ctx, not a separate
-        # seed argument, so reset() just forwards to the legacy entry point.
-        return self.create(ctx, options)
-
-    def create(self, ctx: RuntimeContext, options: dict) -> dict:
+        # factory has always derived its state from ctx, not the `seed`
+        # argument here, so the body below reads ctx.seed — the resolved
+        # seed ForgeEnv put there — not `seed`.
         # Advance the clock by a seed-dependent offset so each seed produces a
         # unique timestamp (and therefore a unique state hash).
         ctx.clock.advance(ctx.seed % 86400)
