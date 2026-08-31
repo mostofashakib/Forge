@@ -156,7 +156,7 @@ class _DeterministicFactory:
         if self._config.fresh_startup and hasattr(self._inner, "clear_cache"):
             self._inner.clear_cache()
         with _guards(self._config):
-            state = self._inner.create(ctx, options)
+            state = self._inner.reset(ctx, seed=seed, options=options)
         if self._config.integers_only:
             _assert_no_floats(state, "initial_state")
         return state
@@ -215,6 +215,10 @@ class EnvBuilder:
         self._orpc_use: ORPCUse | None = None
 
     def with_initial_state(self, factory: InitialStateProvider) -> "EnvBuilder":
+        if not isinstance(factory, InitialStateProvider):
+            raise TypeError(
+                f"initial state factory must be an InitialStateProvider subclass, got {type(factory).__name__}"
+            )
         self._factory = factory
         return self
 
