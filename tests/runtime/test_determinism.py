@@ -15,7 +15,7 @@ from forge.runtime.verifier import VerifierEngine
 
 
 class SeededStateFactory:
-    def create(self, ctx, options):
+    def reset(self, ctx, *, seed, options):
         return {"counter": {"c_0": {"id": "c_0", "value": ctx.rng.randint(0, 1000)}}}
 
 
@@ -23,7 +23,7 @@ _nondeterministic_source = itertools.count()
 
 
 class NonDeterministicStateFactory:
-    def create(self, ctx, options):
+    def reset(self, ctx, *, seed, options):
         return {"counter": {"c_0": {"id": "c_0", "value": next(_nondeterministic_source)}}}
 
 
@@ -39,7 +39,7 @@ def build_env(factory, max_steps: int = 10) -> ForgeEnv:
     te.register("increment", FunctionTransitionHandler(increment_transition))
     return ForgeEnv(
         env_spec=spec,
-        initial_state_factory=factory,
+        initial_state_provider=factory,
         transition_engine=te,
         verifier_engine=VerifierEngine(),
         reward_engine=RewardEngine(),

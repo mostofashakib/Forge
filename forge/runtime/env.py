@@ -1,7 +1,8 @@
 from __future__ import annotations
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING
 import uuid
 import gymnasium as gym
+from forge.contracts import InitialStateProvider
 from forge.runtime.action import ActionValidator
 from forge.runtime.context import RuntimeContext
 from forge.runtime.diff import compute_diff
@@ -17,7 +18,7 @@ from forge.runtime.interaction import (
 )
 from forge.runtime.reward import RewardEngine
 from forge.runtime.snapshot import EnvironmentSpec, InvalidActionError, StepSnapshot, ToolSpec
-from forge.runtime.state import StateStore
+from forge.runtime.state import InProcessStateManager
 from forge.runtime.trajectory import TrajectoryStore
 from forge.runtime.transition import TransitionEngine
 from forge.runtime.verifier import VerifierEngine
@@ -30,8 +31,8 @@ if TYPE_CHECKING:
     from forge.runtime.telemetry import TelemetrySink
 
 
-class InitialStateFactory(Protocol):
-    def create(self, ctx: RuntimeContext, options: dict) -> dict: ...
+# The pre-contracts name. Retained so existing imports keep working.
+InitialStateFactory = InitialStateProvider
 
 
 class ForgeEnv(gym.Env):
@@ -40,7 +41,7 @@ class ForgeEnv(gym.Env):
     def __init__(
         self,
         env_spec: EnvironmentSpec,
-        initial_state_factory: InitialStateFactory,
+        initial_state_provider: InitialStateProvider,
         transition_engine: TransitionEngine,
         verifier_engine: VerifierEngine,
         reward_engine: RewardEngine,
@@ -57,7 +58,7 @@ class ForgeEnv(gym.Env):
     ) -> None:
         super().__init__()
         self.env_spec = env_spec
-        self._factory = initial_state_factory
+        self._initial_state = initial_state_provider
         self._transition_engine = transition_engine
         self._verifier_engine = verifier_engine
         self._reward_engine = reward_engine
@@ -80,7 +81,7 @@ class ForgeEnv(gym.Env):
         self.action_space = gym.spaces.Dict({})
 
         self._ctx: RuntimeContext | None = None
-        self._state_store: StateStore | None = None
+        self._state_store: InProcessStateManager | None = None
         self._traj_store: TrajectoryStore | None = None
         self._current_task: dict | None = None
         self._step_count: int = 0
@@ -160,8 +161,10 @@ class ForgeEnv(gym.Env):
             if self._deterministic
             else f"ep_{uuid.uuid4().hex[:12]}"
         )
-        initial_state = self._factory.create(self._ctx, opts)
-        self._state_store = StateStore(initial_state)
+        initial_state = self._initial_state.reset(
+            self._ctx, seed=actual_seed, options=opts
+        )
+        self._state_store = InProcessStateManager(initial_state)
         self._traj_store = TrajectoryStore(self._episode_id)
         self._current_task = opts.get("task", self.env_spec.default_task)
         self._step_count = 0

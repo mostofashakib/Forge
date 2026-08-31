@@ -2,6 +2,12 @@ from forge.runtime.context import RuntimeContext
 
 
 class GmailInitialStateFactory:
+    def reset(self, ctx: RuntimeContext, *, seed: int | None, options: dict) -> dict:
+        # The seed already reached ctx via RuntimeContext(seed=...); this
+        # factory has always derived its state from ctx, not a separate
+        # seed argument, so reset() just forwards to the legacy entry point.
+        return self.create(ctx, options)
+
     def create(self, ctx: RuntimeContext, options: dict) -> dict:
         # Advance the clock by a seed-dependent offset so each seed produces a
         # unique timestamp (and therefore a unique state hash).

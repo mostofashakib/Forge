@@ -19,7 +19,7 @@ _DETERMINISTIC_WRAPPER = textwrap.dedent("""
 
 
     class Factory:
-        def create(self, ctx, options):
+        def reset(self, ctx, *, seed, options):
             return {"counter": {"c_0": {"id": "c_0", "value": ctx.rng.randint(0, 1000)}}}
 
 
@@ -34,7 +34,7 @@ _DETERMINISTIC_WRAPPER = textwrap.dedent("""
         te.register("increment", FunctionTransitionHandler(increment))
         return ForgeEnv(
             env_spec=EnvironmentSpec(name="ENVNAME", domain="test", max_steps=max_steps),
-            initial_state_factory=Factory(),
+            initial_state_provider=Factory(),
             transition_engine=te,
             verifier_engine=VerifierEngine(),
             reward_engine=RewardEngine(),

@@ -39,7 +39,7 @@ def build_gmail_env(max_steps: int = 20) -> ForgeEnv:
 
     return ForgeEnv(
         env_spec=spec,
-        initial_state_factory=GmailInitialStateFactory(),
+        initial_state_provider=GmailInitialStateFactory(),
         transition_engine=te,
         verifier_engine=ve,
         reward_engine=re,
