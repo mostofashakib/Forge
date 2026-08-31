@@ -28,7 +28,7 @@ from forge.contracts import (
     Transport,
 )
 from forge.contracts.termination import MaxStepsTerminationPolicy
-from forge.contracts.types import ActionResult
+from forge.contracts.types import Action, ActionResult
 from forge.runtime.http_state import HttpStateManager
 from forge.runtime.reward import TaskSuccessRubric
 from forge.runtime.rest_transport import RestTransport
@@ -80,6 +80,23 @@ class _PassthroughObservationEncoder(ObservationEncoder):
         return Observation(payload=state)
 
 
+class _HttpActionResult(ActionResult):
+    """``ActionResult`` plus the raw HTTP response.
+
+    ``ExecutionBackend.execute`` is only contracted to return an
+    ``ActionResult``, and this is a genuine subtype of one — every consumer
+    that only knows about ``ActionResult`` still works. The extra field lets
+    ``step`` retrieve a real ``httpx.Response`` for ``compute_reward`` without
+    a shared, stateful side channel: each call gets its own result, so two
+    interleaved ``execute`` calls never race for it the way a `last_response`
+    attribute on the backend would.
+    """
+
+    model_config = {"arbitrary_types_allowed": True}
+
+    response: httpx.Response
+
+
 class _HttpExecutionBackend(ExecutionBackend):
     """Executes a container env's actions over HTTP: POST to the endpoint
     ``endpoint_for`` resolves for the action (bound to the env's own
@@ -87,10 +104,11 @@ class _HttpExecutionBackend(ExecutionBackend):
     /forge/state for the resulting state. ``ContainerEnvBase.step`` delegates
     here so there is exactly one place that knows how to execute an action.
 
-    The raw HTTP response is kept on ``last_response`` rather than folded
-    into ``ActionResult`` (whose shape is shared by every environment
-    family): ``step`` reads it from there to pass a real ``httpx.Response``
-    on to ``compute_reward``, so that hook's existing contract is untouched.
+    Takes a real ``Action``, per the ``ExecutionBackend`` contract, and
+    converts once at this boundary — ``action.to_dict()`` — for the two
+    things that need the wire form: the ``action_endpoint`` hook (which stays
+    dict-based, since it is the public hook generated subclasses override)
+    and the JSON POST body.
     """
 
     def __init__(
@@ -102,16 +120,14 @@ class _HttpExecutionBackend(ExecutionBackend):
         self._base_url = base_url
         self._client = client
         self._endpoint_for = endpoint_for
-        self.last_response: httpx.Response | None = None
 
-    def execute(self, action: dict, state: dict, ctx: "RuntimeContext") -> ActionResult:
-        endpoint = self._endpoint_for(action)
-        self.last_response = self._client.post(
-            f"{self._base_url}{endpoint}", json=action
-        )
+    def execute(self, action: Action, state: dict, ctx: "RuntimeContext") -> ActionResult:
+        action_dict = action.to_dict()
+        endpoint = self._endpoint_for(action_dict)
+        response = self._client.post(f"{self._base_url}{endpoint}", json=action_dict)
         state_response = self._client.get(f"{self._base_url}/forge/state")
         state_response.raise_for_status()
-        return ActionResult(state=state_response.json())
+        return _HttpActionResult(state=state_response.json(), response=response)
 
 
 class ContainerEnvBase(gymnasium.Env, Environment):
@@ -229,11 +245,15 @@ class ContainerEnvBase(gymnasium.Env, Environment):
     def step(self, action: dict) -> tuple[dict, float, bool, bool, dict]:
         # Delegates to `self.backend` — see `_HttpExecutionBackend` — so there
         # is exactly one place that knows how to execute an action against a
-        # container environment.
-        result = self._backend.execute(action, {}, None)
-        response = self._backend.last_response
-        reward = self.compute_reward(response, result.state)
-        return result.state, reward, False, False, {"status_code": response.status_code}
+        # container environment. Converts at the boundary, the way
+        # TransitionEngine.apply converts with Action.from_dict before
+        # calling a handler, so the backend receives the typed value its own
+        # contract declares.
+        result = self._backend.execute(Action.from_dict(action), {}, None)
+        reward = self.compute_reward(result.response, result.state)
+        return result.state, reward, False, False, {
+            "status_code": result.response.status_code
+        }
 
     def close(self) -> None:
         self.client.close()
