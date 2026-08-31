@@ -30,6 +30,9 @@ class CreateSandboxRequest(BaseModel):
     reward_requirements: str = Field(default="", max_length=20_000)
     reference_urls: list[str] = Field(default_factory=list, max_length=5)
     use_user_researcher: bool = False
+    # Generated environments are API-only unless a UI is explicitly requested.
+    # Ignored for cli (already headless) and browser (inherently a UI).
+    with_ui: bool = False
     source_product_name: str = Field(default="", max_length=200)
     source_product_url: str = Field(default="", max_length=2_000)
     ttl_days: int = Field(default=30, ge=1, le=365)
@@ -43,6 +46,18 @@ class CreateSandboxRequest(BaseModel):
                 "letters, digits, underscores, and hyphens (no spaces)"
             )
         return v
+
+    @model_validator(mode="after")
+    def normalize_ui_selection(self) -> CreateSandboxRequest:
+        """The UI toggle governs generated apps only.
+
+        Premade replicas always ship a UI and browser sandboxes are a browser;
+        a CLI sandbox is a shell with no page at all. Only "general" builds
+        actually run (or skip) the UI specialist.
+        """
+        if self.env_type != "general":
+            self.with_ui = self.env_type != "cli"
+        return self
 
     @model_validator(mode="after")
     def validate_research_source(self) -> CreateSandboxRequest:
@@ -72,6 +87,7 @@ class SandboxResponse(BaseModel):
     id: str
     status: str
     env_type: str = "general"
+    has_ui: bool = True
     container_id: str | None = None
     container_port: int | None = None
     ttl_days: int
@@ -170,6 +186,7 @@ async def create_sandbox(request: CreateSandboxRequest, db: Session = Depends(ge
         expires_at=datetime.now(timezone.utc) + timedelta(days=request.ttl_days),
         policy_requirements=request.policy_requirements or None,
         reward_requirements=request.reward_requirements or None,
+        has_ui=request.with_ui,
     )
     db.add(sandbox)
     db.commit()
@@ -192,6 +209,7 @@ async def create_sandbox(request: CreateSandboxRequest, db: Session = Depends(ge
                     reward_requirements=request.reward_requirements,
                     reference_urls=request.reference_urls,
                     use_user_researcher=request.use_user_researcher,
+                    with_ui=request.with_ui,
                     source_product_name=request.source_product_name,
                     source_product_url=request.source_product_url,
                 ),

@@ -13,3 +13,6 @@ class EnvGenContext:
     reference_urls: list[str] = field(default_factory=list)
     source_product_name: str = ""
     source_product_url: str = ""
+    # Generated environments are API-only unless a UI is explicitly requested.
+    # Specialists read this to decide whether a UI concern exists at all.
+    with_ui: bool = False

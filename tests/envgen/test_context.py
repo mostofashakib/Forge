@@ -41,3 +41,30 @@ def test_generated_app_with_no_files_is_empty():
     # schema must not backfill a placeholder file.
     app = GeneratedApp(files=[])
     assert app.files == []
+
+
+def test_env_gen_context_defaults_to_headless():
+    # Generated environments are API-only unless a UI is explicitly requested.
+    ctx = EnvGenContext(
+        env_name="test_env",
+        description="A ticket system",
+        compiler_input=CompilerInput(
+            project_name="test_env", domain="tickets",
+            entities=[], actions=[], tasks=[],
+        ),
+    )
+    assert ctx.with_ui is False
+
+
+def test_env_gen_context_carries_an_opt_in_ui_request():
+    # False-positive guard: the flag must be a real carrier, not a constant.
+    ctx = EnvGenContext(
+        env_name="test_env",
+        description="A ticket system",
+        compiler_input=CompilerInput(
+            project_name="test_env", domain="tickets",
+            entities=[], actions=[], tasks=[],
+        ),
+        with_ui=True,
+    )
+    assert ctx.with_ui is True

@@ -164,6 +164,8 @@ class SandboxEnvironment(Base):
     policy_requirements: Mapped[str | None] = mapped_column(Text, nullable=True)
     reward_requirements: Mapped[str | None] = mapped_column(Text, nullable=True)
     env_type: Mapped[str] = mapped_column(String, default="general")
+    # Whether the generated app ships a browsable UI. Drives the sandbox App tab.
+    has_ui: Mapped[bool] = mapped_column(Boolean, default=True)
     state_schema: Mapped[str | None] = mapped_column(Text, nullable=True)
     validation_missing_fields: Mapped[str | None] = mapped_column(Text, nullable=True)
 

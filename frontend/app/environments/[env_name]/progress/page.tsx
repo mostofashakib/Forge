@@ -9,7 +9,6 @@ type EnvType = "general" | "cli" | "browser";
 const CORE_AGENTS = [
   { id: "generation_plan",   label: "Prompt Planner",             logPrefix: null },
   { id: "backend_code",      label: "Backend Builder",            logPrefix: "[backend-builder]" },
-  { id: "ui_code",           label: "UI Builder",                 logPrefix: "[ui-builder]" },
   { id: "app_code",          label: "App Assembly",               logPrefix: null },
   { id: "instrumented_code", label: "Telemetry Instrumentation", logPrefix: null },
   { id: "state_bridge_code", label: "State Bridge",              logPrefix: null },
@@ -22,6 +21,13 @@ const RESEARCH_AGENT = {
   id: "user_researcher",
   label: "User Researcher",
   logPrefix: "[user-researcher]",
+};
+
+// Only present for environments built with a UI; a headless build never runs it.
+const UI_AGENT = {
+  id: "ui_code",
+  label: "UI Builder",
+  logPrefix: "[ui-builder]",
 };
 
 const RESEARCH_ARTIFACTS = new Set([
@@ -155,9 +161,16 @@ export default function ProgressPage({
       }
 
       if (typeof msg.user_researcher_enabled === "boolean") {
-        const activeAgents = msg.user_researcher_enabled
-          ? [CORE_AGENTS[0], RESEARCH_AGENT, ...CORE_AGENTS.slice(1)]
-          : CORE_AGENTS;
+        // The checklist mirrors the plan that is actually running: optional
+        // specialists appear only when the build includes them.
+        const [planner, backend, ...rest] = CORE_AGENTS;
+        const activeAgents = [
+          planner,
+          ...(msg.user_researcher_enabled ? [RESEARCH_AGENT] : []),
+          backend,
+          ...(msg.ui_builder_enabled ? [UI_AGENT] : []),
+          ...rest,
+        ];
         agentsRef.current = activeAgents;
         setAgents(activeAgents);
       }

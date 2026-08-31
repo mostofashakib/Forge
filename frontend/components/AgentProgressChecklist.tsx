@@ -5,7 +5,6 @@ import { wsBase } from "@/lib/api";
 const AGENTS = [
   { id: "generation_plan", label: "Prompt Planner" },
   { id: "backend_code",    label: "Backend Builder" },
-  { id: "ui_code",         label: "UI Builder" },
   { id: "app_code",        label: "App Assembly" },
   { id: "instrumented_code", label: "Telemetry Instrumentation" },
   { id: "state_bridge_code", label: "State Bridge (ContainerForgeEnv)" },
@@ -20,22 +19,33 @@ interface Props {
   onError?: (msg: string) => void;
 }
 
+// Only present for environments built with a UI; a headless build never runs it.
+const UI_AGENT = { id: "ui_code", label: "UI Builder" };
+
 export function AgentProgressChecklist({ envName, onDone, onError }: Props) {
+  const [agents, setAgents] = useState(AGENTS);
   const [done, setDone] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const ws = new WebSocket(`${wsBase()}/api/sandbox/ws/progress/${envName}`);
     ws.onmessage = (e) => {
-      const msg = JSON.parse(e.data) as Record<string, string>;
+      const msg = JSON.parse(e.data) as Record<string, string | boolean>;
       if (msg.error) {
-        setError(msg.error);
-        onError?.(msg.error);
+        setError(msg.error as string);
+        onError?.(msg.error as string);
         ws.close();
         return;
       }
+      if (typeof msg.ui_builder_enabled === "boolean") {
+        setAgents(
+          msg.ui_builder_enabled
+            ? [AGENTS[0], AGENTS[1], UI_AGENT, ...AGENTS.slice(2)]
+            : AGENTS,
+        );
+      }
       if (msg.artifact) {
-        setDone((prev) => new Set([...prev, msg.artifact]));
+        setDone((prev) => new Set([...prev, msg.artifact as string]));
       }
       if (msg.done) {
         onDone();
@@ -51,7 +61,7 @@ export function AgentProgressChecklist({ envName, onDone, onError }: Props) {
 
   return (
     <div className="space-y-3">
-      {AGENTS.map((a) => (
+      {agents.map((a) => (
         <div key={a.id} className="flex items-center gap-3">
           {done.has(a.id) ? (
             <span className="text-green-500 text-lg font-bold">✓</span>

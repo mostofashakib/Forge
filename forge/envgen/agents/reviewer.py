@@ -104,7 +104,11 @@ class ReviewerAgent(EnvGenAgent):
         issues: list[ReviewIssue] = []
         app_code: dict[str, str] = artifacts["app_code"] or {}
 
-        required_files = {"main.py", "ui.html", "requirements.txt", "Dockerfile"}
+        required_files = {"main.py", "requirements.txt", "Dockerfile"}
+        # A headless environment has no UI specialist, so ui.html is never
+        # generated and must not be demanded of it.
+        if ctx.with_ui:
+            required_files.add("ui.html")
         for path in sorted(required_files - set(app_code)):
             issues.append(self._error("structure", f"Required file {path!r} is missing", path))
 

@@ -136,3 +136,30 @@ def test_bundle_arcnames_never_escape_the_env_root(tmp_path):
         assert not name.startswith("/")
         assert ".." not in name.split("/")
         assert name.startswith("my_env/")
+
+
+def test_readme_does_not_promise_a_ui_for_a_headless_bundle(tmp_path):
+    # A headless environment ships no ui.html; the bundle README must not
+    # point the reader at a file that is not in the archive.
+    env_dir = tmp_path / "api_env"
+    (env_dir / "app").mkdir(parents=True)
+    (env_dir / "app" / "main.py").write_text("app = object()")
+
+    archive = zipfile.ZipFile(io.BytesIO(build_source_bundle(env_dir, "api_env")))
+    readme = archive.read("api_env/README.md").decode()
+
+    assert "ui.html" not in readme
+    assert "main.py" in readme
+
+
+def test_readme_documents_the_ui_when_the_bundle_contains_one(tmp_path):
+    # False-positive guard: a bundle that does ship a UI must still describe it.
+    env_dir = tmp_path / "ui_env"
+    (env_dir / "app").mkdir(parents=True)
+    (env_dir / "app" / "main.py").write_text("app = object()")
+    (env_dir / "app" / "ui.html").write_text("<html></html>")
+
+    archive = zipfile.ZipFile(io.BytesIO(build_source_bundle(env_dir, "ui_env")))
+    readme = archive.read("ui_env/README.md").decode()
+
+    assert "ui.html" in readme

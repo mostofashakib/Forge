@@ -103,6 +103,19 @@ def run_episode_task(self, rollout_job_id: str, episode_index: int, seed: int) -
     return episode_id
 
 
+def pipeline_flags(plan) -> dict[str, bool]:
+    """Which optional specialists a generation plan actually includes.
+
+    Streamed to the progress UI so it renders a checklist matching the build
+    that is really running, rather than a fixed list of every possible agent.
+    """
+    agent_ids = {task.agent_id for task in plan.tasks}
+    return {
+        "user_researcher_enabled": "user_researcher" in agent_ids,
+        "ui_builder_enabled": "ui_builder" in agent_ids,
+    }
+
+
 @celery.task(name="backend.app.worker.tasks.build_sandbox_task", ignore_result=True)
 def build_sandbox_task(
     job_id: str,
@@ -114,6 +127,7 @@ def build_sandbox_task(
     reward_requirements: str = "",
     reference_urls: list[str] | None = None,
     use_user_researcher: bool = False,
+    with_ui: bool = False,
     source_product_name: str = "",
     source_product_url: str = "",
 ) -> None:
@@ -208,11 +222,7 @@ def build_sandbox_task(
 
         async def on_progress(artifact_name: str, _value) -> None:
             if artifact_name == "generation_plan":
-                publish({
-                    "user_researcher_enabled": any(
-                        task.agent_id == "user_researcher" for task in _value.tasks
-                    )
-                })
+                publish(pipeline_flags(_value))
             label = {
                 "generation_plan":   "Prompt Planner",
                 "backend_research":  "User Research (backend context)",
@@ -256,6 +266,7 @@ def build_sandbox_task(
             reward_requirements=reward_requirements,
             reference_urls=reference_urls or [],
             use_user_researcher=use_user_researcher,
+            with_ui=with_ui,
             source_product_name=source_product_name,
             source_product_url=source_product_url,
         )
