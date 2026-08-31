@@ -1,0 +1,48 @@
+schema_version = "1.3"
+artifacts = ["/logs/agent/trajectory.json", "/logs/agent/trajectory.txt"]
+
+[task]
+name = "forge/task-manager-task-1"
+description = "Reassign a departing team member's tasks with a per-task branch: milestone tasks go to one person, no-milestone tasks go to another with a label appended."
+authors = []
+keywords = ["task-manager", "sqlite", "tool-use", "deterministic", "harbor"]
+
+[metadata]
+difficulty_explanation = "Per-task conditional branching: must inspect each task's milestone, apply a different action per branch, and append to (not replace) existing labels for the no-milestone case. Agent failure: bulk-reassigns everyone to one person, or replaces labels instead of appending."
+category = "agent-environment"
+environment_service = "task_manager"
+database = "sqlite"
+
+[verifier]
+timeout_sec = 120.0
+environment_mode = "separate"
+user = "root"
+
+[agent]
+timeout_sec = 1500.0
+user = "agent"
+
+[verifier.environment]
+network_mode = "no-network"
+build_timeout_sec = 600.0
+os = "linux"
+cpus = 1
+memory_mb = 1024
+storage_mb = 2048
+
+[verifier.environment.env]
+PYTHONPATH = "/opt/fleet"
+
+[environment]
+network_mode = "public"
+build_timeout_sec = 600.0
+os = "linux"
+cpus = 1
+memory_mb = 1024
+storage_mb = 4096
+mcp_servers = []
+
+[environment.env]
+PYTHONPATH = "/opt/fleet"
+
+[solution.env]
