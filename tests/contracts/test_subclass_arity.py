@@ -10,6 +10,8 @@ packages), which is earlier and stricter than registration.
 """
 from __future__ import annotations
 
+import functools
+
 import pytest
 
 from forge.contracts.backend import TransitionHandler
@@ -277,3 +279,94 @@ def test_real_in_tree_implementations_still_define_and_are_usable():
     assert callable(rubric.score)
 
     assert callable(TaskSuccessRubric().score)
+
+
+# --- Non-function descriptor forms (fix round 2) ----------------------------
+#
+# Round 2 review found three more gaps, all in the same "not introspectable,
+# accept" fallback that round 1 narrowed for classmethod/staticmethod:
+#   1. A wrong-arity `functools.partialmethod` was silently accepted — the
+#      raw descriptor also raises TypeError from `inspect.signature()`, so
+#      it fell into the accept-by-default fallback.
+#   2. A `property` shadowing a contract method defined cleanly and failed
+#      only at call time — same fallback, same silent acceptance.
+#   3. Over-rejection: a correctly-shaped callable *instance* assigned as
+#      the class attribute was rejected, because the old code assumed every
+#      non-static/classmethod attribute has an implicit `self` the way a
+#      plain function does.
+
+
+def _apply_impl_missing_extra(self, state, action, ctx, extra):
+    """No default for `extra` — a partialmethod that doesn't bind it is
+    wrong-arity for TransitionHandler.apply(state, action, ctx)."""
+    return state
+
+
+def _apply_impl_with_extra_bound(self, state, action, ctx, extra):
+    return state
+
+
+def test_wrong_arity_partialmethod_apply_raises_at_class_definition():
+    with pytest.raises(TypeError) as exc_info:
+
+        class BadPartialMethodHandler(TransitionHandler):
+            apply = functools.partialmethod(_apply_impl_missing_extra)
+
+    message = str(exc_info.value)
+    assert "BadPartialMethodHandler" in message
+    assert "apply" in message
+
+
+def test_property_shadowing_apply_raises_at_class_definition():
+    with pytest.raises(TypeError) as exc_info:
+
+        class BadPropertyHandler(TransitionHandler):
+            @property
+            def apply(self):
+                return lambda state, action, ctx: state
+
+    message = str(exc_info.value)
+    assert "BadPropertyHandler" in message
+    assert "apply" in message
+    assert "property" in message
+
+
+def test_correctly_shaped_callable_instance_apply_is_accepted():
+    # The false-positive guard: a plain object with `__call__` assigned as
+    # the class attribute is not reached through the function descriptor
+    # protocol, so it has no implicit `self` the way a method does.
+    class _ApplyCallable:
+        def __call__(self, state, action, ctx):
+            return state
+
+    class GoodCallableInstanceHandler(TransitionHandler):
+        apply = _ApplyCallable()
+
+    assert GoodCallableInstanceHandler is not None
+    # And it behaves the way the engine actually calls it.
+    assert GoodCallableInstanceHandler().apply({"n": 1}, None, None) == {"n": 1}
+
+
+def test_wrong_arity_callable_instance_apply_raises_at_class_definition():
+    # The corresponding negative: a callable instance still gets checked,
+    # not waved through just because it isn't a plain function.
+    class _WrongArityApplyCallable:
+        def __call__(self, state):
+            return state
+
+    with pytest.raises(TypeError) as exc_info:
+
+        class BadCallableInstanceHandler(TransitionHandler):
+            apply = _WrongArityApplyCallable()
+
+    message = str(exc_info.value)
+    assert "BadCallableInstanceHandler" in message
+    assert "apply" in message
+
+
+def test_correctly_shaped_partialmethod_apply_defines_and_behaves():
+    class GoodPartialMethodHandler(TransitionHandler):
+        apply = functools.partialmethod(_apply_impl_with_extra_bound, extra="pinned")
+
+    assert GoodPartialMethodHandler is not None
+    assert GoodPartialMethodHandler().apply({"n": 1}, None, None) == {"n": 1}

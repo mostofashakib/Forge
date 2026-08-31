@@ -68,10 +68,19 @@ def test_layers_are_populated():
 
 @pytest.mark.parametrize("rel_path", AGENTS)
 def test_agents_only_depend_on_the_agent_package(rel_path):
-    # forge.runtime.errors is the shared error vocabulary, importable from any layer.
+    # forge.runtime.errors is the shared error vocabulary, importable from any
+    # layer. forge.contracts.types is the shared *shape* vocabulary in the
+    # same sense (see its module docstring: "shapes, not behavior... so that
+    # both the in-process and container environment families can depend on
+    # them without either depending on the other") — it carries no env
+    # internals, verifier, reward, or training behavior, so depending on it
+    # does not let an agent reach into another layer's logic the way this
+    # test exists to prevent.
     for module in imports_of(rel_path):
         if module.startswith(("forge.", "backend.")):
-            assert module.startswith(("forge.runtime.agents", "forge.runtime.errors")), (
+            assert module.startswith(
+                ("forge.runtime.agents", "forge.runtime.errors", "forge.contracts.types")
+            ), (
                 f"{rel_path} imports {module} — agents must interact with environments "
                 "only through observations and action types"
             )

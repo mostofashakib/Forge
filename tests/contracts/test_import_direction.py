@@ -22,7 +22,16 @@ def _runtime_imports(source: str) -> list[str]:
             or (isinstance(node.test, ast.Attribute) and node.test.attr == "TYPE_CHECKING")
         )
     ]
-    guarded = {id(child) for block in type_checking_blocks for child in ast.walk(block)}
+    # Only `if TYPE_CHECKING:`'s own body is exempt. `node.orelse` covers
+    # both `else:` and `elif:` (an elif is itself an `ast.If` nested in
+    # `orelse`); walking the whole node, `orelse` included, would treat a
+    # forbidden import placed in either as type-checking-only and miss it.
+    guarded = {
+        id(child)
+        for block in type_checking_blocks
+        for stmt in block.body
+        for child in ast.walk(stmt)
+    }
 
     names: list[str] = []
     for node in ast.walk(tree):
@@ -60,3 +69,43 @@ def test_plain_forbidden_import_is_detected():
     """Negative: an unguarded forbidden import must be caught."""
     source = "from forge.runtime.context import RuntimeContext\n"
     assert any(n.startswith(FORBIDDEN) for n in _runtime_imports(source))
+
+
+def test_forbidden_import_in_type_checking_else_branch_is_detected():
+    """The `TYPE_CHECKING` exemption covers only the `if` body.
+
+    Round-2 review found that `ast.walk(node)` on the whole `If` node walks
+    `orelse` too, so a forbidden import placed in the `else:` branch was
+    wrongly treated as type-checking-only and passed. Verified red before
+    this test existed: `_runtime_imports` on this exact source returned only
+    `["typing"]`, hiding `forge.runtime.context` entirely.
+    """
+    source = (
+        "from typing import TYPE_CHECKING\n"
+        "if TYPE_CHECKING:\n"
+        "    from forge.schema.thing import Thing\n"
+        "else:\n"
+        "    from forge.runtime.context import RuntimeContext\n"
+    )
+    names = _runtime_imports(source)
+    assert any(n.startswith(FORBIDDEN) for n in names), (
+        f"forbidden import in the `else:` branch was not detected: {names}"
+    )
+
+
+def test_forbidden_import_in_type_checking_elif_branch_is_detected():
+    """Same hole, `elif` form — an `elif` is an `ast.If` nested in `orelse`,
+    so it is exempt from the exemption exactly like a plain `else:` is."""
+    source = (
+        "from typing import TYPE_CHECKING\n"
+        "if TYPE_CHECKING:\n"
+        "    from forge.schema.thing import Thing\n"
+        "elif True:\n"
+        "    from forge.envgen.pipeline import Pipeline\n"
+        "else:\n"
+        "    pass\n"
+    )
+    names = _runtime_imports(source)
+    assert any(n.startswith(FORBIDDEN) for n in names), (
+        f"forbidden import in the `elif:` branch was not detected: {names}"
+    )

@@ -29,7 +29,7 @@ from forge.contracts import (
     Transport,
 )
 from forge.contracts.termination import MaxStepsTerminationPolicy
-from forge.contracts.types import Action, ActionResult
+from forge.contracts.types import Action, ActionResult, StepOutcome
 from forge.runtime.http_state import HttpStateManager
 from forge.runtime.reward import TaskSuccessRubric
 from forge.runtime.rest_transport import RestTransport
@@ -55,6 +55,20 @@ class _HttpInitialState(InitialStateProvider):
     then GET /forge/state for the resulting state. ``ContainerEnvBase.reset``
     delegates here so there is exactly one place that knows how to reset a
     container environment.
+
+    Holds its own ``httpx.Client`` rather than going through
+    ``ContainerEnvBase._transport`` (a ``RestTransport``), even though the
+    latter exists on the same instance and was hardened over three commits
+    for a timeout hole and a JSON-decode gap. That hardening does not
+    protect this path, and deliberately: ``RestTransport.call()`` reports a
+    wire failure or a non-JSON body *in-band*, as an ``error`` field on its
+    return value, and never raises. This class instead calls
+    ``response.raise_for_status()`` directly and lets a failed reset raise
+    ``httpx.HTTPStatusError`` out of ``reset()``. Routing through
+    ``RestTransport`` would silently convert that raise into an in-band
+    result the caller has to know to check — a behavior change on the
+    container hot path, not a refactor. Left as-is until a caller actually
+    wants in-band reset failures.
     """
 
     def __init__(self, base_url: str, client: httpx.Client) -> None:
@@ -117,6 +131,18 @@ class _HttpExecutionBackend(ExecutionBackend):
     things that need the wire form: the ``action_endpoint`` hook (which stays
     dict-based, since it is the public hook generated subclasses override)
     and the JSON POST body.
+
+    Like ``_HttpInitialState``, this holds its own ``httpx.Client`` instead
+    of going through ``ContainerEnvBase._transport``. The reason is the same
+    one: ``RestTransport.call()`` never raises — a wire failure or a
+    non-JSON response body comes back as an ``error`` field on
+    ``TransportResponse`` instead. ``execute()`` here calls
+    ``response.raise_for_status()`` directly on the GET, and lets the
+    underlying ``httpx`` exception propagate on a hard connection failure on
+    either call. Routing execute() through ``RestTransport`` would turn both
+    into an in-band result and ``step()`` would need to learn to check for
+    it — a real semantic change to how a failed action is reported, not
+    just a plumbing change, so it was left out of this pass.
     """
 
     def __init__(
@@ -152,6 +178,19 @@ class ContainerEnvBase(gymnasium.Env, Environment):
                                 (default: "/{action['type']}")
       compute_reward(response, obs) — score a step
                                 (default: 1.0 on HTTP 200, else 0.0)
+
+    Two facade members are exposed for contract compliance but do not sit on
+    the hot path, and that is intentional rather than an oversight — see
+    each for why:
+      rubric      — see the `rubric` property below. `step()`'s reward comes
+                    from the public `compute_reward()` hook, not from
+                    `self._rubric`; that hook is documented API that
+                    generated subclasses override, and stays that way.
+      transport   — see the `transport` property below. `self._transport`
+                    (a `RestTransport`) is real but currently redundant with
+                    the `httpx.Client` calls `_HttpExecutionBackend` and
+                    `_HttpInitialState` make directly; see their docstrings
+                    for why routing through it was not done in this pass.
     """
 
     metadata = {"render_modes": []}
@@ -184,6 +223,7 @@ class ContainerEnvBase(gymnasium.Env, Environment):
         )
         self._rubric = TaskSuccessRubric()
         self._termination = MaxStepsTerminationPolicy(max_steps=max_steps)
+        self._step_count = 0
 
     # ------------------------------------------------------------------
     # Environment facade
@@ -248,6 +288,7 @@ class ContainerEnvBase(gymnasium.Env, Environment):
         # to `self.initial_state` — see `_HttpInitialState` — so there is
         # exactly one place that knows how to reset a container environment.
         obs = self._initial_state.reset(None, seed=seed, options=options or {})
+        self._step_count = 0
         return obs, {}
 
     def step(self, action: dict) -> tuple[dict, float, bool, bool, dict]:
@@ -259,7 +300,26 @@ class ContainerEnvBase(gymnasium.Env, Environment):
         # contract declares.
         result = self._backend.execute(Action.from_dict(action), {}, None)
         reward = self.compute_reward(result.response, result.state)
-        return result.state, reward, False, False, {
+
+        # Honor `self._termination` (a `MaxStepsTerminationPolicy`) instead
+        # of hardcoding `False, False` — the budget `max_steps` describes is
+        # otherwise wired up and never consulted, so a caller passing
+        # `max_steps=10` got no truncation at all. `step_index` is the index
+        # of *this* step (0-based, matching `MaxStepsTerminationPolicy`'s
+        # `step_index >= max_steps - 1`), so it is read before incrementing.
+        step_index = self._step_count
+        self._step_count += 1
+        termination = self._termination.check(
+            StepOutcome(step_index=step_index, reward=reward)
+        )
+        # `MaxStepsTerminationPolicy` only ever returns `truncated=True`
+        # (a budget ran out, not a natural end), but the mapping below stays
+        # correct if `self._termination` is ever swapped for a policy that
+        # signals a true terminal condition (`truncated=False`) instead.
+        truncated = bool(termination) and termination.truncated
+        terminated = bool(termination) and not termination.truncated
+
+        return result.state, reward, terminated, truncated, {
             "status_code": result.response.status_code
         }
 

@@ -103,6 +103,59 @@ async def test_rubric_without_score_is_a_contract_issue():
 
 
 @pytest.mark.asyncio
+async def test_async_score_is_a_contract_issue_with_a_distinct_message():
+    # `score` exists here (unlike the missing-score case above) but as
+    # `async def`, which fails the `ast.FunctionDef` check since
+    # `ast.AsyncFunctionDef` is a different node type. The message must say
+    # so plainly rather than reusing "must define score()" -- an automated
+    # repair specialist reading that while `score` is visibly present could
+    # plausibly "fix" it by adding a second, sync `score` instead of
+    # removing `async` from the existing one.
+    reward = (
+        "from forge.contracts import Rubric\n"
+        "class TicketRubric(Rubric):\n"
+        "    async def score(self, state, trajectory, verifier_results, task):\n"
+        "        return None\n"
+    )
+    review = await _review(_CONFORMING_BRIDGE, reward)
+    contract_issues = [i for i in review.issues if i.category == "contract"]
+    assert contract_issues
+    assert all(i.severity == ReviewSeverity.ERROR for i in contract_issues)
+    assert contract_issues[0].artifact == "reward_fn_code"
+    assert any("async" in i.message for i in contract_issues)
+    # The two failure modes must not share a message: reading it should
+    # make clear this is not the "no score() at all" case.
+    assert not any(
+        "must define score()" in i.message for i in contract_issues
+    )
+
+
+@pytest.mark.asyncio
+async def test_missing_score_and_async_score_produce_different_messages():
+    missing_reward = (
+        "from forge.contracts import Rubric\n"
+        "class TicketRubric(Rubric):\n"
+        "    pass\n"
+    )
+    async_reward = (
+        "from forge.contracts import Rubric\n"
+        "class TicketRubric(Rubric):\n"
+        "    async def score(self, state, trajectory, verifier_results, task):\n"
+        "        return None\n"
+    )
+    missing_review = await _review(_CONFORMING_BRIDGE, missing_reward)
+    async_review = await _review(_CONFORMING_BRIDGE, async_reward)
+
+    missing_message = next(
+        i.message for i in missing_review.issues if i.category == "contract"
+    )
+    async_message = next(
+        i.message for i in async_review.issues if i.category == "contract"
+    )
+    assert missing_message != async_message
+
+
+@pytest.mark.asyncio
 async def test_unparseable_source_produces_no_contract_issue():
     # Missing colon -- a syntax error, not a contract violation. The syntax
     # loop already reports this; the contract gate must not double-report it

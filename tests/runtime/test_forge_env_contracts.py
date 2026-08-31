@@ -3,8 +3,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-import pytest
-
 from forge.contracts import Action, InitialStateProvider
 from forge.contracts.backend import TransitionHandler
 from forge.runtime.env import ForgeEnv

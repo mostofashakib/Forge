@@ -279,3 +279,81 @@ def test_http_action_result_response_is_still_readable_after_serializing():
     result.model_dump_json()  # serialize first
 
     assert result.response.status_code == 200
+
+
+# --- step() honors max_steps (fix round 4) ----------------------------------
+#
+# `__init__` gained `max_steps` on this branch and wired it into
+# `self._termination` (a `MaxStepsTerminationPolicy`), but `step()` returned
+# a hardcoded `False, False` and never consulted it — a caller passing
+# `max_steps=10` got no truncation at all. These drive the real object
+# through its own `reset()`/`step()` interface rather than trusting that a
+# green suite means the wiring does something.
+
+
+def test_step_truncates_once_max_steps_is_reached():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"tickets": []})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    env = ContainerEnvBase("http://env", client=client, max_steps=3)
+    env.reset()
+
+    results = [env.step({"type": "close_ticket"}) for _ in range(4)]
+    truncated_flags = [truncated for (_obs, _r, _term, truncated, _info) in results]
+
+    # Not truncated on step 1 or 2 (budget not yet spent); truncated on step
+    # 3, the last step the budget allows, and stays truncated if the caller
+    # keeps calling past the end of the episode.
+    assert truncated_flags == [False, False, True, True]
+
+
+def test_step_does_not_truncate_before_max_steps_is_reached():
+    # False-positive guard: a fresh env with room left must not report
+    # truncation prematurely.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"tickets": []})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    env = ContainerEnvBase("http://env", client=client, max_steps=50)
+    env.reset()
+
+    for _ in range(5):
+        _obs, _reward, terminated, truncated, _info = env.step(
+            {"type": "close_ticket"}
+        )
+        assert truncated is False
+        assert terminated is False
+
+
+def test_step_truncation_never_reports_terminated_true():
+    # MaxStepsTerminationPolicy signals a budget running out, not a natural
+    # end -- terminated and truncated must not both be True for it.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"tickets": []})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    env = ContainerEnvBase("http://env", client=client, max_steps=1)
+    env.reset()
+
+    _obs, _reward, terminated, truncated, _info = env.step(
+        {"type": "close_ticket"}
+    )
+    assert truncated is True
+    assert terminated is False
+
+
+def test_reset_clears_the_step_count_so_truncation_restarts():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"tickets": []})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    env = ContainerEnvBase("http://env", client=client, max_steps=2)
+    env.reset()
+    env.step({"type": "close_ticket"})
+    _obs, _reward, _term, truncated, _info = env.step({"type": "close_ticket"})
+    assert truncated is True  # episode 1 hit its budget
+
+    env.reset()  # episode 2 starts a fresh budget
+    _obs, _reward, _term, truncated, _info = env.step({"type": "close_ticket"})
+    assert truncated is False

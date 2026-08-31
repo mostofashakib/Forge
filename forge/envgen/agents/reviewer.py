@@ -330,11 +330,32 @@ class ReviewerAgent(EnvGenAgent):
                     for rubric in rubrics
                     for item in rubric.body
                 ):
-                    issues.append(self._error(
-                        "contract",
-                        "The Rubric subclass must define score(); without it the "
-                        "reward cannot be registered",
-                        "reward_fn_code",
-                    ))
+                    # `score` may be entirely absent, or present but defined
+                    # `async def` (which fails the `ast.FunctionDef` check
+                    # above, since `ast.AsyncFunctionDef` is a distinct node
+                    # type). An automated repair specialist reading "must
+                    # define score()" while `score` is visibly present could
+                    # plausibly "fix" this by adding a second, sync `score`
+                    # rather than removing `async` from the existing one —
+                    # so the two cases get distinct messages.
+                    if any(
+                        isinstance(item, ast.AsyncFunctionDef) and item.name == "score"
+                        for rubric in rubrics
+                        for item in rubric.body
+                    ):
+                        issues.append(self._error(
+                            "contract",
+                            "score() is async; Rubric.score is synchronous — "
+                            "remove `async` from the existing score(), do not "
+                            "add a second one",
+                            "reward_fn_code",
+                        ))
+                    else:
+                        issues.append(self._error(
+                            "contract",
+                            "The Rubric subclass must define score(); without it the "
+                            "reward cannot be registered",
+                            "reward_fn_code",
+                        ))
 
         return issues
