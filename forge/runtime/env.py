@@ -17,6 +17,7 @@ from forge.contracts import (
     TaskSource,
     TerminationPolicy,
     ToolProvider,
+    Task,
     VerifierTerminationPolicy,
 )
 from forge.runtime.action import ActionValidator
@@ -44,6 +45,7 @@ from forge.runtime.policy_engine import PolicyEngine
 from forge.runtime.observation_filter import ObservationFilter
 from forge.runtime.task_source import StaticTaskSource
 from forge.runtime.tools import SpecToolProvider
+from forge.runtime.tasks import select_task, task_payload
 
 if TYPE_CHECKING:
     from forge.runtime.telemetry import TelemetrySink
@@ -116,6 +118,7 @@ class ForgeEnv(gym.Env, Environment):
         self._state_store = InProcessStateManager({})
         self._traj_store: TrajectoryStore | None = None
         self._current_task: dict | None = None
+        self._current_task_model: Task | None = None
         self._step_count: int = 0
         self._episode_id: str | None = None
         self._invalid_action_count: int = 0
@@ -164,6 +167,11 @@ class ForgeEnv(gym.Env, Environment):
     @property
     def action_types(self) -> frozenset:
         return frozenset(self._action_validator._valid_types)
+
+    @property
+    def current_task(self) -> Task | None:
+        """The task selected for the active episode, if reset has run."""
+        return self._current_task_model
 
     def current_trajectory(self):
         """Full recorded trajectory of the in-progress episode."""
@@ -238,7 +246,13 @@ class ForgeEnv(gym.Env, Environment):
         )
         self._state_store = InProcessStateManager(initial_state)
         self._traj_store = TrajectoryStore(self._episode_id)
-        self._current_task = opts.get("task", self.env_spec.default_task)
+        self._current_task_model = select_task(
+            self._task_source,
+            seed=actual_seed,
+            options=opts,
+            fallback=self.env_spec.default_task,
+        )
+        self._current_task = task_payload(self._current_task_model)
         self._step_count = 0
         self._invalid_action_count = 0
         self._total_reward = 0.0

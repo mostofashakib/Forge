@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Callable
 
+from forge.contracts import RolloutRecord
 from forge.runtime.policy import seeded_random_policy
 
 Policy = Callable[[dict, frozenset], dict]
@@ -21,19 +22,6 @@ class RolloutSpec:
     seed: int
     task: dict | None = None
     policy: Policy | None = None  # None → seeded-random over the env's tools
-
-
-@dataclass
-class RolloutRecord:
-    seed: int
-    episode_id: str | None
-    outcome: str  # "success" | "failure" | "partial_success" | "edge_case"
-    total_reward: float
-    steps: int
-    terminated: bool
-    truncated: bool
-    invalid_actions: int
-    error: str | None = None
 
 
 @dataclass
@@ -113,7 +101,7 @@ class ParallelRolloutRunner:
 
         return RolloutRecord(
             seed=spec.seed,
-            episode_id=episode_id,
+            episode_id=episode_id or f"rollout-{spec.seed}",
             outcome=self._classify(terminated, total_reward, invalid_actions, error),
             total_reward=total_reward,
             steps=steps,

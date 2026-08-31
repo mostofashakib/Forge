@@ -1,5 +1,7 @@
 from __future__ import annotations
 import json
+from collections.abc import Sequence
+from forge.contracts import Observation, PromptTemplate, Task, ToolSpec
 from forge.runtime.agents.prompts import FORGE_AGENT_PROMPT
 
 try:
@@ -9,9 +11,20 @@ except ImportError:
 
 
 class AnthropicAgent:
-    def __init__(self, model: str, client=None, logger=None) -> None:
+    def __init__(
+        self,
+        model: str,
+        client=None,
+        logger=None,
+        prompt_template: PromptTemplate | None = None,
+        task: Task | None = None,
+        tool_specs: Sequence[ToolSpec] | None = None,
+    ) -> None:
         self._model = model
         self.logger = logger
+        self._prompt_template = prompt_template
+        self._task = task or Task(id="runtime", objective="advance the workflow")
+        self._tool_specs = {spec.name: spec for spec in (tool_specs or ())}
         if client is not None:
             self._client = client
         else:
@@ -20,20 +33,18 @@ class AnthropicAgent:
             self._client = anthropic.Anthropic()
 
     def act(self, obs: dict, action_types: frozenset[str]) -> dict:
-        tools = [
-            {
-                "name": at,
-                "description": FORGE_AGENT_PROMPT.action_description_template.format(action=at),
-                "input_schema": {"type": "object", "properties": {}, "additionalProperties": True},
-            }
-            for at in sorted(action_types)
-        ]
-        system = f"{FORGE_AGENT_PROMPT.system}\n\nOUTPUT FORMAT: {FORGE_AGENT_PROMPT.output_contract}"
+        tools = self._tools(action_types)
+        if self._prompt_template is not None:
+            system = self._prompt_template.system(self._task)
+            user = self._prompt_template.user(Observation(payload=obs), self._task)
+        else:
+            system = f"{FORGE_AGENT_PROMPT.system}\n\nOUTPUT FORMAT: {FORGE_AGENT_PROMPT.output_contract}"
+            user = FORGE_AGENT_PROMPT.observation_template.format(
+                observation=json.dumps(obs)
+            )
         messages = [{
             "role": "user",
-            "content": FORGE_AGENT_PROMPT.observation_template.format(
-                observation=json.dumps(obs)
-            ),
+            "content": user,
         }]
         response = self._client.messages.create(
             model=self._model,
@@ -57,6 +68,21 @@ class AnthropicAgent:
                 response=_serialize_content(response),
             )
         return action
+
+    def _tools(self, action_types: frozenset[str]) -> list[dict]:
+        specs = [self._tool_specs.get(name, ToolSpec(name=name)) for name in sorted(action_types)]
+        if self._prompt_template is not None:
+            return self._prompt_template.tool_descriptions(specs)
+        return [
+            {
+                "name": spec.name,
+                "description": spec.description or FORGE_AGENT_PROMPT.action_description_template.format(
+                    action=spec.name
+                ),
+                "input_schema": {"type": "object", "properties": {}, "additionalProperties": True},
+            }
+            for spec in specs
+        ]
 
 
 def _serialize_content(response) -> list[dict]:

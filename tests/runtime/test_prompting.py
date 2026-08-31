@@ -36,7 +36,7 @@ def test_the_user_message_renders_the_observation_into_the_template():
     expected = FORGE_AGENT_PROMPT.observation_template.format(
         observation=json.dumps(observation.payload, sort_keys=True)
     )
-    assert rendered == expected
+    assert rendered == f"Task objective: {_task().objective}\n\n{expected}"
 
 
 def test_the_user_message_carries_the_observation_payload():

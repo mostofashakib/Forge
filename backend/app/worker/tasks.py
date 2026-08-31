@@ -65,7 +65,22 @@ def run_episode_task(self, rollout_job_id: str, episode_index: int, seed: int) -
                 jsonl_path=jsonl_path,
             )
             env = load_forge_env(env_name, telemetry)
-            agent = make_agent(agent_id)
+            try:
+                selected_task = env.task_source.get(task_name)
+            except KeyError:
+                # Older generated packages may expose only a default task. Keep
+                # the requested rollout objective aligned for both reset and
+                # prompting even when that package predates TaskSource.
+                available_tasks = env.task_source.tasks()
+                selected_task = available_tasks[0] if available_tasks else {
+                    "id": task_name,
+                    "objective": task_name,
+                }
+            agent = make_agent(
+                agent_id,
+                environment=env,
+                task=selected_task,
+            )
 
             # Drive the episode through the run logger so the full trace (LLM
             # calls, actions, and state changes) is captured. The trace is
@@ -73,7 +88,13 @@ def run_episode_task(self, rollout_job_id: str, episode_index: int, seed: int) -
             run_logger = AgentRunLogger(run_id=episode_id)
             trace_path = jsonl_path.with_name(f"{episode_id}.trace.jsonl")
             try:
-                run_logged_episode(env, agent, run_logger, seed=seed)
+                run_logged_episode(
+                    env,
+                    agent,
+                    run_logger,
+                    seed=seed,
+                    task=selected_task,
+                )
             finally:
                 trace_path.write_text(run_logger.to_jsonl())
             # ForgeEnv.step() calls telemetry.complete_episode() on termination

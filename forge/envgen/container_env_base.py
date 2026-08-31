@@ -9,7 +9,6 @@ the plumbing.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING
 
 import gymnasium
 import httpx
@@ -20,9 +19,13 @@ from forge.contracts import (
     ExecutionBackend,
     InitialStateProvider,
     ObservationEncoder,
+    PromptTemplate,
+    RewardBreakdown,
+    RewardComponent,
     Rubric,
     StateManager,
     TaskSource,
+    Task,
     TerminationPolicy,
     Transport,
     TransportRequest,
@@ -32,13 +35,11 @@ from forge.contracts.termination import MaxStepsTerminationPolicy
 from forge.contracts.types import Action, ActionResult, StepOutcome
 from forge.runtime.http_state import HttpStateManager
 from forge.runtime.observation_filter import ObservationFilter
-from forge.runtime.reward import TaskSuccessRubric
 from forge.runtime.rest_transport import RestTransport
 from forge.runtime.task_source import StaticTaskSource
-
-if TYPE_CHECKING:
-    from forge.runtime.context import RuntimeContext
-
+from forge.runtime.tasks import select_task, task_payload
+from forge.runtime.trajectory import Trajectory
+from forge.runtime.context import RuntimeContext
 
 class ContainerTransportError(RuntimeError):
     """A container HTTP call failed.
@@ -154,6 +155,27 @@ class _HttpActionResult(ActionResult):
     response: _ActionResponse = Field(exclude=True)
 
 
+class _ContainerHookRubric(Rubric):
+    """Expose the generated ``compute_reward`` hook through ``Rubric``.
+
+    Existing generated subclasses keep their public two-argument hook, while
+    the environment's step path now obtains every reward from its rubric.
+    """
+
+    def __init__(self, reward_hook: Callable[[_ActionResponse, dict], float]) -> None:
+        self._reward_hook = reward_hook
+
+    def score_response(self, response: _ActionResponse, state: dict) -> RewardBreakdown:
+        value = float(self._reward_hook(response, state))
+        return RewardBreakdown(
+            total_reward=value,
+            components=[RewardComponent(name="container_hook", value=value)],
+        )
+
+    def score(self, state, trajectory, verifier_results, task) -> RewardBreakdown:
+        raise RuntimeError("container hook rubrics require the action response")
+
+
 class _HttpExecutionBackend(ExecutionBackend):
     """Executes a container env's actions over HTTP: POST to the endpoint
     ``endpoint_for`` resolves for the action (bound to the env's own
@@ -229,12 +251,10 @@ class ContainerEnvBase(gymnasium.Env, Environment):
     they are converted back to a raise at the boundary, so callers still see
     an exception. See `ContainerTransportError`.
 
-    One facade member is exposed for contract compliance but does not sit on
-    the hot path, and that is intentional rather than an oversight:
-      rubric      — see the `rubric` property below. `step()`'s reward comes
-                    from the public `compute_reward()` hook, not from
-                    `self._rubric`; that hook is documented API that
-                    generated subclasses override, and stays that way.
+    Rewards always flow through `self._rubric`. Existing generated subclasses
+    remain compatible because `_ContainerHookRubric` adapts their public
+    `compute_reward(response, obs)` hook; new environments can inject a normal
+    `Rubric` directly.
     """
 
     metadata = {"render_modes": []}
@@ -245,6 +265,11 @@ class ContainerEnvBase(gymnasium.Env, Environment):
         client: httpx.Client | None = None,
         timeout: float = 15.0,
         max_steps: int = 50,
+        task_source: TaskSource | None = None,
+        prompt_template: PromptTemplate | None = None,
+        observation_encoder: ObservationEncoder | None = None,
+        rubric: Rubric | None = None,
+        termination_policy: TerminationPolicy | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.client = client or httpx.Client(timeout=timeout)
@@ -259,16 +284,19 @@ class ContainerEnvBase(gymnasium.Env, Environment):
         # generated subclasses can replace either collaborator.
         self._state_manager = HttpStateManager(self.base_url, client=self.client)
         self._transport = RestTransport(self.base_url, client=self.client)
-        self._task_source = StaticTaskSource()
+        self._task_source = task_source or StaticTaskSource()
         # Both HTTP collaborators run through the transport rather than
         # holding their own client, so its timeout and JSON-decode handling
         # protect the paths reset() and step() actually take.
         self._initial_state = _HttpInitialState(self._transport)
-        self._observations = ObservationFilter()
+        self._observations = observation_encoder or ObservationFilter()
         self._backend = _HttpExecutionBackend(self._transport, self.action_endpoint)
-        self._rubric = TaskSuccessRubric()
-        self._termination = MaxStepsTerminationPolicy(max_steps=max_steps)
+        self._rubric = rubric or _ContainerHookRubric(self.compute_reward)
+        self._prompt_template = prompt_template
+        self._termination = termination_policy or MaxStepsTerminationPolicy(max_steps=max_steps)
         self._step_count = 0
+        self._runtime_ctx: RuntimeContext | None = None
+        self._current_task: Task | None = None
 
     # ------------------------------------------------------------------
     # Environment facade
@@ -306,6 +334,14 @@ class ContainerEnvBase(gymnasium.Env, Environment):
     def termination(self) -> TerminationPolicy:
         return self._termination
 
+    @property
+    def prompt(self) -> PromptTemplate | None:
+        return self._prompt_template
+
+    @property
+    def current_task(self) -> Task | None:
+        return self._current_task
+
     # ------------------------------------------------------------------
     # Domain hooks
     # ------------------------------------------------------------------
@@ -328,9 +364,23 @@ class ContainerEnvBase(gymnasium.Env, Environment):
         # ones. An unseeded reset resets to the app's fixed baseline. Delegates
         # to `self.initial_state` — see `_HttpInitialState` — so there is
         # exactly one place that knows how to reset a container environment.
-        obs = self._initial_state.reset(None, seed=seed, options=options or {})
+        actual_seed = seed if seed is not None else 0
+        opts = options or {}
+        self._runtime_ctx = RuntimeContext(seed=actual_seed, deterministic=seed is not None)
+        state = self._initial_state.reset(
+            self._runtime_ctx, seed=seed, options=opts
+        )
+        self._current_task = select_task(
+            self._task_source, seed=actual_seed, options=opts
+        )
+        obs = self._observations.encode(state, self._runtime_ctx).payload
         self._step_count = 0
-        return obs, {}
+        info = {}
+        if self._current_task is not None:
+            info["task"] = task_payload(self._current_task)
+        if seed is not None:
+            info["seed"] = actual_seed
+        return obs, info
 
     def step(self, action: dict) -> tuple[dict, float, bool, bool, dict]:
         # Delegates to `self.backend` — see `_HttpExecutionBackend` — so there
@@ -339,8 +389,16 @@ class ContainerEnvBase(gymnasium.Env, Environment):
         # TransitionEngine.apply converts with Action.from_dict before
         # calling a handler, so the backend receives the typed value its own
         # contract declares.
-        result = self._backend.execute(Action.from_dict(action), {}, None)
-        reward = self.compute_reward(result.response, result.state)
+        ctx = self._runtime_ctx or RuntimeContext(seed=0, deterministic=False)
+        result = self._backend.execute(Action.from_dict(action), {}, ctx)
+        trajectory = Trajectory(episode_id="container", steps=[])
+        if isinstance(self._rubric, _ContainerHookRubric):
+            reward_breakdown = self._rubric.score_response(result.response, result.state)
+        else:
+            reward_breakdown = self._rubric.score(
+                result.state, trajectory, [], self._current_task
+            )
+        reward = reward_breakdown.total_reward
 
         # Honor `self._termination` (a `MaxStepsTerminationPolicy`) instead
         # of hardcoding `False, False` — the budget `max_steps` describes is
@@ -360,8 +418,10 @@ class ContainerEnvBase(gymnasium.Env, Environment):
         truncated = bool(termination) and termination.truncated
         terminated = bool(termination) and not termination.truncated
 
-        return result.state, reward, terminated, truncated, {
-            "status_code": result.response.status_code
+        observation = self._observations.encode(result.state, ctx).payload
+        return observation, reward, terminated, truncated, {
+            "status_code": result.response.status_code,
+            "reward_breakdown": reward_breakdown.model_dump(),
         }
 
     def close(self) -> None:
