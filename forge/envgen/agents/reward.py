@@ -33,6 +33,11 @@ _SYSTEM = (
     "  def compute_reward(state, trajectory, verifier_results, task) -> RewardBreakdown:\n"
     "Import RewardBreakdown and RewardComponent from forge.runtime.reward.\n"
     "Base the logic on the user's requirements. Return a complete Python file.\n"
+    "\n"
+    "This mirrors the forge.contracts.Rubric contract: a Rubric subclass implements\n"
+    "  def score(self, state, trajectory, verifier_results, task) -> RewardBreakdown\n"
+    "with exactly these parameter names — Rubric subclasses are arity-checked at class\n"
+    "definition time, so the names and count must match exactly.\n"
     "Call the extract tool with the result."
 )
 
