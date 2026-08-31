@@ -1,5 +1,7 @@
 from __future__ import annotations
 import copy
+from forge.contracts import Action
+from forge.contracts.backend import TransitionHandler
 from forge.runtime.context import RuntimeContext
 from forge.runtime.snapshot import InvalidActionError
 from forge.runtime.transition import TransitionResult
@@ -44,3 +46,14 @@ def apply_{{ action.name }}(state: dict, action: dict, ctx: RuntimeContext) -> T
             "timestamp": ctx.clock.now().isoformat(),
         }],
     )
+
+
+class {{ action.name | pascal_case }}Handler(TransitionHandler):
+    """Contract form of the generated transition.
+
+    The plain function above stays the implementation — it is what
+    customization overrides replace and what hand-written callers import.
+    """
+
+    def apply(self, state: dict, action: Action, ctx: RuntimeContext) -> TransitionResult:
+        return apply_{{ action.name }}(state, action.to_dict(), ctx)

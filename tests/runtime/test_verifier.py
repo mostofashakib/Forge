@@ -1,5 +1,5 @@
 from forge.runtime.verification import CheckResult, VerificationResult
-from forge.runtime.verifier import VerifierEngine
+from forge.runtime.verifier import FunctionVerifier, VerifierEngine
 
 
 def passing_verifier(state, trajectory, task):
@@ -17,7 +17,7 @@ def failing_verifier(state, trajectory, task):
 
 def test_registered_verifier_runs():
     engine = VerifierEngine()
-    engine.register("always_pass", passing_verifier)
+    engine.register("always_pass", FunctionVerifier(passing_verifier))
     results = engine.run_all({}, None, {"name": "t", "verifier_id": "always_pass"})
     assert len(results) == 1
     assert results[0].passed is True
@@ -25,7 +25,7 @@ def test_registered_verifier_runs():
 
 def test_no_task_returns_empty_results():
     engine = VerifierEngine()
-    engine.register("v", passing_verifier)
+    engine.register("v", FunctionVerifier(passing_verifier))
     assert engine.run_all({}, None, None) == []
 
 
@@ -37,7 +37,7 @@ def test_unknown_verifier_id_returns_empty():
 
 def test_failing_verifier_result_has_passed_false():
     engine = VerifierEngine()
-    engine.register("always_fail", failing_verifier)
+    engine.register("always_fail", FunctionVerifier(failing_verifier))
     results = engine.run_all({}, None, {"name": "t", "verifier_id": "always_fail"})
     assert results[0].passed is False
     assert results[0].checks[0].evidence == "never passes"

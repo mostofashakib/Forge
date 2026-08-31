@@ -6,7 +6,9 @@ from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from typing import Callable
 
-from forge.runtime.env import ForgeEnv, InitialStateFactory
+from forge.contracts import Rubric, Verifier
+from forge.contracts.backend import TransitionHandler
+from forge.runtime.env import ForgeEnv, InitialStateProvider
 from forge.runtime.determinism import run_determinism_check
 from forge.runtime.errors import DeterminismViolation, EnvironmentBuildError
 from forge.runtime.interaction import (
@@ -21,11 +23,37 @@ from forge.runtime.interaction import (
     RESTUse,
     RESTUseSchema,
 )
-from forge.runtime.reward import RewardEngine
+from forge.runtime.reward import FunctionRubric, RewardEngine
 from forge.runtime.snapshot import EnvironmentSpec, ToolParam, ToolSpec
-from forge.runtime.transition import TransitionEngine, TransitionResult
-from forge.runtime.verifier import VerifierEngine
+from forge.runtime.transition import (
+    FunctionTransitionHandler,
+    TransitionEngine,
+    TransitionResult,
+)
+from forge.runtime.verifier import FunctionVerifier, VerifierEngine
 from forge.settings import determinism_enabled
+
+
+# The builder's public surface stays plain-callable, so the callables it was
+# handed are adapted into the contracts here — at the boundary where they enter
+# the typed world — rather than by loosening the engines' registries. Anything
+# that already implements the contract is passed through untouched.
+def _as_transition_handler(handler) -> TransitionHandler:
+    if isinstance(handler, TransitionHandler):
+        return handler
+    return FunctionTransitionHandler(handler)
+
+
+def _as_verifier(fn) -> Verifier:
+    if isinstance(fn, Verifier):
+        return fn
+    return FunctionVerifier(fn)
+
+
+def _as_rubric(fn) -> Rubric:
+    if isinstance(fn, Rubric):
+        return fn
+    return FunctionRubric(fn)
 
 
 @dataclass(frozen=True)
@@ -120,15 +148,15 @@ def _guards(config: DeterminismConfig):
 class _DeterministicFactory:
     """Wraps an initial-state factory to enforce the determinism config."""
 
-    def __init__(self, inner: InitialStateFactory, config: DeterminismConfig) -> None:
+    def __init__(self, inner: InitialStateProvider, config: DeterminismConfig) -> None:
         self._inner = inner
         self._config = config
 
-    def create(self, ctx, options: dict) -> dict:
+    def reset(self, ctx, *, seed: int | None, options: dict) -> dict:
         if self._config.fresh_startup and hasattr(self._inner, "clear_cache"):
             self._inner.clear_cache()
         with _guards(self._config):
-            state = self._inner.create(ctx, options)
+            state = self._inner.reset(ctx, seed=seed, options=options)
         if self._config.integers_only:
             _assert_no_floats(state, "initial_state")
         return state
@@ -173,7 +201,7 @@ class EnvBuilder:
         self._domain = domain
         self._max_steps = max_steps
         self._default_task: dict | None = None
-        self._factory: InitialStateFactory | None = None
+        self._factory: InitialStateProvider | None = None
         self._transitions: dict[str, Callable] = {}
         self._tool_specs: dict[str, ToolSpec] = {}
         self._verifiers: dict[str, Callable] = {}
@@ -186,7 +214,11 @@ class EnvBuilder:
         self._rest_use: RESTUse | None = None
         self._orpc_use: ORPCUse | None = None
 
-    def with_initial_state(self, factory: InitialStateFactory) -> "EnvBuilder":
+    def with_initial_state(self, factory: InitialStateProvider) -> "EnvBuilder":
+        if not isinstance(factory, InitialStateProvider):
+            raise TypeError(
+                f"initial state factory must be an InitialStateProvider subclass, got {type(factory).__name__}"
+            )
         self._factory = factory
         return self
 
@@ -301,17 +333,17 @@ class EnvBuilder:
 
         te = TransitionEngine()
         for action_type, handler in self._transitions.items():
-            te.register(action_type, handler)
+            te.register(action_type, _as_transition_handler(handler))
 
         ve = VerifierEngine()
         for verifier_id, fn in self._verifiers.items():
-            ve.register(verifier_id, fn)
+            ve.register(verifier_id, _as_verifier(fn))
 
         re = RewardEngine()
-        if self._default_reward:
-            re.set_default(self._default_reward)
+        if self._default_reward is not None:
+            re.set_default(_as_rubric(self._default_reward))
         for task_name, fn in self._task_rewards.items():
-            re.register(task_name, fn)
+            re.register(task_name, _as_rubric(fn))
 
         env = ForgeEnv(
             env_spec=EnvironmentSpec(
@@ -320,7 +352,7 @@ class EnvBuilder:
                 max_steps=self._max_steps,
                 default_task=self._default_task,
             ),
-            initial_state_factory=_DeterministicFactory(self._factory, self._config),
+            initial_state_provider=_DeterministicFactory(self._factory, self._config),
             transition_engine=_DeterministicTransitionEngine(te, self._config),
             verifier_engine=ve,
             reward_engine=re,

@@ -157,7 +157,7 @@ def test_verifier_template_uses_exact_state_verifier():
     )
     code = VerifierGenerator().generate(ci)["my_task"]
     assert "ExactStateVerifier" in code
-    assert "from forge.runtime.verifiers import" in code
+    assert "from forge.runtime import verifiers as _forge_verifiers" in code
     assert _is_valid_python(code)
 
 

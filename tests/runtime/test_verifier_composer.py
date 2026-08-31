@@ -265,9 +265,10 @@ def test_composed_verifier_and_scoring_run_in_a_live_episode():
 
     from forge.runtime.env_builder import EnvBuilder
     from forge.runtime.transition import TransitionResult
+    from forge.contracts import InitialStateProvider
 
-    class Factory:
-        def create(self, ctx, options):
+    class Factory(InitialStateProvider):
+        def reset(self, ctx, *, seed: int | None, options: dict) -> dict:
             return {"counter": {"c_0": {"id": "c_0", "value": 0}}}
 
     def increment(state, action, ctx):

@@ -1,4 +1,6 @@
 import copy
+from forge.contracts import Action
+from forge.contracts.backend import TransitionHandler
 from forge.runtime.context import RuntimeContext
 from forge.runtime.snapshot import InvalidActionError
 from forge.runtime.transition import TransitionResult
@@ -22,3 +24,8 @@ def apply_mark_read(state: dict, action: dict, ctx: RuntimeContext) -> Transitio
             "timestamp": ctx.clock.now().isoformat(),
         }],
     )
+
+
+class MarkReadHandler(TransitionHandler):
+    def apply(self, state: dict, action: Action, ctx: RuntimeContext) -> TransitionResult:
+        return apply_mark_read(state, action.to_dict(), ctx)

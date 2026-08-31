@@ -1,4 +1,4 @@
-from forge.runtime.verification import CheckResult, VerificationResult
+from forge.contracts import CheckResult, Verifier, VerificationResult
 
 
 def verify_reply_to_customer(state: dict, trajectory, task: dict) -> VerificationResult:
@@ -19,3 +19,8 @@ def verify_reply_to_customer(state: dict, trajectory, task: dict) -> Verificatio
             evidence=None if passed else f"No reply sent to thread '{thread_id}'.",
         )],
     )
+
+
+class ReplyToCustomerVerifier(Verifier):
+    def verify(self, state: dict, trajectory, task) -> VerificationResult:
+        return verify_reply_to_customer(state, trajectory, task)

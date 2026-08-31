@@ -10,12 +10,16 @@ _DETERMINISTIC_WRAPPER = textwrap.dedent("""
     from forge.runtime.env import ForgeEnv
     from forge.runtime.reward import RewardEngine
     from forge.runtime.snapshot import EnvironmentSpec
-    from forge.runtime.transition import TransitionEngine, TransitionResult
+    from forge.runtime.transition import (
+        FunctionTransitionHandler,
+        TransitionEngine,
+        TransitionResult,
+    )
     from forge.runtime.verifier import VerifierEngine
 
 
     class Factory:
-        def create(self, ctx, options):
+        def reset(self, ctx, *, seed, options):
             return {"counter": {"c_0": {"id": "c_0", "value": ctx.rng.randint(0, 1000)}}}
 
 
@@ -27,10 +31,10 @@ _DETERMINISTIC_WRAPPER = textwrap.dedent("""
 
     def build_ENVNAME_env(max_steps: int = 10) -> ForgeEnv:
         te = TransitionEngine()
-        te.register("increment", increment)
+        te.register("increment", FunctionTransitionHandler(increment))
         return ForgeEnv(
             env_spec=EnvironmentSpec(name="ENVNAME", domain="test", max_steps=max_steps),
-            initial_state_factory=Factory(),
+            initial_state_provider=Factory(),
             transition_engine=te,
             verifier_engine=VerifierEngine(),
             reward_engine=RewardEngine(),

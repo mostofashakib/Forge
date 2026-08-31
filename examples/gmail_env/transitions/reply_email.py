@@ -1,4 +1,6 @@
 import copy
+from forge.contracts import Action
+from forge.contracts.backend import TransitionHandler
 from forge.runtime.context import RuntimeContext
 from forge.runtime.snapshot import InvalidActionError
 from forge.runtime.transition import TransitionResult
@@ -43,3 +45,8 @@ def apply_reply_email(state: dict, action: dict, ctx: RuntimeContext) -> Transit
             "timestamp": ctx.clock.now().isoformat(),
         }],
     )
+
+
+class ReplyEmailHandler(TransitionHandler):
+    def apply(self, state: dict, action: Action, ctx: RuntimeContext) -> TransitionResult:
+        return apply_reply_email(state, action.to_dict(), ctx)

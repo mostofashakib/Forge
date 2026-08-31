@@ -13,7 +13,7 @@ def empty_trajectory():
 
 def make_state(seed: int = 0):
     ctx = RuntimeContext(seed=seed)
-    state = {{ project_name | pascal_case }}InitialStateFactory().create(ctx, {})
+    state = {{ project_name | pascal_case }}InitialStateFactory().reset(ctx, seed=seed, options={})
     return state, ctx
 
 {% for task in tasks %}

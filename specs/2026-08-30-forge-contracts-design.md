@@ -1,7 +1,7 @@
 # Shared Contracts for Environment Generation
 
 **Date:** 2026-08-30
-**Status:** Approved for planning (phases 1-3 not started)
+**Status:** Phases 1-3 implemented for the eleven contracts and the `Environment` facade; the runtime, generators, `examples/gmail_env`, and the generation pipeline are migrated onto them. The concrete `PromptTemplate`/`ToolProvider` implementations this document names below are not yet built — see "Not yet implemented."
 
 ## Problem
 
@@ -200,7 +200,7 @@ class Rubric(ABC):
     ) -> RewardBreakdown: ...
 ```
 
-`RewardEngine`'s default behavior (1.0 if any verifier passed, else 0.0) becomes `TaskSuccessRubric`, preserved verbatim as the fallback. `TieredRewardEngine`, `ObjectiveScorer`, and `LayeredVerifier` become implementations — `LayeredVerifier` already exposes `__call__(state, trajectory, task) -> VerificationResult`, so it satisfies `Verifier` by renaming that method to `verify` and keeping `__call__` as an alias for one release.
+`RewardEngine`'s default behavior (1.0 if any verifier passed, else 0.0) becomes `TaskSuccessRubric`, preserved verbatim as the fallback. `TieredRewardEngine` and `ObjectiveScorer` become implementations. `LayeredVerifier` was **not** migrated to subclass `Verifier` — it still only exposes `__call__(state, trajectory, task) -> VerificationResult`, no `verify` method, and does not inherit from `Verifier`. It works today solely because `EnvBuilder._as_verifier` falls back to wrapping any plain callable in `FunctionVerifier` when `isinstance(fn, Verifier)` is `False`, which it is for `LayeredVerifier`. The rename this paragraph used to describe was never done; see "Not yet implemented."
 
 **9. `TerminationPolicy`** (`termination.py`) — how the episode ends.
 
@@ -307,6 +307,16 @@ In dependency order:
 - `BackendBuilderAgent`, `StateBridgeAgent`, `RewardAgent`, and `ScenarioBuilderAgent` prompts cite the contract names and signatures instead of describing them in prose.
 - `ReviewerAgent` gains a static check that generated packages implement the contracts they claim: the state bridge subclasses `Environment`, the reward function satisfies `Rubric`, and every declared action has a `TransitionHandler`. This is a mechanical check, complementing the existing semantic review.
 - README documents `forge/contracts/` as the extension surface for hand-authored environments.
+
+## Not yet implemented
+
+The `PromptTemplate` and `ToolProvider` **ABCs** are delivered and in `forge/contracts/`. The concrete implementations this document names for them are not, and remain follow-on work:
+
+- **`ForgeAgentPromptTemplate`** — the default `PromptTemplate` this document says the existing `AgentPrompt` dataclass and `FORGE_AGENT_PROMPT` instance "become." `AgentPrompt`/`FORGE_AGENT_PROMPT` are unchanged and there is no `ForgeAgentPromptTemplate` class anywhere in the tree.
+- **`SpecToolProvider`**, **`OpenAPIToolProvider`**, **`CapabilityToolProvider`** — the three `ToolProvider` implementations this document names. None exist.
+- **`OpenAPIToolProvider` absorbing `ContainerEpisodeRunner._discover_actions`** — did not happen. `_discover_actions` is still private, still on `ContainerEpisodeRunner`, at `forge/envgen/episode_runner.py:179`.
+
+Also outstanding, found during final review rather than tracked above when this document was first written: **`LayeredVerifier` was never migrated to subclass `Verifier`** (see the reward section above) — it satisfies the contract today only through `EnvBuilder`'s wrapping fallback, not by inheritance.
 
 ## Testing
 

@@ -4,14 +4,18 @@ import pytest
 from forge.runtime.context import RuntimeContext
 from forge.runtime.env import ForgeEnv
 from forge.runtime.snapshot import EnvironmentSpec
-from forge.runtime.transition import TransitionEngine, TransitionResult
-from forge.runtime.verifier import VerifierEngine
-from forge.runtime.reward import RewardEngine
+from forge.runtime.transition import (
+    FunctionTransitionHandler,
+    TransitionEngine,
+    TransitionResult,
+)
+from forge.runtime.verifier import FunctionVerifier, VerifierEngine
+from forge.runtime.reward import FunctionRubric, RewardEngine
 from forge.runtime.verification import CheckResult, VerificationResult
 
 
 class FixedStateFactory:
-    def create(self, ctx: RuntimeContext, options: dict) -> dict:
+    def reset(self, ctx: RuntimeContext, *, seed: int | None, options: dict) -> dict:
         ctx.actor_id = "u_0000"
         return {"counter": {"c_0": {"id": "c_0", "value": 0}}}
 
@@ -33,13 +37,13 @@ def check_counter_verifier(state, trajectory, task):
 def build_env(max_steps: int = 10) -> ForgeEnv:
     spec = EnvironmentSpec(name="test_env", domain="test", max_steps=max_steps)
     te = TransitionEngine()
-    te.register("increment", increment_transition)
+    te.register("increment", FunctionTransitionHandler(increment_transition))
     ve = VerifierEngine()
-    ve.register("check_counter", check_counter_verifier)
+    ve.register("check_counter", FunctionVerifier(check_counter_verifier))
     re = RewardEngine()
     return ForgeEnv(
         env_spec=spec,
-        initial_state_factory=FixedStateFactory(),
+        initial_state_provider=FixedStateFactory(),
         transition_engine=te,
         verifier_engine=ve,
         reward_engine=re,
@@ -131,7 +135,7 @@ def test_invalid_action_count_in_task_dict_passed_to_reward():
         return RewardBreakdown(total_reward=0.0, components=[])
 
     env = build_env()
-    env._reward_engine.set_default(capturing_reward)
+    env._reward_engine.set_default(FunctionRubric(capturing_reward))
     env.reset(seed=1)
     env.step({"type": "nonexistent_action"})  # invalid — increments count
     env.step({"type": "increment"})           # valid step — reward is called
@@ -155,13 +159,13 @@ class MockTelemetry:
 def build_env_with_telemetry(telemetry, max_steps: int = 10) -> ForgeEnv:
     spec = EnvironmentSpec(name="test_env", domain="test", max_steps=max_steps)
     te = TransitionEngine()
-    te.register("increment", increment_transition)
+    te.register("increment", FunctionTransitionHandler(increment_transition))
     ve = VerifierEngine()
-    ve.register("check_counter", check_counter_verifier)
+    ve.register("check_counter", FunctionVerifier(check_counter_verifier))
     re = RewardEngine()
     return ForgeEnv(
         env_spec=spec,
-        initial_state_factory=FixedStateFactory(),
+        initial_state_provider=FixedStateFactory(),
         transition_engine=te,
         verifier_engine=ve,
         reward_engine=re,
@@ -223,13 +227,13 @@ from forge.extraction.schemas import PolicyRule
 def _build_env_m7(policy_engine=None, observation_filter=None, max_steps=10):
     spec = EnvironmentSpec(name="test_env", domain="test", max_steps=max_steps)
     te = TransitionEngine()
-    te.register("increment", increment_transition)
+    te.register("increment", FunctionTransitionHandler(increment_transition))
     ve = VerifierEngine()
-    ve.register("check_counter", check_counter_verifier)
+    ve.register("check_counter", FunctionVerifier(check_counter_verifier))
     re = RewardEngine()
     return ForgeEnv(
         env_spec=spec,
-        initial_state_factory=FixedStateFactory(),
+        initial_state_provider=FixedStateFactory(),
         transition_engine=te,
         verifier_engine=ve,
         reward_engine=re,

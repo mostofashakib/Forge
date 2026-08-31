@@ -1,4 +1,6 @@
 import copy
+from forge.contracts import Action
+from forge.contracts.backend import TransitionHandler
 from forge.runtime.context import RuntimeContext
 from forge.runtime.transition import TransitionResult
 
@@ -44,3 +46,8 @@ def apply_send_email(state: dict, action: dict, ctx: RuntimeContext) -> Transiti
             "timestamp": now,
         }],
     )
+
+
+class SendEmailHandler(TransitionHandler):
+    def apply(self, state: dict, action: Action, ctx: RuntimeContext) -> TransitionResult:
+        return apply_send_email(state, action.to_dict(), ctx)
