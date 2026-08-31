@@ -18,6 +18,13 @@ Forge lets you spin up isolated, observable app environments — Gmail-like emai
 The loop closes: generate environments → run agents → grade → export → train → evaluate
 on environments the policy never trained on → reload the checkpoint and collect again.
 
+## Example RL Tasks
+
+Forge includes deterministic reference tasks in [`example_tasks/`](example_tasks/).
+These examples demonstrate Slack and task-management environments, scripted
+solutions, layered verifiers, and Harbor-based evaluation workflows. See the
+[example tasks guide](example_tasks/README.md) for setup and usage.
+
 ---
 
 ## Environment Types
