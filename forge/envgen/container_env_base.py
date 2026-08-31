@@ -27,6 +27,8 @@ from forge.contracts import (
     TaskSource,
     TerminationPolicy,
     Transport,
+    TransportRequest,
+    TransportResponse,
 )
 from forge.contracts.termination import MaxStepsTerminationPolicy
 from forge.contracts.types import Action, ActionResult, StepOutcome
@@ -49,6 +51,47 @@ class _NoTaskSource(TaskSource):
         raise KeyError(task_id)
 
 
+class ContainerTransportError(RuntimeError):
+    """A container HTTP call failed.
+
+    ``RestTransport`` reports failures in-band so one bad call costs a step
+    rather than the episode. This family's callers have always seen an
+    exception instead, so ``_raise_for`` converts an in-band error back into
+    a raise at the boundary, and this is what they now see. It carries the
+    status when there was one — ``0`` means the request never completed.
+    """
+
+    def __init__(self, target: str, status: int, detail: str) -> None:
+        super().__init__(f"{target} failed (status {status}): {detail}")
+        self.target = target
+        self.status = status
+
+
+def _call(transport: Transport, method: str, target: str, payload: dict | None = None):
+    """Make one call and raise if it did not succeed.
+
+    Every container call goes through here, so the in-band-to-raise
+    conversion lives in exactly one place, and every call gets the
+    transport's timeout and JSON-decode handling.
+    """
+    # An empty payload is how TransportRequest spells "no body"; RestTransport
+    # maps it back to `json=None` on the wire, which is what these calls sent
+    # before. `None` is not a valid payload, so it must not be passed through.
+    response = transport.call(
+        TransportRequest(method=method, target=target, payload=payload or {})
+    )
+    _raise_for(response, target)
+    return response
+
+
+def _raise_for(response: TransportResponse, target: str) -> None:
+    if response.error:
+        raise ContainerTransportError(target, response.status, response.error)
+    if not 200 <= response.status < 300:
+        # Matches the `raise_for_status()` these paths used to call.
+        raise ContainerTransportError(target, response.status, "HTTP error")
+
+
 class _HttpInitialState(InitialStateProvider):
     """Resets a container env over HTTP: POST /forge/reset (seeded when a
     seed is given, unseeded otherwise resets to the app's fixed baseline),
@@ -56,34 +99,23 @@ class _HttpInitialState(InitialStateProvider):
     delegates here so there is exactly one place that knows how to reset a
     container environment.
 
-    Holds its own ``httpx.Client`` rather than going through
-    ``ContainerEnvBase._transport`` (a ``RestTransport``), even though the
-    latter exists on the same instance and was hardened over three commits
-    for a timeout hole and a JSON-decode gap. That hardening does not
-    protect this path, and deliberately: ``RestTransport.call()`` reports a
-    wire failure or a non-JSON body *in-band*, as an ``error`` field on its
-    return value, and never raises. This class instead calls
-    ``response.raise_for_status()`` directly and lets a failed reset raise
-    ``httpx.HTTPStatusError`` out of ``reset()``. Routing through
-    ``RestTransport`` would silently convert that raise into an in-band
-    result the caller has to know to check — a behavior change on the
-    container hot path, not a refactor. Left as-is until a caller actually
-    wants in-band reset failures.
+    Goes through the env's own ``RestTransport`` rather than holding a second
+    ``httpx.Client``, so the transport's timeout and JSON-decode handling
+    protect this path — an unset timeout reaching httpx as ``None`` means no
+    timeout at all, and a proxy's HTML 502 in place of JSON is a real failure
+    mode for a container that is still starting. A failed reset still raises,
+    as it always has; see ``ContainerTransportError``.
     """
 
-    def __init__(self, base_url: str, client: httpx.Client) -> None:
-        self._base_url = base_url
-        self._client = client
+    def __init__(self, transport: Transport) -> None:
+        self._transport = transport
 
     def reset(
         self, ctx: "RuntimeContext", *, seed: int | None, options
     ) -> dict:
         json_body = {"seed": seed} if seed is not None else None
-        response = self._client.post(f"{self._base_url}/forge/reset", json=json_body)
-        response.raise_for_status()
-        state_response = self._client.get(f"{self._base_url}/forge/state")
-        state_response.raise_for_status()
-        return state_response.json()
+        _call(self._transport, "POST", "/forge/reset", json_body)
+        return _call(self._transport, "GET", "/forge/state").body
 
 
 class _PassthroughObservationEncoder(ObservationEncoder):
@@ -95,28 +127,51 @@ class _PassthroughObservationEncoder(ObservationEncoder):
         return Observation(payload=state)
 
 
+class _ActionResponse:
+    """What ``compute_reward`` receives for the action call.
+
+    The hook is public API that generated subclasses override, and the
+    prompt that generates them types the parameter as bare ``response``. It
+    has only ever been read for ``status_code``, so this exposes that plus
+    the decoded body, and keeps working for every existing override while
+    the underlying call moves to the transport.
+    """
+
+    __slots__ = ("status_code", "body")
+
+    def __init__(self, status_code: int, body: dict) -> None:
+        self.status_code = status_code
+        self.body = body
+
+    @property
+    def is_success(self) -> bool:
+        return 200 <= self.status_code < 300
+
+    def json(self) -> dict:
+        return self.body
+
+
 class _HttpActionResult(ActionResult):
-    """``ActionResult`` plus the raw HTTP response.
+    """``ActionResult`` plus the action call's response.
 
     ``ExecutionBackend.execute`` is only contracted to return an
     ``ActionResult``, and this is a genuine subtype of one — every consumer
     that only knows about ``ActionResult`` still works. The extra field lets
-    ``step`` retrieve a real ``httpx.Response`` for ``compute_reward`` without
-    a shared, stateful side channel: each call gets its own result, so two
-    interleaved ``execute`` calls never race for it the way a `last_response`
-    attribute on the backend would.
+    ``step`` retrieve the response for ``compute_reward`` without a shared,
+    stateful side channel: each call gets its own result, so two interleaved
+    ``execute`` calls never race for it the way a `last_response` attribute
+    on the backend would.
 
     ``exclude=True`` keeps `response` out of `model_dump()` /
-    `model_dump(mode="json")` / `model_dump_json()` — an `httpx.Response`
-    isn't JSON-serializable, and nothing that logs or replays an
-    `ActionResult` generically should have to know this one family attaches
-    something extra. The field itself stays a normal attribute, so `.response`
-    is still readable in-process by `step`.
+    `model_dump(mode="json")` / `model_dump_json()` — nothing that logs or
+    replays an `ActionResult` generically should have to know this one
+    family attaches something extra. The field itself stays a normal
+    attribute, so `.response` is still readable in-process by `step`.
     """
 
     model_config = {"arbitrary_types_allowed": True}
 
-    response: httpx.Response = Field(exclude=True)
+    response: _ActionResponse = Field(exclude=True)
 
 
 class _HttpExecutionBackend(ExecutionBackend):
@@ -132,36 +187,40 @@ class _HttpExecutionBackend(ExecutionBackend):
     dict-based, since it is the public hook generated subclasses override)
     and the JSON POST body.
 
-    Like ``_HttpInitialState``, this holds its own ``httpx.Client`` instead
-    of going through ``ContainerEnvBase._transport``. The reason is the same
-    one: ``RestTransport.call()`` never raises — a wire failure or a
-    non-JSON response body comes back as an ``error`` field on
-    ``TransportResponse`` instead. ``execute()`` here calls
-    ``response.raise_for_status()`` directly on the GET, and lets the
-    underlying ``httpx`` exception propagate on a hard connection failure on
-    either call. Routing execute() through ``RestTransport`` would turn both
-    into an in-band result and ``step()`` would need to learn to check for
-    it — a real semantic change to how a failed action is reported, not
-    just a plumbing change, so it was left out of this pass.
+    Goes through the env's own ``RestTransport``, like ``_HttpInitialState``,
+    so both calls get its timeout and JSON-decode handling.
+
+    The two calls fail differently, and deliberately. A non-2xx on the ACTION
+    post does NOT raise: an action the app rejects has always cost the step's
+    reward rather than the episode, and ``compute_reward`` is given the status
+    to score. A wire failure on that post, or any failure fetching state
+    afterwards, does raise — the episode cannot continue without knowing what
+    the state is.
     """
 
     def __init__(
         self,
-        base_url: str,
-        client: httpx.Client,
+        transport: Transport,
         endpoint_for: Callable[[dict], str],
     ) -> None:
-        self._base_url = base_url
-        self._client = client
+        self._transport = transport
         self._endpoint_for = endpoint_for
 
     def execute(self, action: Action, state: dict, ctx: "RuntimeContext") -> ActionResult:
         action_dict = action.to_dict()
         endpoint = self._endpoint_for(action_dict)
-        response = self._client.post(f"{self._base_url}{endpoint}", json=action_dict)
-        state_response = self._client.get(f"{self._base_url}/forge/state")
-        state_response.raise_for_status()
-        return _HttpActionResult(state=state_response.json(), response=response)
+        response = self._transport.call(
+            TransportRequest(method="POST", target=endpoint, payload=action_dict)
+        )
+        # A rejected action is scored, not raised — but a call that never
+        # completed leaves nothing to score, so that still raises.
+        if response.error:
+            raise ContainerTransportError(endpoint, response.status, response.error)
+        state_response = _call(self._transport, "GET", "/forge/state")
+        return _HttpActionResult(
+            state=state_response.body,
+            response=_ActionResponse(response.status, response.body),
+        )
 
 
 class ContainerEnvBase(gymnasium.Env, Environment):
@@ -179,18 +238,18 @@ class ContainerEnvBase(gymnasium.Env, Environment):
       compute_reward(response, obs) — score a step
                                 (default: 1.0 on HTTP 200, else 0.0)
 
-    Two facade members are exposed for contract compliance but do not sit on
-    the hot path, and that is intentional rather than an oversight — see
-    each for why:
+    `transport` is the env's single I/O path: `_HttpInitialState` and
+    `_HttpExecutionBackend` both run through it, so `reset()` and `step()`
+    get its timeout and JSON-decode handling. It reports failures in-band;
+    they are converted back to a raise at the boundary, so callers still see
+    an exception. See `ContainerTransportError`.
+
+    One facade member is exposed for contract compliance but does not sit on
+    the hot path, and that is intentional rather than an oversight:
       rubric      — see the `rubric` property below. `step()`'s reward comes
                     from the public `compute_reward()` hook, not from
                     `self._rubric`; that hook is documented API that
                     generated subclasses override, and stays that way.
-      transport   — see the `transport` property below. `self._transport`
-                    (a `RestTransport`) is real but currently redundant with
-                    the `httpx.Client` calls `_HttpExecutionBackend` and
-                    `_HttpInitialState` make directly; see their docstrings
-                    for why routing through it was not done in this pass.
     """
 
     metadata = {"render_modes": []}
@@ -216,11 +275,12 @@ class ContainerEnvBase(gymnasium.Env, Environment):
         self._state_manager = HttpStateManager(self.base_url, client=self.client)
         self._transport = RestTransport(self.base_url, client=self.client)
         self._task_source = _NoTaskSource()
-        self._initial_state = _HttpInitialState(self.base_url, self.client)
+        # Both HTTP collaborators run through the transport rather than
+        # holding their own client, so its timeout and JSON-decode handling
+        # protect the paths reset() and step() actually take.
+        self._initial_state = _HttpInitialState(self._transport)
         self._observations = _PassthroughObservationEncoder()
-        self._backend = _HttpExecutionBackend(
-            self.base_url, self.client, self.action_endpoint
-        )
+        self._backend = _HttpExecutionBackend(self._transport, self.action_endpoint)
         self._rubric = TaskSuccessRubric()
         self._termination = MaxStepsTerminationPolicy(max_steps=max_steps)
         self._step_count = 0
@@ -268,7 +328,7 @@ class ContainerEnvBase(gymnasium.Env, Environment):
     def action_endpoint(self, action: dict) -> str:
         return f"/{action['type']}"
 
-    def compute_reward(self, response: httpx.Response, obs: dict) -> float:
+    def compute_reward(self, response: _ActionResponse, obs: dict) -> float:
         return 1.0 if response.status_code == 200 else 0.0
 
     # ------------------------------------------------------------------
@@ -276,9 +336,7 @@ class ContainerEnvBase(gymnasium.Env, Environment):
     # ------------------------------------------------------------------
 
     def _observe(self) -> dict:
-        response = self.client.get(f"{self.base_url}/forge/state")
-        response.raise_for_status()
-        return response.json()
+        return _call(self._transport, "GET", "/forge/state").body
 
     def reset(self, seed=None, options=None) -> tuple[dict, dict]:
         super().reset(seed=seed)
