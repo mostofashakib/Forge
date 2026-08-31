@@ -11,6 +11,7 @@ from forge.contracts.dataset import TaskSource
 from forge.contracts.initial_state import InitialStateProvider
 from forge.contracts.observation import ObservationEncoder
 from forge.contracts.prompting import PromptTemplate
+from forge.contracts.reward import Rubric, Verifier
 from forge.contracts.state import StateManager
 from forge.contracts.termination import TerminationPolicy
 from forge.contracts.tools import ToolProvider
@@ -43,6 +44,7 @@ __all__ = [
     "PromptTemplate",
     "RewardBreakdown",
     "RewardComponent",
+    "Rubric",
     "StateManager",
     "StepOutcome",
     "Task",
@@ -57,4 +59,5 @@ __all__ = [
     "TransportRequest",
     "TransportResponse",
     "VerificationResult",
+    "Verifier",
 ]
