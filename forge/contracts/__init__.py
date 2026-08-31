@@ -20,7 +20,12 @@ from forge.contracts.observation import ObservationEncoder
 from forge.contracts.prompting import PromptTemplate
 from forge.contracts.reward import Rubric, Verifier
 from forge.contracts.state import StateManager
-from forge.contracts.termination import TerminationPolicy
+from forge.contracts.termination import (
+    MaxStepsTerminationPolicy,
+    TerminationMonitor,
+    TerminationPolicy,
+    ThresholdTerminationPolicy,
+)
 from forge.contracts.tools import ToolProvider
 from forge.contracts.transport import Transport, TransportRequest, TransportResponse
 from forge.contracts.types import (
@@ -50,6 +55,7 @@ __all__ = [
     "EpisodeController",
     "ExecutionBackend",
     "InitialStateProvider",
+    "MaxStepsTerminationPolicy",
     "Observation",
     "ObservationEncoder",
     "PromptTemplate",
@@ -61,7 +67,9 @@ __all__ = [
     "Task",
     "TaskSource",
     "Termination",
+    "TerminationMonitor",
     "TerminationPolicy",
+    "ThresholdTerminationPolicy",
     "ToolParam",
     "ToolProvider",
     "ToolSpec",
