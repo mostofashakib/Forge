@@ -10,7 +10,6 @@ from forge.envgen.agents.base import EnvGenAgent
 from forge.envgen.artifact_bus import ArtifactBus
 from forge.envgen.context import EnvGenContext
 from forge.envgen.agents.semantic_review import (
-    RequirementAssessment,
     SemanticReviewPanel,
     SemanticReviewPrompts,
 )

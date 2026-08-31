@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import pytest
 
-from forge.training.checkpoint import PolicyCheckpoint, load_policy_agent
+from forge.runtime.policy_loader import load_policy_agent
+from forge.training.checkpoint import PolicyCheckpoint
 
 
 def test_checkpoint_save_load_round_trip(tmp_path):

@@ -3,7 +3,14 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from forge.contracts import Action, InitialStateProvider
+from forge.contracts import (
+    Action,
+    Environment,
+    InitialStateProvider,
+    Observation,
+    ObservationEncoder,
+    ToolSpec,
+)
 from forge.contracts.backend import TransitionHandler
 from forge.runtime.env import ForgeEnv
 from forge.runtime.reward import RewardEngine
@@ -22,7 +29,7 @@ class _Close(TransitionHandler):
         return TransitionResult(state={**state, "closed": True}, events=[])
 
 
-def _env() -> ForgeEnv:
+def _env(**kwargs) -> ForgeEnv:
     engine = TransitionEngine()
     engine.register("close_ticket", _Close())
     return ForgeEnv(
@@ -31,6 +38,7 @@ def _env() -> ForgeEnv:
         transition_engine=engine,
         verifier_engine=VerifierEngine(),
         reward_engine=RewardEngine(),
+        **kwargs,
     )
 
 
@@ -59,3 +67,51 @@ def test_initial_state_factory_remains_importable_as_an_alias():
     from forge.runtime.env import InitialStateFactory
 
     assert InitialStateFactory is InitialStateProvider
+
+
+def test_forge_env_implements_the_composed_environment_facade():
+    env = _env()
+
+    assert isinstance(env, Environment)
+    assert env.initial_state is env._initial_state
+    assert env.backend.action_types == {"close_ticket"}
+    assert env.rubric is env._reward_engine
+    assert env.state.get() == {}
+    assert env.task_source.tasks() == ()
+    assert env.tools.tools() == ()
+    assert env.termination is not None
+
+
+class _RedactedObservation(ObservationEncoder):
+    def encode(self, state: dict, ctx) -> Observation:
+        return Observation(payload={"visible": state.get("closed", False)})
+
+
+def test_all_observations_flow_through_the_injected_encoder():
+    env = _env(observation_encoder=_RedactedObservation())
+
+    initial, _ = env.reset(seed=1)
+    changed, *_ = env.step({"type": "close_ticket"})
+
+    assert initial == {"visible": False}
+    assert changed == {"visible": True}
+
+
+def test_default_task_and_tools_are_exposed_through_contracts():
+    engine = TransitionEngine()
+    engine.register("close_ticket", _Close())
+    env = ForgeEnv(
+        env_spec=EnvironmentSpec(
+            name="support",
+            domain="support",
+            default_task={"id": "close", "objective": "Close the ticket"},
+        ),
+        initial_state_provider=_Initial(),
+        transition_engine=engine,
+        verifier_engine=VerifierEngine(),
+        reward_engine=RewardEngine(),
+        tool_specs=[ToolSpec(name="close_ticket", description="Close it")],
+    )
+
+    assert env.task_source.get("close").objective == "Close the ticket"
+    assert env.tools.tools()[0].description == "Close it"
