@@ -1,4 +1,5 @@
 from __future__ import annotations
+from forge.contracts import Verifier, VerificationResult
 from forge.runtime.verification import CheckResult, VerificationResult
 from forge.runtime.verifiers import (
     ExactStateVerifier,
@@ -34,3 +35,8 @@ def verify_{{ task.name }}(state: dict, trajectory, task: dict) -> VerificationR
 {% endif %}
 {% endfor %}
     return VerificationResult.from_checks("{{ task.name }}", checks)
+
+
+class {{ task.name | pascal_case }}Verifier(Verifier):
+    def verify(self, state: dict, trajectory, task) -> VerificationResult:
+        return verify_{{ task.name }}(state, trajectory, task)
