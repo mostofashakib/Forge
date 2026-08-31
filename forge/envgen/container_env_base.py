@@ -8,7 +8,7 @@ the plumbing.
 """
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING
 
 import gymnasium
@@ -28,7 +28,7 @@ from forge.contracts import (
     Transport,
 )
 from forge.contracts.termination import MaxStepsTerminationPolicy
-from forge.contracts.types import Action, ActionResult
+from forge.contracts.types import ActionResult
 from forge.runtime.http_state import HttpStateManager
 from forge.runtime.reward import TaskSuccessRubric
 from forge.runtime.rest_transport import RestTransport
@@ -48,14 +48,27 @@ class _NoTaskSource(TaskSource):
         raise KeyError(task_id)
 
 
-class _NoInitialState(InitialStateProvider):
-    """Reset happens over HTTP via POST /forge/reset (see ``reset``); this
-    stub satisfies the facade without duplicating that logic in-process."""
+class _HttpInitialState(InitialStateProvider):
+    """Resets a container env over HTTP: POST /forge/reset (seeded when a
+    seed is given, unseeded otherwise resets to the app's fixed baseline),
+    then GET /forge/state for the resulting state. ``ContainerEnvBase.reset``
+    delegates here so there is exactly one place that knows how to reset a
+    container environment.
+    """
+
+    def __init__(self, base_url: str, client: httpx.Client) -> None:
+        self._base_url = base_url
+        self._client = client
 
     def reset(
         self, ctx: "RuntimeContext", *, seed: int | None, options
     ) -> dict:
-        return {}
+        json_body = {"seed": seed} if seed is not None else None
+        response = self._client.post(f"{self._base_url}/forge/reset", json=json_body)
+        response.raise_for_status()
+        state_response = self._client.get(f"{self._base_url}/forge/state")
+        state_response.raise_for_status()
+        return state_response.json()
 
 
 class _PassthroughObservationEncoder(ObservationEncoder):
@@ -68,13 +81,37 @@ class _PassthroughObservationEncoder(ObservationEncoder):
 
 
 class _HttpExecutionBackend(ExecutionBackend):
-    """Actions execute over HTTP via the POST in ``step``; this stub
-    satisfies the facade without duplicating that logic in-process."""
+    """Executes a container env's actions over HTTP: POST to the endpoint
+    ``endpoint_for`` resolves for the action (bound to the env's own
+    ``action_endpoint`` hook, so a subclass override is honored), then GET
+    /forge/state for the resulting state. ``ContainerEnvBase.step`` delegates
+    here so there is exactly one place that knows how to execute an action.
 
-    def execute(
-        self, action: Action, state: dict, ctx: "RuntimeContext"
-    ) -> ActionResult:
-        return ActionResult(state=state)
+    The raw HTTP response is kept on ``last_response`` rather than folded
+    into ``ActionResult`` (whose shape is shared by every environment
+    family): ``step`` reads it from there to pass a real ``httpx.Response``
+    on to ``compute_reward``, so that hook's existing contract is untouched.
+    """
+
+    def __init__(
+        self,
+        base_url: str,
+        client: httpx.Client,
+        endpoint_for: Callable[[dict], str],
+    ) -> None:
+        self._base_url = base_url
+        self._client = client
+        self._endpoint_for = endpoint_for
+        self.last_response: httpx.Response | None = None
+
+    def execute(self, action: dict, state: dict, ctx: "RuntimeContext") -> ActionResult:
+        endpoint = self._endpoint_for(action)
+        self.last_response = self._client.post(
+            f"{self._base_url}{endpoint}", json=action
+        )
+        state_response = self._client.get(f"{self._base_url}/forge/state")
+        state_response.raise_for_status()
+        return ActionResult(state=state_response.json())
 
 
 class ContainerEnvBase(gymnasium.Env, Environment):
@@ -108,16 +145,19 @@ class ContainerEnvBase(gymnasium.Env, Environment):
         self.action_space = gymnasium.spaces.Dict({})
 
         # A container env genuinely has a transport and a state manager: it is
-        # over a wire and its SQLite is the source of truth. The remaining
-        # collaborators have no in-process equivalent for this family yet, so
-        # they are minimal stubs that satisfy the facade without duplicating
-        # the HTTP plumbing below.
+        # over a wire and its SQLite is the source of truth. `initial_state`
+        # and `backend` are real HTTP collaborators too — `reset`/`step` below
+        # delegate to them rather than duplicating their HTTP calls. Only
+        # `task_source` and `observations` have no equivalent for this family
+        # yet, so those two stay minimal stubs.
         self._state_manager = HttpStateManager(self.base_url, client=self.client)
         self._transport = RestTransport(self.base_url, client=self.client)
         self._task_source = _NoTaskSource()
-        self._initial_state = _NoInitialState()
+        self._initial_state = _HttpInitialState(self.base_url, self.client)
         self._observations = _PassthroughObservationEncoder()
-        self._backend = _HttpExecutionBackend()
+        self._backend = _HttpExecutionBackend(
+            self.base_url, self.client, self.action_endpoint
+        )
         self._rubric = TaskSuccessRubric()
         self._termination = MaxStepsTerminationPolicy(max_steps=max_steps)
 
@@ -180,19 +220,20 @@ class ContainerEnvBase(gymnasium.Env, Environment):
         super().reset(seed=seed)
         # Thread the seed to the app so the same seed reproduces the same
         # starting universe and different seeds yield different-but-reproducible
-        # ones. An unseeded reset resets to the app's fixed baseline.
-        json_body = {"seed": seed} if seed is not None else None
-        response = self.client.post(f"{self.base_url}/forge/reset", json=json_body)
-        response.raise_for_status()
-        return self._observe(), {}
+        # ones. An unseeded reset resets to the app's fixed baseline. Delegates
+        # to `self.initial_state` — see `_HttpInitialState` — so there is
+        # exactly one place that knows how to reset a container environment.
+        obs = self._initial_state.reset(None, seed=seed, options=options or {})
+        return obs, {}
 
     def step(self, action: dict) -> tuple[dict, float, bool, bool, dict]:
-        response = self.client.post(
-            f"{self.base_url}{self.action_endpoint(action)}", json=action
-        )
-        obs = self._observe()
-        reward = self.compute_reward(response, obs)
-        return obs, reward, False, False, {"status_code": response.status_code}
+        # Delegates to `self.backend` — see `_HttpExecutionBackend` — so there
+        # is exactly one place that knows how to execute an action against a
+        # container environment.
+        result = self._backend.execute(action, {}, None)
+        response = self._backend.last_response
+        reward = self.compute_reward(response, result.state)
+        return result.state, reward, False, False, {"status_code": response.status_code}
 
     def close(self) -> None:
         self.client.close()
