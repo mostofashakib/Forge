@@ -21,10 +21,12 @@ from forge.contracts.prompting import PromptTemplate
 from forge.contracts.reward import Rubric, Verifier
 from forge.contracts.state import StateManager
 from forge.contracts.termination import (
+    CompositeTerminationPolicy,
     MaxStepsTerminationPolicy,
     TerminationMonitor,
     TerminationPolicy,
     ThresholdTerminationPolicy,
+    VerifierTerminationPolicy,
 )
 from forge.contracts.tools import ToolProvider
 from forge.contracts.transport import Transport, TransportRequest, TransportResponse
@@ -51,6 +53,7 @@ __all__ = [
     "BaseEpisodeConfig",
     "BaseEpisodeResult",
     "CheckResult",
+    "CompositeTerminationPolicy",
     "Environment",
     "EpisodeController",
     "ExecutionBackend",
@@ -79,5 +82,6 @@ __all__ = [
     "TransportRequest",
     "TransportResponse",
     "VerificationResult",
+    "VerifierTerminationPolicy",
     "Verifier",
 ]

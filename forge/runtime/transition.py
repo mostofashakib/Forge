@@ -4,7 +4,7 @@ import functools
 from dataclasses import dataclass, field
 from typing import Callable
 
-from forge.contracts import Action
+from forge.contracts import Action, ActionResult, ExecutionBackend
 from forge.contracts.backend import TransitionHandler
 from forge.runtime._signature import require_arity
 from forge.runtime.context import RuntimeContext
@@ -46,7 +46,7 @@ class FunctionTransitionHandler(TransitionHandler):
         return self._fn(state, action.to_dict(), ctx)
 
 
-class TransitionEngine:
+class TransitionEngine(ExecutionBackend):
     def __init__(self) -> None:
         self._handlers: dict[str, TransitionHandler] = {}
 
@@ -71,3 +71,10 @@ class TransitionEngine:
                 code="UNKNOWN_ACTION_TYPE",
             )
         return handler.apply(state, Action.from_dict(action), ctx)
+
+    def execute(
+        self, action: Action, state: dict, ctx: RuntimeContext
+    ) -> ActionResult:
+        """Execute through the backend contract while preserving ``apply``."""
+        result = self.apply(state, action.to_dict(), ctx)
+        return ActionResult(state=result.state, events=result.events)

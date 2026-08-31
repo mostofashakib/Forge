@@ -1,6 +1,8 @@
 from __future__ import annotations
 from pydantic import BaseModel, Field
 
+from forge.contracts import Observation, ObservationEncoder
+
 
 class RolePermissions(BaseModel):
     can_see: list[str] = Field(default_factory=list)
@@ -11,7 +13,7 @@ class RBACConfig(BaseModel):
     roles: dict[str, RolePermissions] = Field(default_factory=dict)
 
 
-class ObservationFilter:
+class ObservationFilter(ObservationEncoder):
     def __init__(
         self,
         rbac_config: RBACConfig | None = None,
@@ -36,3 +38,7 @@ class ObservationFilter:
             result.pop(key, None)
 
         return result
+
+    def encode(self, state: dict, ctx) -> Observation:
+        """Encode state through the same RBAC filter used by legacy callers."""
+        return Observation(payload=self.filter(state))

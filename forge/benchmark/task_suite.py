@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from forge.extraction.schemas import TaskTemplate
 from dataclasses import dataclass
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
+
+if TYPE_CHECKING:
+    from forge.extraction.schemas import TaskTemplate
 
 Difficulty = int  # 1–5
 

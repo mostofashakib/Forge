@@ -41,6 +41,12 @@ dev = [
     "pytest-asyncio>=0.24.0",
     "respx>=0.20.0",
 ]
+training = [
+    "datasets>=3.0.0",
+    "torch>=2.4.0",
+    "transformers>=4.46.0",
+    "trl>=0.12.0",
+]
 
 [project.scripts]
 forge = "forge.cli.main:app"
@@ -48,6 +54,18 @@ forge = "forge.cli.main:app"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+
+[tool.hatch.build]
+exclude = [
+    "/.env",
+    "/.venv",
+    "/dist",
+    "/frontend/.next",
+    "/frontend/node_modules",
+    "/example_tasks/.venv",
+    "**/__pycache__",
+    "**/*.pyc",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["forge", "examples", "backend"]

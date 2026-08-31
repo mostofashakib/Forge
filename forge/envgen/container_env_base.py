@@ -8,7 +8,7 @@ the plumbing.
 """
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 import gymnasium
@@ -19,11 +19,9 @@ from forge.contracts import (
     Environment,
     ExecutionBackend,
     InitialStateProvider,
-    Observation,
     ObservationEncoder,
     Rubric,
     StateManager,
-    Task,
     TaskSource,
     TerminationPolicy,
     Transport,
@@ -33,22 +31,13 @@ from forge.contracts import (
 from forge.contracts.termination import MaxStepsTerminationPolicy
 from forge.contracts.types import Action, ActionResult, StepOutcome
 from forge.runtime.http_state import HttpStateManager
+from forge.runtime.observation_filter import ObservationFilter
 from forge.runtime.reward import TaskSuccessRubric
 from forge.runtime.rest_transport import RestTransport
+from forge.runtime.task_source import StaticTaskSource
 
 if TYPE_CHECKING:
     from forge.runtime.context import RuntimeContext
-
-
-class _NoTaskSource(TaskSource):
-    """Container envs have no task registry yet; generated subclasses that
-    gain one can replace this via ``self._task_source``."""
-
-    def tasks(self) -> Sequence[Task]:
-        return ()
-
-    def get(self, task_id: str) -> Task:
-        raise KeyError(task_id)
 
 
 class ContainerTransportError(RuntimeError):
@@ -116,15 +105,6 @@ class _HttpInitialState(InitialStateProvider):
         json_body = {"seed": seed} if seed is not None else None
         _call(self._transport, "POST", "/forge/reset", json_body)
         return _call(self._transport, "GET", "/forge/state").body
-
-
-class _PassthroughObservationEncoder(ObservationEncoder):
-    """Container state already IS the observation (GET /forge/state, see
-    ``_observe``); this stub satisfies the facade without duplicating that
-    HTTP call in-process."""
-
-    def encode(self, state: dict, ctx: "RuntimeContext") -> Observation:
-        return Observation(payload=state)
 
 
 class _ActionResponse:
@@ -209,8 +189,13 @@ class _HttpExecutionBackend(ExecutionBackend):
     def execute(self, action: Action, state: dict, ctx: "RuntimeContext") -> ActionResult:
         action_dict = action.to_dict()
         endpoint = self._endpoint_for(action_dict)
+        # Episode controllers represent an OpenAPI action as its endpoint plus
+        # an opaque request body. Generated gym envs still use the legacy flat
+        # action dict. Supporting both here keeps wire encoding inside the
+        # execution backend rather than in either controller.
+        payload = action_dict.get("__payload__", action_dict)
         response = self._transport.call(
-            TransportRequest(method="POST", target=endpoint, payload=action_dict)
+            TransportRequest(method="POST", target=endpoint, payload=payload)
         )
         # A rejected action is scored, not raised — but a call that never
         # completed leaves nothing to score, so that still raises.
@@ -269,17 +254,17 @@ class ContainerEnvBase(gymnasium.Env, Environment):
         # A container env genuinely has a transport and a state manager: it is
         # over a wire and its SQLite is the source of truth. `initial_state`
         # and `backend` are real HTTP collaborators too — `reset`/`step` below
-        # delegate to them rather than duplicating their HTTP calls. Only
-        # `task_source` and `observations` have no equivalent for this family
-        # yet, so those two stay minimal stubs.
+        # delegate to them rather than duplicating their HTTP calls. Containers
+        # default to an empty static task source and unfiltered observations;
+        # generated subclasses can replace either collaborator.
         self._state_manager = HttpStateManager(self.base_url, client=self.client)
         self._transport = RestTransport(self.base_url, client=self.client)
-        self._task_source = _NoTaskSource()
+        self._task_source = StaticTaskSource()
         # Both HTTP collaborators run through the transport rather than
         # holding their own client, so its timeout and JSON-decode handling
         # protect the paths reset() and step() actually take.
         self._initial_state = _HttpInitialState(self._transport)
-        self._observations = _PassthroughObservationEncoder()
+        self._observations = ObservationFilter()
         self._backend = _HttpExecutionBackend(self._transport, self.action_endpoint)
         self._rubric = TaskSuccessRubric()
         self._termination = MaxStepsTerminationPolicy(max_steps=max_steps)
@@ -326,7 +311,8 @@ class ContainerEnvBase(gymnasium.Env, Environment):
     # ------------------------------------------------------------------
 
     def action_endpoint(self, action: dict) -> str:
-        return f"/{action['type']}"
+        action_type = action["type"]
+        return action_type if action_type.startswith("/") else f"/{action_type}"
 
     def compute_reward(self, response: _ActionResponse, obs: dict) -> float:
         return 1.0 if response.status_code == 200 else 0.0
@@ -334,9 +320,6 @@ class ContainerEnvBase(gymnasium.Env, Environment):
     # ------------------------------------------------------------------
     # Shared plumbing
     # ------------------------------------------------------------------
-
-    def _observe(self) -> dict:
-        return _call(self._transport, "GET", "/forge/state").body
 
     def reset(self, seed=None, options=None) -> tuple[dict, dict]:
         super().reset(seed=seed)
