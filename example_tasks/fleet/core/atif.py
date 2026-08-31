@@ -1,7 +1,7 @@
 """ATIF trajectory serialization helpers.
 
 The Harbor task runtime provides ``harbor.models.trajectories``. Local unit tests
-in this repository do not depend on the full Harbor package, so this module uses
+in this Forge module do not depend on the full Harbor package, so this module uses
 the Harbor Pydantic models when they are installed and falls back to the same
 JSON shape otherwise.
 """
