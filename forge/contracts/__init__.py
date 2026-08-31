@@ -8,8 +8,11 @@ from the outside — the same environment may be run by different controllers.
 """
 from forge.contracts.dataset import TaskSource
 from forge.contracts.initial_state import InitialStateProvider
+from forge.contracts.observation import ObservationEncoder
+from forge.contracts.prompting import PromptTemplate
 from forge.contracts.state import StateManager
 from forge.contracts.termination import TerminationPolicy
+from forge.contracts.tools import ToolProvider
 from forge.contracts.types import (
     Action,
     ActionResult,
@@ -33,6 +36,8 @@ __all__ = [
     "CheckResult",
     "InitialStateProvider",
     "Observation",
+    "ObservationEncoder",
+    "PromptTemplate",
     "RewardBreakdown",
     "RewardComponent",
     "StateManager",
@@ -42,6 +47,7 @@ __all__ = [
     "Termination",
     "TerminationPolicy",
     "ToolParam",
+    "ToolProvider",
     "ToolSpec",
     "VerificationResult",
 ]
