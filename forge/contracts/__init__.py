@@ -7,7 +7,7 @@ composes the ten that describe an environment's state and behavior.
 from the outside — the same environment may be run by different controllers.
 """
 from forge.contracts.backend import ExecutionBackend, TransitionHandler
-from forge.contracts.dataset import TaskSource
+from forge.contracts.dataset import TaskSource, normalize_task
 from forge.contracts.environment import Environment
 from forge.contracts.episode import (
     BaseEpisodeConfig,
@@ -19,6 +19,7 @@ from forge.contracts.initial_state import InitialStateProvider
 from forge.contracts.observation import ObservationEncoder
 from forge.contracts.prompting import PromptTemplate
 from forge.contracts.reward import Rubric, Verifier
+from forge.contracts.rollout import RolloutOutcome, RolloutRecord
 from forge.contracts.state import StateManager
 from forge.contracts.termination import (
     CompositeTerminationPolicy,
@@ -64,11 +65,14 @@ __all__ = [
     "PromptTemplate",
     "RewardBreakdown",
     "RewardComponent",
+    "RolloutOutcome",
+    "RolloutRecord",
     "Rubric",
     "StateManager",
     "StepOutcome",
     "Task",
     "TaskSource",
+    "normalize_task",
     "Termination",
     "TerminationMonitor",
     "TerminationPolicy",

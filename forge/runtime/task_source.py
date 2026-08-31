@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Sequence
 
 from forge.contracts import Task, TaskSource
+from forge.runtime.tasks import normalize_task
 
 
 class StaticTaskSource(TaskSource):
@@ -27,14 +28,4 @@ class StaticTaskSource(TaskSource):
 
     @staticmethod
     def _normalize(task: Task | dict, index: int) -> Task:
-        if isinstance(task, Task):
-            return task
-        raw = dict(task)
-        task_id = str(raw.pop("id", raw.pop("name", f"task-{index}")))
-        objective = str(raw.pop("objective", raw.pop("description", task_id)))
-        known = {
-            key: raw.pop(key)
-            for key in ("seed", "success_conditions", "failure_conditions")
-            if key in raw
-        }
-        return Task(id=task_id, objective=objective, metadata=raw, **known)
+        return normalize_task(task, fallback_id=f"task-{index}")

@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from forge.contracts.types import AgentAdapter
+from forge.contracts.rollout import RolloutRecord
 
 
 @dataclass(kw_only=True)
@@ -71,6 +72,46 @@ class BaseEpisodeResult:
     def write_jsonl(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(self.to_jsonl(), encoding="utf-8")
+
+    def to_rollout_record(
+        self,
+        *,
+        env_name: str = "",
+        task_name: str = "",
+        seed: int | None = None,
+        prompt: str | None = None,
+    ) -> RolloutRecord:
+        """Convert any controller result to the collector/trainer contract."""
+        step_dicts = self._step_dicts()
+        rewards = [float(step.get("reward", 0.0)) for step in step_dicts]
+        actions = [step.get("action") for step in step_dicts if step.get("action")]
+        completion = "\n".join(json.dumps(action, sort_keys=True) for action in actions)
+        passed = self.termination_reason == "success"
+        if passed:
+            outcome = "success"
+        elif any("error" in step for step in step_dicts):
+            outcome = "edge_case"
+        elif self.total_reward > 0:
+            outcome = "partial_success"
+        else:
+            outcome = "failure"
+        last = step_dicts[-1] if step_dicts else {}
+        return RolloutRecord(
+            episode_id=str(getattr(self, "episode_id", "") or "episode"),
+            env_name=env_name,
+            task_name=task_name,
+            prompt=prompt or f"Task: {task_name}\nEnvironment: {env_name}",
+            completion=completion,
+            seed=seed,
+            total_reward=self.total_reward,
+            per_step_rewards=rewards,
+            passed=passed,
+            outcome=outcome,
+            steps=len(step_dicts),
+            terminated=bool(last.get("terminated", passed)),
+            truncated=bool(last.get("truncated", False)),
+            invalid_actions=sum(1 for step in step_dicts if "error" in step),
+        )
 
 
 class TrajectoryWriter:

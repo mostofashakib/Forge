@@ -7,6 +7,9 @@ import pytest
 from forge.contracts import (
     Action,
     Environment,
+    RewardBreakdown,
+    RewardComponent,
+    Rubric,
     StateManager,
     Transport,
     TransportRequest,
@@ -43,6 +46,27 @@ def test_reset_and_step_still_work_over_http():
     obs, reward, terminated, truncated, info = env.step({"type": "close_ticket"})
     assert info["status_code"] == 200
     assert reward == 1.0
+
+
+def test_step_routes_reward_through_an_injected_rubric():
+    class FixedRubric(Rubric):
+        def score(self, state, trajectory, verifier_results, task):
+            return RewardBreakdown(
+                total_reward=0.75,
+                components=[RewardComponent(name="fixed", value=0.75)],
+            )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"tickets": []})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    env = ContainerEnvBase("http://env", client=client, rubric=FixedRubric())
+    env.reset()
+
+    _obs, reward, _terminated, _truncated, info = env.step({"type": "close"})
+
+    assert reward == 0.75
+    assert info["reward_breakdown"]["components"][0]["name"] == "fixed"
 
 
 def test_a_wire_failure_is_reported_in_band_instead_of_raising():

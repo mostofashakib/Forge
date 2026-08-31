@@ -12,10 +12,13 @@ import httpx
 
 from forge.contracts import (
     Action,
+    CheckResult,
     Environment,
     EpisodeController,
     MaxStepsTerminationPolicy,
     StepOutcome,
+    Task,
+    VerificationResult,
 )
 from forge.envgen.agents.container_agent import ContainerAgentBase
 from forge.envgen.container_env_base import ContainerEnvBase
@@ -28,6 +31,11 @@ from forge.envgen.episode_base import (
 from forge.envgen.objective import ObjectiveScorer
 from forge.runtime.tools import OpenAPIToolProvider
 from forge.runtime.context import RuntimeContext
+from forge.runtime.prompting import ForgeAgentPromptTemplate
+from forge.runtime.reward import ObjectiveScoreRubric
+from forge.runtime.task_source import StaticTaskSource
+from forge.runtime.tasks import select_task
+from forge.runtime.trajectory import Trajectory
 from forge.schema.state_schema import StateSchemaManifest
 
 logger = logging.getLogger(__name__)
@@ -139,6 +147,7 @@ class ContainerEpisodeRunner(EpisodeController):
         )
         self._environment = environment
         self._runtime_ctx: RuntimeContext | None = None
+        self._selected_task: Task | None = None
         self._tool_provider: OpenAPIToolProvider | None = None  # built on first use
 
     # ------------------------------------------------------------------
@@ -189,6 +198,12 @@ class ContainerEpisodeRunner(EpisodeController):
             seed=actual_seed,
             deterministic=seed is not None and determinism_enabled(),
         )
+        self._selected_task = select_task(
+            self.environment.task_source,
+            seed=actual_seed,
+            options={},
+            fallback=Task(id="objective", objective=self._cfg.objective),
+        )
         state = self.environment.initial_state.reset(
             self._runtime_ctx,
             seed=seed if seed is not None and determinism_enabled() else None,
@@ -205,6 +220,11 @@ class ContainerEpisodeRunner(EpisodeController):
                 client=self._http,
                 timeout=self._cfg.http_timeout,
                 max_steps=self._cfg.max_steps,
+                task_source=StaticTaskSource([
+                    Task(id="objective", objective=self._cfg.objective)
+                ]),
+                prompt_template=ForgeAgentPromptTemplate(),
+                rubric=ObjectiveScoreRubric(self._cfg.diff_floor),
             )
         return self._environment
 
@@ -355,11 +375,34 @@ class ContainerEpisodeRunner(EpisodeController):
             )
             result.llm_verdicts += 1
 
-            # StateDiffFloor: reward at least diff_floor if stable state changed
-            if self._manifest is not None and self._manifest.state_changed(state, new_state):
-                reward = max(obj_score, cfg.diff_floor)
-            else:
-                reward = obj_score
+            state_changed = bool(
+                self._manifest is not None
+                and self._manifest.state_changed(state, new_state)
+            )
+            verification = VerificationResult.from_checks(
+                "objective_scorer",
+                [CheckResult(
+                    name="objective_score",
+                    passed=obj_score >= cfg.success_threshold,
+                    score=obj_score,
+                )],
+            )
+            selected_task = self._selected_task or Task(
+                id="objective", objective=cfg.objective
+            )
+            task = selected_task.model_copy(update={
+                "metadata": {
+                    **selected_task.metadata,
+                    "state_changed": state_changed,
+                }
+            })
+            reward_breakdown = self.environment.rubric.score(
+                new_state,
+                Trajectory(episode_id=episode_id, steps=[]),
+                [verification],
+                task,
+            )
+            reward = reward_breakdown.total_reward
 
             # Evaluate stopping conditions (state hash is the progress marker
             # so fluctuating scores over a frozen state still count as dead-end)

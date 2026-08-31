@@ -65,7 +65,8 @@ class ForgeAgentPromptTemplate(PromptTemplate):
         # sort_keys so the same state always renders the same prompt: an
         # environment is only reproducible if what the model reads is too.
         payload = json.dumps(observation.payload, sort_keys=True)
-        return self._prompt.observation_template.format(observation=payload)
+        observation_text = self._prompt.observation_template.format(observation=payload)
+        return f"Task objective: {task.objective}\n\n{observation_text}"
 
     def tool_descriptions(self, tools: Sequence[ToolSpec]) -> list[dict]:
         return [self._describe(tool) for tool in tools]
