@@ -17,6 +17,7 @@ interface FormState {
   reward_requirements: string;
   reference_urls: string;
   use_user_researcher: boolean;
+  with_ui: boolean;
   source_product_name: string;
   source_product_url: string;
   ttl_days: number;
@@ -54,6 +55,7 @@ export default function CustomEnvironmentPage() {
     reward_requirements: "",
     reference_urls: "",
     use_user_researcher: true,
+    with_ui: false,
     source_product_name: "",
     source_product_url: "",
     ttl_days: 30,
@@ -85,6 +87,7 @@ export default function CustomEnvironmentPage() {
             reward_requirements: "",
             reference_urls: [],
             use_user_researcher: true,
+            with_ui: form.with_ui,
             source_product_name: researchIdentity.productName,
             source_product_url: form.source_product_url.trim(),
             ttl_days: form.ttl_days,
@@ -219,6 +222,40 @@ export default function CustomEnvironmentPage() {
               </section>
             </div>
           )}
+
+          <section className="interface-choice" aria-label="Environment interface">
+            <div className="interface-choice__heading">
+              <span>04</span>
+              <div>
+                <h2>Interface</h2>
+                <p>A UI adds a browsable app to the sandbox. Headless environments expose the API only and build faster.</p>
+              </div>
+            </div>
+            <div className="interface-choice__options" role="radiogroup" aria-label="Environment interface">
+              <button
+                type="button"
+                role="radio"
+                aria-checked={!form.with_ui}
+                onClick={() => update("with_ui", false)}
+                disabled={atLimit}
+                className={!form.with_ui ? "is-active" : ""}
+              >
+                <strong>Headless</strong>
+                <small>API only — no UI is generated. Fewer build steps.</small>
+              </button>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={form.with_ui}
+                onClick={() => update("with_ui", true)}
+                disabled={atLimit}
+                className={form.with_ui ? "is-active" : ""}
+              >
+                <strong>With UI</strong>
+                <small>Adds a generated single-page app you can open in the sandbox.</small>
+              </button>
+            </div>
+          </section>
 
           {submitError && (
             <div className="border border-red-200 bg-red-50 rounded-lg p-3">

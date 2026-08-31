@@ -127,3 +127,78 @@ def test_backend_prompt_mandates_typed_dict_returns():
     # Both success and error paths must be dicts, never bare strings.
     assert "never a bare string" in prompt
     assert '"error"' in prompt or "'error'" in prompt
+
+
+# ---------------------------------------------------------------------------
+# Headless (API-only) generation
+# ---------------------------------------------------------------------------
+
+def test_backend_prompt_drops_the_ui_route_when_headless():
+    from forge.envgen.agents.app_generator import AppGeneratorPrompts
+
+    prompt = AppGeneratorPrompts.backend(with_ui=False)
+
+    assert "/ui" not in prompt
+    assert "ui.html" not in prompt
+    # The RL surface must survive: only the UI concern is removed.
+    assert "/forge/state" in prompt
+    assert "STATE-MANAGEMENT CLASS" in prompt
+
+
+def test_backend_prompt_keeps_the_ui_route_when_a_ui_is_requested():
+    # False-positive guard: the headless variant must not become the only variant.
+    from forge.envgen.agents.app_generator import AppGeneratorPrompts
+
+    prompt = AppGeneratorPrompts.backend(with_ui=True)
+
+    assert "FileResponse('ui.html'" in prompt
+    assert "/forge/state" in prompt
+
+
+class _RecordingClient(MockLLMClient):
+    """MockLLMClient that keeps every system prompt it was called with."""
+
+    def __init__(self, responses: dict) -> None:
+        super().__init__(responses)
+        self.system_prompts: list[str] = []
+
+    def extract(self, system: str, user: str, schema):  # type: ignore[override]
+        self.system_prompts.append(system)
+        return super().extract(system=system, user=user, schema=schema)
+
+
+def _recording_client() -> _RecordingClient:
+    plan = AppPlan(files=[FilePlan(path="main.py", description="entrypoint")])
+    generated = GeneratedFile(content="app = object()\n")
+    return _RecordingClient({"AppPlan": plan, "GeneratedFile": generated})
+
+
+@pytest.mark.asyncio
+async def test_backend_builder_omits_the_ui_route_for_a_headless_context():
+    from forge.envgen.agents.app_generator import BackendBuilderAgent
+
+    client = _recording_client()
+    ctx = _ctx()
+    ctx.with_ui = False
+
+    await BackendBuilderAgent(client=client).run(ctx, ArtifactBus())
+
+    main_prompt = next(p for p in client.system_prompts if "STATE-MANAGEMENT CLASS" in p)
+    assert "ui.html" not in main_prompt
+    # The slot is an internal splice point — it must never reach the model.
+    assert "__FORGE_UI_ROUTE__" not in main_prompt
+
+
+@pytest.mark.asyncio
+async def test_backend_builder_keeps_the_ui_route_when_a_ui_is_requested():
+    # False-positive guard: opting into a UI must still produce the /ui route.
+    from forge.envgen.agents.app_generator import BackendBuilderAgent
+
+    client = _recording_client()
+    ctx = _ctx()
+    ctx.with_ui = True
+
+    await BackendBuilderAgent(client=client).run(ctx, ArtifactBus())
+
+    main_prompt = next(p for p in client.system_prompts if "STATE-MANAGEMENT CLASS" in p)
+    assert "FileResponse('ui.html'" in main_prompt

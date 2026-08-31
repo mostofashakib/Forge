@@ -126,3 +126,121 @@ async def test_gate_raises_when_review_report_missing():
     bus = ArtifactBus()
     with pytest.raises(RuntimeError):
         enforce_generation_gates(bus)
+
+
+# ---------------------------------------------------------------------------
+# UI opt-in
+# ---------------------------------------------------------------------------
+
+def test_default_pipeline_has_no_ui_builder():
+    from backend.app.services.env_orchestrator import default_agent_types
+    from forge.envgen.agents.app_generator import (
+        AppAssemblyAgent,
+        BackendBuilderAgent,
+        UIBuilderAgent,
+    )
+
+    types = default_agent_types(with_ui=False)
+
+    assert UIBuilderAgent not in types
+    # The rest of the pipeline is untouched — only the UI concern is dropped.
+    assert BackendBuilderAgent in types
+    assert AppAssemblyAgent in types
+
+
+def test_default_pipeline_includes_the_ui_builder_when_requested():
+    # False-positive guard: the flag must actually re-add the specialist.
+    from backend.app.services.env_orchestrator import default_agent_types
+    from forge.envgen.agents.app_generator import BackendBuilderAgent, UIBuilderAgent
+
+    types = default_agent_types(with_ui=True)
+
+    assert UIBuilderAgent in types
+    # The UI builder consumes nothing the backend produces, but assembly order
+    # matters for readability: the backend still comes first.
+    assert types.index(BackendBuilderAgent) < types.index(UIBuilderAgent)
+
+
+def test_default_pipeline_omits_the_user_researcher_unless_requested():
+    from backend.app.services.env_orchestrator import default_agent_types
+    from forge.envgen.research import UserResearchAgent
+
+    assert UserResearchAgent not in default_agent_types(with_ui=False)
+    assert UserResearchAgent in default_agent_types(
+        with_ui=False, use_user_researcher=True
+    )
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_marks_the_context_headless_by_default(tmp_path, monkeypatch):
+    monkeypatch.setenv("FORGE_GENERATED_ENVS_DIR", str(tmp_path))
+    seen: list[bool] = []
+
+    class _ContextProbe(EnvGenAgent):
+        agent_id = "probe"
+        produces = ["app_code"]
+
+        async def run(self, ctx: EnvGenContext, bus: ArtifactBus) -> None:
+            seen.append(ctx.with_ui)
+            await bus.publish("app_code", {"main.py": "# app"})
+
+    await EnvironmentOrchestrator(agents=[_ContextProbe()]).run(
+        env_name="headless_env",
+        description="test",
+        compiler_input=_compiler_input(),
+    )
+    assert seen == [False]
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_propagates_a_ui_request_to_the_context(tmp_path, monkeypatch):
+    monkeypatch.setenv("FORGE_GENERATED_ENVS_DIR", str(tmp_path))
+    seen: list[bool] = []
+
+    class _ContextProbe(EnvGenAgent):
+        agent_id = "probe"
+        produces = ["app_code"]
+
+        async def run(self, ctx: EnvGenContext, bus: ArtifactBus) -> None:
+            seen.append(ctx.with_ui)
+            await bus.publish("app_code", {"main.py": "# app"})
+
+    await EnvironmentOrchestrator(agents=[_ContextProbe()]).run(
+        env_name="ui_env",
+        description="test",
+        compiler_input=_compiler_input(),
+        with_ui=True,
+    )
+    assert seen == [True]
+
+
+# ---------------------------------------------------------------------------
+# Build progress flags
+# ---------------------------------------------------------------------------
+
+def _plan_with(agent_ids: list[str]):
+    from forge.envgen.planning import AgentTask, GenerationPlan
+
+    return GenerationPlan(
+        user_request="test",
+        tasks=[AgentTask(id=a, agent_id=a, description=a) for a in agent_ids],
+    )
+
+
+def test_pipeline_flags_report_a_headless_build():
+    from backend.app.worker.tasks import pipeline_flags
+
+    flags = pipeline_flags(_plan_with(["backend_builder", "app_assembler"]))
+
+    assert flags["ui_builder_enabled"] is False
+    assert flags["user_researcher_enabled"] is False
+
+
+def test_pipeline_flags_report_the_specialists_a_plan_contains():
+    # False-positive guard: the flags must track the plan, not a constant.
+    from backend.app.worker.tasks import pipeline_flags
+
+    flags = pipeline_flags(_plan_with(["user_researcher", "backend_builder", "ui_builder"]))
+
+    assert flags["ui_builder_enabled"] is True
+    assert flags["user_researcher_enabled"] is True

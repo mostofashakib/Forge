@@ -42,6 +42,16 @@ _BACKEND_PLAN_SYSTEM = (
 # Implementation prompts — one per concern
 # ---------------------------------------------------------------------------
 
+# The UI route is the one backend requirement that only exists when a UI is
+# generated. It is spliced in by AppGeneratorPrompts.backend() so a headless
+# environment never ships a route pointing at a file that was never written.
+_UI_ROUTE_SLOT = "__FORGE_UI_ROUTE__"
+
+_BACKEND_UI_ROUTE = (
+    "  - GET /ui → return FileResponse('ui.html', media_type='text/html')\n"
+    "  - Import FileResponse from fastapi.responses"
+)
+
 _BACKEND_SYSTEM = (
     "Generate the COMPLETE content for ONE Python file of a FastAPI application.\n"
     "Write ONLY Python — no HTML, CSS, or JavaScript.\n"
@@ -65,9 +75,8 @@ _BACKEND_SYSTEM = (
     "      POST /forge/snapshot       → body {\"slot\": \"name\"}, save state, return {\"ok\": true}\n"
     "      POST /forge/restore/{slot} → restore saved state, return {\"ok\": true}\n"
     "      POST /forge/restore-state  → body is full state JSON, write to SQLite, return {\"ok\": true}\n"
-    "  - GET /ui → return FileResponse('ui.html', media_type='text/html')\n"
+    "__FORGE_UI_ROUTE__\n"
     "  - Add CORS middleware (allow all origins) and mount StaticFiles if needed\n"
-    "  - Import FileResponse from fastapi.responses\n"
     "  - PORT IS FIXED: if you include `if __name__ == \"__main__\": uvicorn.run(...)`,\n"
     "    bind to host=\"0.0.0.0\" and port=8000. Forge always publishes 8000/tcp from\n"
     "    the container; any other port leaves the iframe with no working route.\n"
@@ -279,6 +288,12 @@ class AppGeneratorPrompts:
     PLAN = _PLAN_SYSTEM
     BACKEND_PLAN = _BACKEND_PLAN_SYSTEM
     BACKEND = _BACKEND_SYSTEM
+
+    @classmethod
+    def backend(cls, *, with_ui: bool) -> str:
+        """Backend prompt for a UI-backed or headless (API-only) environment."""
+        replacement = _BACKEND_UI_ROUTE if with_ui else ""
+        return cls.BACKEND.replace(_UI_ROUTE_SLOT + "\n", replacement)
     HTML_CSS = _HTML_CSS_SYSTEM
     JAVASCRIPT = _JS_SYSTEM
     GENERIC_FILE = _GENERIC_SYSTEM
@@ -398,7 +413,9 @@ class BackendBuilderAgent(EnvGenAgent):
                     f"Generate file: main.py\n"
                     f"Responsibility: {file_plan.description}"
                 )
-                content = await self._call(system=AppGeneratorPrompts.BACKEND, user=user)
+                content = await self._call(
+                    system=AppGeneratorPrompts.backend(with_ui=ctx.with_ui), user=user
+                )
 
             elif file_plan.path.lower() == "dockerfile":
                 # Dockerfile uses a dedicated prompt that pins port 8000;
@@ -512,13 +529,16 @@ class UIBuilderAgent(EnvGenAgent):
 
 class AppAssemblyAgent(EnvGenAgent):
     agent_id = "app_assembler"
-    depends_on = ["backend_code", "ui_code"]
+    depends_on = ["backend_code"]
+    # A headless pipeline has no UI builder, so ui_code has no producer at all.
+    # Declaring it optional keeps the plan valid there while still creating a
+    # real dependency edge whenever a UI builder is present.
+    optional_depends_on = ["ui_code"]
     produces = ["app_code"]
 
     async def run(self, ctx: EnvGenContext, bus: ArtifactBus) -> None:
-        del ctx
         backend_code = await bus.wait_for("backend_code")
-        ui_code = await bus.wait_for("ui_code")
+        ui_code = await bus.wait_for("ui_code") if ctx.with_ui else {}
         overlap = set(backend_code) & set(ui_code)
         if overlap:
             raise ValueError(f"Backend and UI produced the same paths: {sorted(overlap)}")

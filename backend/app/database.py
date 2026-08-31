@@ -39,6 +39,11 @@ def init_db() -> None:
         migrations = {
             "env_type": "ALTER TABLE sandbox_environments ADD COLUMN env_type TEXT DEFAULT 'general'",
             "state_schema": "ALTER TABLE sandbox_environments ADD COLUMN state_schema TEXT",
+            # Environments that predate the UI toggle were all built with a UI.
+            "has_ui": (
+                "ALTER TABLE sandbox_environments "
+                "ADD COLUMN has_ui BOOLEAN DEFAULT 1"
+            ),
             "validation_missing_fields": (
                 "ALTER TABLE sandbox_environments "
                 "ADD COLUMN validation_missing_fields TEXT"
