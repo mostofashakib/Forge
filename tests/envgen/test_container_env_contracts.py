@@ -175,3 +175,107 @@ def test_step_still_works_with_a_plain_dict_action():
     )
     assert info["status_code"] == 200
     assert reward == 1.0
+
+
+def test_an_unset_timeout_uses_the_clients_configured_timeout_not_none():
+    # Pins the fix round 3 defect: httpx treats an explicit `timeout=None` as
+    # "no timeout at all," not "use the client default." A TransportRequest
+    # with no timeout must map to httpx.USE_CLIENT_DEFAULT so a genuinely
+    # hung container still times out instead of blocking forever.
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["timeout"] = request.extensions.get("timeout")
+        return httpx.Response(200, json={"ok": True})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), timeout=15.0)
+    env = ContainerEnvBase("http://env", client=client)
+
+    env.transport.call(TransportRequest(method="GET", target="/forge/state"))
+
+    assert seen["timeout"] == {
+        "connect": 15.0,
+        "read": 15.0,
+        "write": 15.0,
+        "pool": 15.0,
+    }
+
+
+def test_an_explicit_timeout_still_overrides_the_client_default():
+    # False-positive guard: fixing the unset case must not stop an explicit,
+    # shorter per-call timeout from being honored.
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["timeout"] = request.extensions.get("timeout")
+        return httpx.Response(200, json={"ok": True})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), timeout=15.0)
+    env = ContainerEnvBase("http://env", client=client)
+
+    env.transport.call(
+        TransportRequest(method="GET", target="/forge/state", timeout=2.0)
+    )
+
+    assert seen["timeout"] == {"connect": 2.0, "read": 2.0, "write": 2.0, "pool": 2.0}
+
+
+def test_a_non_json_error_body_is_reported_in_band_not_raised():
+    # Pins the fix round 3 defect: a non-JSON body (an HTML 502 from a proxy
+    # in front of the container is the realistic case) must not raise out of
+    # call() either — same in-band contract as a wire failure — and the real
+    # status code must still come through.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            502, content=b"<html>Bad Gateway</html>", headers={"content-type": "text/html"}
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    env = ContainerEnvBase("http://env", client=client)
+
+    response = env.transport.call(TransportRequest(method="GET", target="/forge/state"))
+
+    assert response.status == 502
+    assert response.error is not None
+    assert response.body == {}
+
+
+def test_http_action_result_serializes_despite_carrying_a_response():
+    # Pins the fix round 3 defect: _HttpActionResult used to raise
+    # PydanticSerializationError on model_dump(mode="json") /
+    # model_dump_json() because httpx.Response isn't JSON-serializable.
+    # Nothing serializes an ActionResult today, but the first generic
+    # consumer that does (a trajectory logger, a replay dump) must not crash
+    # only for the container family.
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/close_ticket":
+            return httpx.Response(200, json={"ok": True})
+        return httpx.Response(200, json={"tickets": []})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    env = ContainerEnvBase("http://env", client=client)
+
+    result = env.backend.execute(Action(type="close_ticket"), {}, None)
+
+    assert result.model_dump() == {"state": {"tickets": []}, "events": [], "error": None}
+    assert result.model_dump(mode="json") == {
+        "state": {"tickets": []},
+        "events": [],
+        "error": None,
+    }
+    assert result.model_dump_json() is not None
+
+
+def test_http_action_result_response_is_still_readable_after_serializing():
+    # False-positive guard: excluding `response` from serialization must not
+    # mean dropping the attribute itself — step() still needs it afterward.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"tickets": []})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    env = ContainerEnvBase("http://env", client=client)
+
+    result = env.backend.execute(Action(type="close_ticket"), {}, None)
+    result.model_dump_json()  # serialize first
+
+    assert result.response.status_code == 200
