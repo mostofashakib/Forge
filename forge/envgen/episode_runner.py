@@ -19,6 +19,7 @@ from forge.envgen.episode_base import (
     TrajectoryWriter,
 )
 from forge.envgen.objective import ObjectiveScorer
+from forge.runtime.tools import OpenAPIToolProvider
 from forge.schema.state_schema import StateSchemaManifest
 
 logger = logging.getLogger(__name__)
@@ -127,7 +128,7 @@ class ContainerEpisodeRunner(EpisodeController):
             base_url=config.base_url,
             timeout=config.http_timeout,
         )
-        self._actions: list[dict] | None = None  # cached after first discovery
+        self._tool_provider: OpenAPIToolProvider | None = None  # built on first use
 
     # ------------------------------------------------------------------
     # Startup health check
@@ -176,41 +177,20 @@ class ContainerEpisodeRunner(EpisodeController):
         self._http.post("/forge/reset", json=body)
         return self._get_state()
 
+    @property
+    def tool_provider(self) -> OpenAPIToolProvider:
+        """This app's action surface, discovered from its OpenAPI schema.
+
+        Built lazily so it binds whatever client is on `self._http` at first
+        use, and cached so the manifest is fetched once per episode.
+        """
+        if self._tool_provider is None:
+            self._tool_provider = OpenAPIToolProvider(self._http)
+        return self._tool_provider
+
     def _discover_actions(self) -> list[dict]:
         """Build an action manifest from /openapi.json. Cached after first call."""
-        if self._actions is not None:
-            return self._actions
-        try:
-            resp = self._http.get("/openapi.json", timeout=10.0)
-            schema = resp.json()
-            actions: list[dict] = []
-            components = schema.get("components", {}).get("schemas", {})
-            for path, path_item in schema.get("paths", {}).items():
-                if path.startswith("/forge/") or path == "/ui":
-                    continue
-                post_op = path_item.get("post")
-                if post_op is None:
-                    continue
-                action: dict = {
-                    "endpoint": path,
-                    "description": post_op.get("summary") or post_op.get("operationId") or path,
-                }
-                # Resolve request body schema (inline or $ref)
-                body = post_op.get("requestBody", {})
-                content = body.get("content", {}).get("application/json", {})
-                req_schema = content.get("schema", {})
-                if "$ref" in req_schema:
-                    ref_name = req_schema["$ref"].split("/")[-1]
-                    req_schema = components.get(ref_name, {})
-                action["request_schema"] = req_schema
-                actions.append(action)
-            self._actions = actions
-            logger.info("[runner] discovered %d action endpoints", len(actions))
-            return actions
-        except Exception as exc:
-            logger.warning("[runner] could not discover actions: %s", exc)
-            self._actions = []
-            return []
+        return self.tool_provider.action_manifest()
 
     def _execute_action(self, action: dict) -> dict | None:
         endpoint = action.get("endpoint", "")
