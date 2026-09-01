@@ -462,6 +462,25 @@ browser environments take no cast — there is no coherent notion of a colleague
 inside a shell session. A working example is in
 `examples/clinical_handoff/env.py`.
 
+**In the product, the cast is written before the environment exists and bound
+after it does.** Step 05 of the custom builder (`/environments/new/custom`) is
+where people are described; it deliberately offers no action picker, because at
+that moment the environment has no actions — granting one is refused at the
+request with that as the reason. The build writes the roster into
+`custom/config.yaml`, and because a cast that arrives inert is only a safe
+default if it is impossible to miss, the binding step is surfaced three times:
+in the build log, as a **Needs actions** badge on the environment hub, and as a
+callout at the top of the personas page. From then on the switch that turns the
+cast on and off sits in the New Agent Run dialog, where runs are actually
+launched — it edits the environment rather than the run, since personas are
+resolved when the environment is built, and says so.
+
+One subtlety worth stating because it is invisible: `ContainerEpisodeRunner`
+does not call `ContainerEnvBase.step` — it drives the environment's
+collaborators directly — so the persona tick lives in its `_execute_action` as
+well. Wiring `step` alone would have produced a cast that existed on the
+environment, passed every unit test, and never acted in a real run.
+
 Because a model-backed persona cannot be replayed, `build()` runs its
 determinism probe with the scripted driver swapped in: the cast is still present
 and still acts on the same steps, so the probe proves what it exists to prove —
@@ -837,7 +856,7 @@ frontend/
       eval/            # Internal checkpoint evaluation on held-out environments
     environments/
       new/             # 4-option landing page (CLI / Browser / Custom / Premade)
-        custom/        # Prompt form + optional user-research toggle
+        custom/        # Prompt form, user-research toggle, and the simulated-people step
         premade/       # Gmail / Slack picker
       [env_name]/
         sandbox/       # Tabbed hub: App / Terminal / Observability
@@ -869,7 +888,8 @@ tests/
   training/            # Dataset loading, reward mapping, trainer, checkpoint tests
   cli/                 # forge CLI command tests (run determinism, train, replay)
   customization/       # Hook registry, loader, and config tests
-  personas/            # Cast resolution, cadence, guardrails, drivers, both env families
+  personas/            # Cast resolution, cadence, guardrails, drivers, both env families,
+  │                    #   the container run path, and the build-flow wiring
   gmail_env/           # Premade Gmail determinism, transition, and verifier tests
   architecture/        # Separation-of-concerns, UI-determinism, and test-diversity gates
 ```
