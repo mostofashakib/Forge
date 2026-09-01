@@ -111,6 +111,17 @@ function SparkleIcon() {
   );
 }
 
+function PeopleIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="6" cy="5" r="2.5" />
+      <path d="M1.5 13.5c0-2.2 2-3.75 4.5-3.75s4.5 1.55 4.5 3.75" />
+      <path d="M10.5 3.1a2.5 2.5 0 0 1 0 4.8" />
+      <path d="M12 9.9c1.6.45 2.5 1.6 2.5 3.6" />
+    </svg>
+  );
+}
+
 function ExportIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -125,13 +136,14 @@ function ExportIcon() {
 // Section + action config
 // ---------------------------------------------------------------------------
 
-type ActionId = "agent" | "dashboard" | "policy" | "reward" | "evaluate" | "violations" | "synthetic" | "export";
+type ActionId = "agent" | "dashboard" | "policy" | "reward" | "personas" | "evaluate" | "violations" | "synthetic" | "export";
 
 const ACTION_ICONS: Record<ActionId, React.ReactNode> = {
   agent:      <AgentIcon />,
   dashboard:  <ChartIcon />,
   policy:     <ShieldIcon />,
   reward:     <StarIcon />,
+  personas:   <PeopleIcon />,
   evaluate:   <CheckIcon />,
   violations: <AlertIcon />,
   synthetic:  <SparkleIcon />,
@@ -143,6 +155,7 @@ const ICON_THEME: Record<ActionId, { bg: string; color: string }> = {
   dashboard:  { bg: "bg-indigo-50",  color: "text-indigo-600" },
   policy:     { bg: "bg-violet-50",  color: "text-violet-600" },
   reward:     { bg: "bg-violet-50",  color: "text-violet-600" },
+  personas:   { bg: "bg-violet-50",  color: "text-violet-600" },
   evaluate:   { bg: "bg-amber-50",   color: "text-amber-600"  },
   violations: { bg: "bg-amber-50",   color: "text-amber-600"  },
   synthetic:  { bg: "bg-emerald-50", color: "text-emerald-600" },
@@ -158,7 +171,7 @@ interface Section {
 
 const SECTIONS: Section[] = [
   { id: "training",      label: "Training",      description: "Run, observe, and measure agent behavior.", actions: ["agent", "dashboard"] },
-  { id: "configuration", label: "Configuration", description: "Shape the rules and definition of success.", actions: ["policy", "reward"] },
+  { id: "configuration", label: "Configuration", description: "Shape the rules and definition of success.", actions: ["policy", "reward", "personas"] },
   { id: "analysis",      label: "Analysis",      description: "Interrogate trajectories and surface risk.", actions: ["evaluate", "violations"] },
   { id: "data",          label: "Data",          description: "Create and package learning-ready datasets.", actions: ["synthetic", "export"] },
 ];
@@ -202,6 +215,13 @@ const ACTIONS: ActionDef[] = [
     href: (e) => `/environments/${e}/reward`,
     requiresSandbox: false,
     badge: ({ rewardConfigured }) => rewardConfigured ? "Custom" : "Default",
+  },
+  {
+    id: "personas",
+    label: "Simulated People",
+    description: "Populate the environment with colleagues, patients, and customers the agent has to work with.",
+    href: (e) => `/environments/${e}/personas`,
+    requiresSandbox: false,
   },
   {
     id: "evaluate",

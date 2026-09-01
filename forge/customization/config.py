@@ -3,6 +3,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 import yaml
 
+from forge.contracts.persona import PersonaPopulation
+from forge.personas.config import load_population
+
 
 @dataclass
 class RewardConfig:
@@ -27,6 +30,9 @@ class ObservationConfig:
 class EnvConfig:
     reward: RewardConfig = field(default_factory=RewardConfig)
     observation: ObservationConfig = field(default_factory=ObservationConfig)
+    # Disabled by default, so every environment written before personas
+    # existed loads unchanged and costs nothing.
+    personas: PersonaPopulation = field(default_factory=PersonaPopulation)
 
 
 def load_config(pkg_dir: Path) -> EnvConfig:
@@ -52,4 +58,5 @@ def load_config(pkg_dir: Path) -> EnvConfig:
             visible_entities=list(obs_raw.get("visible_entities", [])),
             hidden_entities=list(obs_raw.get("hidden_entities", [])),
         ),
+        personas=load_population(raw.get("personas")),
     )

@@ -19,6 +19,8 @@ from forge.contracts import (
     ToolProvider,
     Task,
 )
+from forge.contracts.persona import PersonaPopulation
+from forge.personas.engine import PersonaEngine
 from forge.runtime.action import ActionValidator
 from forge.runtime.context import RuntimeContext
 from forge.runtime.diff import compute_diff
@@ -81,6 +83,7 @@ class ForgeEnv(gym.Env, Environment):
         execution_backend: ExecutionBackend | None = None,
         termination_policy: TerminationPolicy | None = None,
         online_verifier_engine: VerifierEngine | None = None,
+        personas: PersonaEngine | None = None,
     ) -> None:
         super().__init__()
         self.env_spec = env_spec
@@ -99,6 +102,10 @@ class ForgeEnv(gym.Env, Environment):
         # Final verification is authoritative. An explicitly injected online
         # engine may run cheap monitors, but its results never become reward.
         self._online_verifier_engine = online_verifier_engine
+        # Always present, inert when no cast is configured, so `step` has one
+        # code path rather than a persona branch it takes on every step of
+        # every environment that has none.
+        self._personas = personas or PersonaEngine(PersonaPopulation())
         self._action_validator = ActionValidator(transition_engine.action_types)
         self._telemetry = telemetry
         self._policy_engine = policy_engine
@@ -176,6 +183,11 @@ class ForgeEnv(gym.Env, Environment):
     def current_task(self) -> Task | None:
         """The task selected for the active episode, if reset has run."""
         return self._current_task_model
+
+    @property
+    def personas(self) -> PersonaEngine:
+        """The simulated humans sharing this environment with the agent."""
+        return self._personas
 
     def current_trajectory(self):
         """Full recorded trajectory of the in-progress episode."""
@@ -267,12 +279,18 @@ class ForgeEnv(gym.Env, Environment):
         self._invalid_action_count = 0
         self._total_reward = 0.0
         self._evaluation = None
+        # The cast is resolved from the episode seed, so the same seed always
+        # puts the same colleagues in the room.
+        self._personas.reset(actual_seed)
 
-        return self._observe(self._state_store.get()), {
+        info = {
             "episode_id": self._episode_id,
             "task": self._current_task,
             "seed": actual_seed,
         }
+        if self._personas.enabled:
+            info["personas"] = self._personas.describe()
+        return self._observe(self._state_store.get()), info
 
     def step(self, action: dict) -> tuple[dict, float, bool, bool, dict]:
         if self._ctx is None:
@@ -319,9 +337,26 @@ class ForgeEnv(gym.Env, Environment):
             )
 
         self._state_store.apply(result.state)
+        self._ctx.clock.advance()
+
+        # Simulated colleagues act on the world the agent just changed, before
+        # the agent observes it. Their writes therefore land inside this step's
+        # diff and state hash rather than appearing out of nowhere at the start
+        # of the next one — an episode where a nurse replies is one step, not
+        # two, and replays as one.
+        persona_tick = self._personas.tick(
+            backend=self._backend,
+            state=self._state_store.get(),
+            ctx=self._ctx,
+            step_index=self._step_count,
+            agent_action=action,
+            events=result.events,
+        )
+        if persona_tick.acted:
+            self._state_store.apply(persona_tick.state)
+        events = list(result.events) + persona_tick.events
         state_after = self._state_store.get()
         hash_after = self._state_store.hash()
-        self._ctx.clock.advance()
 
         diff = compute_diff(state_before, state_after)
         self._step_count += 1
@@ -331,7 +366,7 @@ class ForgeEnv(gym.Env, Environment):
             state_hash_before=hash_before,
             state_hash_after=hash_after,
             action=action,
-            events=result.events,
+            events=events,
             reward=0.0,
             verifier_results=[],
             diff=diff,
@@ -382,9 +417,14 @@ class ForgeEnv(gym.Env, Environment):
 
         info = {
             "episode_id": self._episode_id,
-            "events": result.events,
+            "events": events,
             "termination_reason": termination.reason if termination else None,
         }
+        if persona_tick.turns:
+            # Blocked and skipped turns are reported alongside executed ones:
+            # an author debugging a quiet cast needs to see that a driver left
+            # its action space, not just that nobody spoke.
+            info["persona_turns"] = [turn.model_dump() for turn in persona_tick.turns]
         if termination is not None and reward_breakdown is not None:
             info.update({
                 "passed": self._evaluation.passed,
