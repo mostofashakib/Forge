@@ -418,18 +418,20 @@ personas:
   driver: anthropic:claude-sonnet-5   # or `scripted` — free, offline, replayable
   max_actions_per_step: 1
   roster:
-    - archetype: gatekeeper        # the disposition
-      id: supervisor
-      name: Alan Whitmore          # the identity — yours to write
+    - id: supervisor
+      name: Alan Whitmore
       role: shift supervisor
+      backstory: Answerable for the whole shift, so approves nothing undocumented.
+      traits: { responsiveness: 45, diligence: 90, formality: 85 }
       behavior:
         allowed_actions: [send_message, approve_discharge]
         wake_on: [send_message]
         latency_steps: 2          # shortened by their responsiveness trait
         cooldown_steps: 3
         max_actions_per_episode: 5
-  archetypes:
-    - archetype: anxious_requester
+  archetypes:                     # cloned to fill `count`
+    - id: caller
+      name: Caller
       role: patient
       behavior: { allowed_actions: [send_message] }
 ```
@@ -438,16 +440,20 @@ Six integer traits (responsiveness, initiative, verbosity, diligence, formality,
 patience) render into the driver's prompt as *instructions* rather than numbers,
 so a low-diligence colleague actually answers half the question.
 
-The eight templates in `forge/personas/archetypes.py` are **dispositions, not
-characters** — a gatekeeper, a busy expert, an unreliable third party, someone
-who cuts corners and does not say so. None of them names an industry, and a test
-enforces that: a library shipping a nurse and a patient would quietly push every
-environment toward a hospital, and an author building a warehouse or a
-moderation queue would start by fighting the defaults. A template supplies
-traits, cadence, and voice; `name` is a placeholder and `role` is empty, because
-supplying those is what turns "gatekeeper" into "Alan Whitmore, shift
-supervisor". Every template also ships inert, so an unbound persona can never
-act.
+People are **written, not chosen from a list.** The builder and the personas
+page both start from an empty roster: an author describes who each person is,
+what they want, how they write, and where their six dials sit. No premade cast
+is offered, because whatever shipped in one would quietly become the people
+every environment has.
+
+For environments defined in Python, `forge/personas/archetypes.py` provides
+`archetype()` — eight reusable *dispositions* (a gatekeeper, a busy expert, an
+unreliable third party, someone who cuts corners and does not say so) that
+supply traits, cadence, and voice while leaving identity to the caller. A test
+keeps them domain-neutral: none may name an industry, so the library cannot
+quietly push environments toward one. It is a code convenience and a YAML
+`archetype:` shorthand, not a product surface. Every entry ships inert, so an
+unbound persona can never act.
 
 `EnvBuilder.with_personas(...)` wires a cast into an in-process environment and
 `ContainerEnvBase(personas=...)` into a containerized one; both reject at build

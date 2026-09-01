@@ -58,10 +58,9 @@ def test_the_environment_action_surface_is_reported_for_the_editor(client, ward)
     assert body["environment_actions"] == ["post_message", "review_chart"]
 
 
-def test_the_archetype_library_is_offered(client, ward):
-    body = client.get("/api/envs/ward/personas").json()
-    ids = [a["id"] for a in body["archetypes"]]
-    assert "meticulous_checker" in ids
+def test_no_premade_cast_is_pushed_at_the_author(client, ward):
+    """People are written, not chosen from a list — see PersonaCastPicker."""
+    assert "archetypes" not in client.get("/api/envs/ward/personas").json()
 
 
 def test_an_unknown_environment_is_a_404(client, ward):
