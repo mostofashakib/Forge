@@ -55,10 +55,10 @@ def test_dumped_block_is_valid_yaml():
 
 def test_an_archetype_supplies_everything_an_entry_omits():
     population = load_population(
-        {"enabled": True, "roster": [{"archetype": "meticulous_nurse"}]}
+        {"enabled": True, "roster": [{"archetype": "meticulous_checker"}]}
     )
     spec = population.roster[0]
-    assert spec.profile.name == "Priya Raman"
+    assert spec.profile.name == "Meticulous checker"
     assert spec.profile.traits.diligence == 95
 
 
@@ -68,7 +68,7 @@ def test_entry_fields_override_the_archetype_they_extend():
             "enabled": True,
             "roster": [
                 {
-                    "archetype": "meticulous_nurse",
+                    "archetype": "meticulous_checker",
                     "id": "priya",
                     "name": "Priya R.",
                     "traits": {"diligence": 10},
@@ -147,11 +147,11 @@ def test_a_non_mapping_block_is_rejected():
 def test_dumped_entries_are_expanded_not_archetype_references():
     """A round trip must not depend on a library entry that may later change."""
     population = load_population(
-        {"enabled": True, "roster": [{"archetype": "busy_clinician"}]}
+        {"enabled": True, "roster": [{"archetype": "busy_expert"}]}
     )
     entry = dump_population(population)["roster"][0]
     assert "archetype" not in entry
-    assert entry["name"] == "Dr. Reyes"
+    assert entry["name"] == "Busy expert"
 
 
 def test_env_config_loads_personas_from_disk(tmp_path):

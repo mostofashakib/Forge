@@ -612,14 +612,27 @@
   .cast-picker__heading h2 { @apply text-xs font-semibold uppercase tracking-[0.13em]; }
   .cast-picker__heading p { @apply mt-2 text-[0.68rem] leading-5 text-muted-foreground; }
   .cast-picker__grid { @apply grid gap-3 p-5 sm:grid-cols-2 sm:p-6 xl:grid-cols-3; }
-  .cast-card { @apply flex flex-col gap-1 border border-foreground/25 p-3 text-left transition-colors disabled:opacity-40; }
+  .cast-card { @apply flex flex-col gap-1.5 border border-foreground/25 p-3 text-left transition-colors disabled:opacity-40; }
   .cast-card:hover:not(:disabled) { @apply border-foreground; }
   .cast-card strong { @apply text-[0.68rem] font-semibold uppercase tracking-[0.1em]; }
-  .cast-card em { @apply not-italic font-mono text-[0.58rem] text-primary; }
   .cast-card small { @apply text-[0.63rem] leading-4 text-muted-foreground; }
-  .cast-card--on { @apply border-foreground bg-foreground text-background; }
-  .cast-card--on em { @apply text-background; }
-  .cast-card--on small { @apply text-background/70; }
+  .cast-card em { @apply mt-auto not-italic font-mono text-[0.58rem] text-primary; }
+  .cast-card--blank { @apply border-dashed; }
+
+  .cast-roster { @apply grid gap-3 border-t border-foreground/15 px-5 pb-1 pt-4 sm:px-6; }
+  .cast-person { @apply border border-foreground/20 bg-muted/20 p-4; }
+  .cast-person__head { @apply mb-3 flex items-center gap-2.5; }
+  .cast-person__head > span { @apply font-mono text-[0.58rem] text-primary; }
+  .cast-person__head strong { @apply flex-1 truncate text-[0.7rem] font-semibold uppercase tracking-[0.1em]; }
+  .cast-person__head button { @apply font-mono text-[0.58rem] text-muted-foreground underline-offset-2 hover:text-destructive hover:underline disabled:opacity-40; }
+  .cast-person__fields { @apply grid gap-3 sm:grid-cols-2; }
+  .cast-person label, .cast-person__about { @apply flex flex-col gap-1.5; }
+  .cast-person__about { @apply mt-3; }
+  .cast-person span { @apply text-[0.62rem] font-semibold uppercase tracking-[0.1em]; }
+  .cast-person input, .cast-person textarea {
+    @apply border border-foreground/25 bg-transparent px-2 py-1.5 text-xs focus-visible:border-foreground focus-visible:outline-none disabled:opacity-40;
+  }
+  .cast-person textarea { @apply resize-none leading-5; }
   .cast-picker__settings { @apply grid gap-4 border-t border-foreground/15 px-5 pb-5 pt-4 sm:grid-cols-3 sm:px-6; }
   .cast-picker__settings label { @apply flex flex-col gap-1.5; }
   .cast-picker__settings span { @apply text-[0.62rem] font-semibold uppercase tracking-[0.1em]; }

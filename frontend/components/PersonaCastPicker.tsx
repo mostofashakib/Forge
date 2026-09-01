@@ -52,13 +52,19 @@ const DRIVERS = [
 ];
 
 /**
- * Choosing who will share the environment with the agent, at build time.
+ * Writing the people who will share the environment with the agent.
  *
- * Deliberately does not offer an action picker. The environment's actions do
- * not exist until it is generated, so there is nothing to bind to yet — this
- * step settles who is in the world, and what each of them may do is chosen
- * afterwards against the real generated surface. The copy says so, rather than
- * letting the omission read as a missing feature.
+ * The library is a set of dispositions, not characters — a gatekeeper, someone
+ * who answers half the question — so the author supplies the identity that
+ * makes each one belong to *this* world. A template is a starting point that
+ * is expected to be edited, which is why name, role, and background are
+ * editable right here rather than on a later page, and why a blank person is
+ * offered alongside them.
+ *
+ * Deliberately no action picker: the environment's actions do not exist until
+ * it is generated. This step settles who is in the world; what each of them may
+ * do is chosen afterwards against the real generated surface. The copy says so,
+ * rather than letting the omission read as a missing feature.
  */
 export default function PersonaCastPicker({
   value,
@@ -89,18 +95,62 @@ export default function PersonaCastPicker({
 
   const set = (next: Partial<CastConfig>) => onChange({ ...value, ...next });
 
-  function toggleArchetype(option: ArchetypeOption) {
-    const present = value.roster.some((p) => p.id === option.id);
-    const roster = present
-      ? value.roster.filter((p) => p.id !== option.id)
-      : [...value.roster, structuredClone(option)];
+  function withRoster(roster: CastPersona[]) {
     set({
       roster,
-      // Turning the first person on turns the cast on; removing the last turns
-      // it off, so there is never an "enabled" environment with nobody in it.
-      enabled: roster.length > 0 && (value.enabled || !present),
+      // The first person added turns the cast on; removing the last turns it
+      // off, so there is never an "enabled" environment with nobody in it.
+      enabled: roster.length > 0,
       count: value.count && value.count < roster.length ? roster.length : value.count,
     });
+  }
+
+  function uniqueId(base: string, roster: CastPersona[]): string {
+    if (!roster.some((p) => p.id === base)) return base;
+    let suffix = 2;
+    while (roster.some((p) => p.id === `${base}_${suffix}`)) suffix += 1;
+    return `${base}_${suffix}`;
+  }
+
+  function addFrom(option: ArchetypeOption) {
+    const copy = structuredClone(option);
+    copy.id = uniqueId(option.id, value.roster);
+    withRoster([...value.roster, copy]);
+  }
+
+  function addBlank() {
+    withRoster([
+      ...value.roster,
+      {
+        id: uniqueId("person", value.roster),
+        name: "",
+        role: "",
+        backstory: "",
+        goals: [],
+        traits: {
+          responsiveness: 50,
+          initiative: 30,
+          verbosity: 50,
+          diligence: 70,
+          formality: 50,
+          patience: 50,
+        },
+        behavior: {
+          allowed_actions: [],
+          wake_on: [],
+          activity: 25,
+          latency_steps: 0,
+          cooldown_steps: 1,
+          max_actions_per_episode: null,
+        },
+      },
+    ]);
+  }
+
+  function editPerson(index: number, patch: Partial<CastPersona>) {
+    const roster = [...value.roster];
+    roster[index] = { ...roster[index], ...patch };
+    set({ roster });
   }
 
   const castSize = Math.max(value.count ?? value.roster.length, value.roster.length);
@@ -112,39 +162,101 @@ export default function PersonaCastPicker({
         <div>
           <h2>Simulated people</h2>
           <p>
-            Put colleagues, patients, or customers in the environment so the agent
-            has to work with someone rather than alone. Optional — leave it empty
-            for a world with nobody in it.
+            Put other people in the environment so the agent has to work with
+            someone rather than alone. Start from a disposition below and make it
+            yours — the templates describe how someone behaves, not who they are.
+            Optional: leave it empty for a world with nobody in it.
           </p>
         </div>
       </div>
 
       {loadError ? (
         <p className="cast-picker__note">
-          Could not load the archetype library — is the backend running? You can add
+          Could not load the template library — is the backend running? You can add
           people after the build from the environment&apos;s Simulated People page.
         </p>
       ) : (
         <>
-          <div className="cast-picker__grid" role="group" aria-label="Who is in the world">
-            {archetypes.map((option) => {
-              const on = value.roster.some((p) => p.id === option.id);
-              return (
-                <button
-                  key={option.id}
-                  type="button"
-                  aria-pressed={on}
-                  disabled={disabled}
-                  onClick={() => toggleArchetype(option)}
-                  className={`cast-card ${on ? "cast-card--on" : ""}`}
-                >
-                  <strong>{option.name}</strong>
-                  <em>{option.role}</em>
-                  <small>{option.backstory}</small>
-                </button>
-              );
-            })}
+          <div className="cast-picker__grid" role="group" aria-label="Add a person">
+            {archetypes.map((option) => (
+              <button
+                key={option.id}
+                type="button"
+                disabled={disabled}
+                onClick={() => addFrom(option)}
+                className="cast-card"
+              >
+                <strong>{option.name}</strong>
+                <small>{option.backstory}</small>
+                <em>+ Add</em>
+              </button>
+            ))}
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={addBlank}
+              className="cast-card cast-card--blank"
+            >
+              <strong>Someone else</strong>
+              <small>
+                Start from nothing and describe the person yourself. Fine-tune their
+                disposition later on the Simulated People page.
+              </small>
+              <em>+ Add</em>
+            </button>
           </div>
+
+          {value.roster.length > 0 && (
+            <div className="cast-roster">
+              {value.roster.map((person, index) => (
+                <div key={`${person.id}-${index}`} className="cast-person">
+                  <div className="cast-person__head">
+                    <span>{index + 1}</span>
+                    <strong>{person.name || "Unnamed"}</strong>
+                    <button
+                      type="button"
+                      disabled={disabled}
+                      onClick={() =>
+                        withRoster(value.roster.filter((_, i) => i !== index))
+                      }
+                    >
+                      Remove
+                    </button>
+                  </div>
+                  <div className="cast-person__fields">
+                    <label>
+                      <span>Name</span>
+                      <input
+                        value={person.name}
+                        disabled={disabled}
+                        placeholder="e.g. Alan Whitmore"
+                        onChange={(e) => editPerson(index, { name: e.target.value })}
+                      />
+                    </label>
+                    <label>
+                      <span>Role</span>
+                      <input
+                        value={person.role ?? ""}
+                        disabled={disabled}
+                        placeholder="e.g. shift supervisor"
+                        onChange={(e) => editPerson(index, { role: e.target.value })}
+                      />
+                    </label>
+                  </div>
+                  <label className="cast-person__about">
+                    <span>Who they are</span>
+                    <textarea
+                      rows={2}
+                      value={person.backstory ?? ""}
+                      disabled={disabled}
+                      placeholder="What their situation is, and why they behave the way they do."
+                      onChange={(e) => editPerson(index, { backstory: e.target.value })}
+                    />
+                  </label>
+                </div>
+              ))}
+            </div>
+          )}
 
           {value.roster.length > 0 && (
             <div className="cast-picker__settings">
@@ -159,8 +271,8 @@ export default function PersonaCastPicker({
                   onChange={(e) => set({ count: Number(e.target.value) })}
                 />
                 <small>
-                  Above {value.roster.length}, the people you picked are cloned with
-                  their own names to fill the room.
+                  Above {value.roster.length}, the people above are cloned with
+                  names of their own to fill the room.
                 </small>
               </label>
               <label>

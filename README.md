@@ -418,8 +418,10 @@ personas:
   driver: anthropic:claude-sonnet-5   # or `scripted` — free, offline, replayable
   max_actions_per_step: 1
   roster:
-    - archetype: by_the_book_supervisor
+    - archetype: gatekeeper        # the disposition
       id: supervisor
+      name: Alan Whitmore          # the identity — yours to write
+      role: shift supervisor
       behavior:
         allowed_actions: [send_message, approve_discharge]
         wake_on: [send_message]
@@ -427,15 +429,25 @@ personas:
         cooldown_steps: 3
         max_actions_per_episode: 5
   archetypes:
-    - archetype: anxious_patient
+    - archetype: anxious_requester
+      role: patient
       behavior: { allowed_actions: [send_message] }
 ```
 
 Six integer traits (responsiveness, initiative, verbosity, diligence, formality,
 patience) render into the driver's prompt as *instructions* rather than numbers,
-so a low-diligence colleague actually answers half the question. Seven archetypes
-ship in `forge/personas/archetypes.py` — every one inert until it is bound to an
-environment's actions, so an unbound persona can never act.
+so a low-diligence colleague actually answers half the question.
+
+The eight templates in `forge/personas/archetypes.py` are **dispositions, not
+characters** — a gatekeeper, a busy expert, an unreliable third party, someone
+who cuts corners and does not say so. None of them names an industry, and a test
+enforces that: a library shipping a nurse and a patient would quietly push every
+environment toward a hospital, and an author building a warehouse or a
+moderation queue would start by fighting the defaults. A template supplies
+traits, cadence, and voice; `name` is a placeholder and `role` is empty, because
+supplying those is what turns "gatekeeper" into "Alan Whitmore, shift
+supervisor". Every template also ships inert, so an unbound persona can never
+act.
 
 `EnvBuilder.with_personas(...)` wires a cast into an in-process environment and
 `ContainerEnvBase(personas=...)` into a containerized one; both reject at build
