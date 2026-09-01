@@ -6,6 +6,7 @@ import Link from "next/link";
 import { API_BASE } from "@/lib/api";
 import { Toast } from "@/components/Toast";
 import { useSandboxCapacity } from "@/lib/useSandboxCapacity";
+import PersonaCastPicker, { EMPTY_CAST, type CastConfig } from "@/components/PersonaCastPicker";
 const TTL_OPTIONS = [7, 30, 90, 365];
 type BuildMode = "research" | "manual";
 
@@ -47,6 +48,7 @@ export default function CustomEnvironmentPage() {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [mode, setMode] = useState<BuildMode>("research");
   const { activeCount, limit, error: capacityError } = useSandboxCapacity();
+  const [cast, setCast] = useState<CastConfig>(EMPTY_CAST);
   const [form, setForm] = useState<FormState>({
     env_name: "",
     description: "",
@@ -100,10 +102,13 @@ export default function CustomEnvironmentPage() {
         source_product_name: "",
         source_product_url: "",
       };
+      // Omitted entirely when nobody was picked, so an environment built
+      // without a cast carries no personas block at all.
+      const personas = cast.roster.length > 0 ? cast : null;
       const res = await fetch(`${API_BASE}/api/sandbox/`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...(researchPayload ?? manualPayload), env_type: "general" }),
+        body: JSON.stringify({ ...(researchPayload ?? manualPayload), env_type: "general", personas }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -256,6 +261,8 @@ export default function CustomEnvironmentPage() {
               </button>
             </div>
           </section>
+
+          <PersonaCastPicker value={cast} onChange={setCast} disabled={atLimit} />
 
           {submitError && (
             <div className="border border-red-200 bg-red-50 rounded-lg p-3">

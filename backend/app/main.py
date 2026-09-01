@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 from fastapi.middleware.cors import CORSMiddleware
 from backend.app.api.compile import router as compile_router
 from backend.app.api.envs import router as envs_router
+from backend.app.api.personas import library_router as persona_library_router
 from backend.app.api.personas import router as personas_router
 from backend.app.api.episodes import router as episodes_router
 from backend.app.api.rollouts import router as rollouts_router
@@ -59,6 +60,7 @@ app.add_middleware(
 app.include_router(compile_router)
 app.include_router(envs_router)
 app.include_router(personas_router)
+app.include_router(persona_library_router)
 app.include_router(episodes_router)
 app.include_router(rollouts_router)
 app.include_router(exports_router)

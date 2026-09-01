@@ -531,6 +531,13 @@ export default function PersonaEditor({
     ]);
   }
 
+  // Every person unbound is the specific state a builder-created cast lands in,
+  // and it reads very differently from one persona someone forgot: the whole
+  // cast is inert and the author has not started binding yet.
+  const unbound =
+    population.roster.length > 0 &&
+    population.roster.every((p) => p.behavior.allowed_actions.length === 0);
+
   const inertCount = useMemo(
     () => population.roster.filter((p) => p.behavior.allowed_actions.length === 0).length,
     [population.roster],
@@ -559,6 +566,17 @@ export default function PersonaEditor({
       </header>
 
       {error && <p className="persona-error">{error}</p>}
+
+      {unbound && (
+        <div className="persona-callout">
+          <strong>Nobody can act yet.</strong>
+          <p>
+            You picked this cast while the environment was being built, before its
+            actions existed. Open each person below and tick what they&apos;re
+            allowed to do — until then they&apos;re in the world but silent.
+          </p>
+        </div>
+      )}
 
       <Card>
         <CardHeader>
@@ -669,7 +687,7 @@ export default function PersonaEditor({
           </div>
         </div>
 
-        {inertCount > 0 && (
+        {inertCount > 0 && !unbound && (
           <p className="persona-warning">
             {inertCount} {inertCount === 1 ? "person has" : "people have"} no allowed
             actions and will never act. Give them at least one action below.
