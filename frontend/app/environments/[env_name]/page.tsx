@@ -111,6 +111,17 @@ function SparkleIcon() {
   );
 }
 
+function PeopleIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="6" cy="5" r="2.5" />
+      <path d="M1.5 13.5c0-2.2 2-3.75 4.5-3.75s4.5 1.55 4.5 3.75" />
+      <path d="M10.5 3.1a2.5 2.5 0 0 1 0 4.8" />
+      <path d="M12 9.9c1.6.45 2.5 1.6 2.5 3.6" />
+    </svg>
+  );
+}
+
 function ExportIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -125,13 +136,14 @@ function ExportIcon() {
 // Section + action config
 // ---------------------------------------------------------------------------
 
-type ActionId = "agent" | "dashboard" | "policy" | "reward" | "evaluate" | "violations" | "synthetic" | "export";
+type ActionId = "agent" | "dashboard" | "policy" | "reward" | "personas" | "evaluate" | "violations" | "synthetic" | "export";
 
 const ACTION_ICONS: Record<ActionId, React.ReactNode> = {
   agent:      <AgentIcon />,
   dashboard:  <ChartIcon />,
   policy:     <ShieldIcon />,
   reward:     <StarIcon />,
+  personas:   <PeopleIcon />,
   evaluate:   <CheckIcon />,
   violations: <AlertIcon />,
   synthetic:  <SparkleIcon />,
@@ -143,11 +155,18 @@ const ICON_THEME: Record<ActionId, { bg: string; color: string }> = {
   dashboard:  { bg: "bg-indigo-50",  color: "text-indigo-600" },
   policy:     { bg: "bg-violet-50",  color: "text-violet-600" },
   reward:     { bg: "bg-violet-50",  color: "text-violet-600" },
+  personas:   { bg: "bg-violet-50",  color: "text-violet-600" },
   evaluate:   { bg: "bg-amber-50",   color: "text-amber-600"  },
   violations: { bg: "bg-amber-50",   color: "text-amber-600"  },
   synthetic:  { bg: "bg-emerald-50", color: "text-emerald-600" },
   export:     { bg: "bg-emerald-50", color: "text-emerald-600" },
 };
+
+interface PersonaInfo {
+  personas?: {
+    roster?: Array<{ behavior?: { allowed_actions?: string[] } }>;
+  };
+}
 
 interface Section {
   id: string;
@@ -158,7 +177,7 @@ interface Section {
 
 const SECTIONS: Section[] = [
   { id: "training",      label: "Training",      description: "Run, observe, and measure agent behavior.", actions: ["agent", "dashboard"] },
-  { id: "configuration", label: "Configuration", description: "Shape the rules and definition of success.", actions: ["policy", "reward"] },
+  { id: "configuration", label: "Configuration", description: "Shape the rules and definition of success.", actions: ["policy", "reward", "personas"] },
   { id: "analysis",      label: "Analysis",      description: "Interrogate trajectories and surface risk.", actions: ["evaluate", "violations"] },
   { id: "data",          label: "Data",          description: "Create and package learning-ready datasets.", actions: ["synthetic", "export"] },
 ];
@@ -169,7 +188,15 @@ interface ActionDef {
   description: string;
   href: (env: string) => string;
   requiresSandbox: boolean;
-  badge?: (cfg: { policyConfigured: boolean; rewardConfigured: boolean; isLive: boolean; hasSandbox: boolean; sandbox: SandboxInfo | null }) => string | null;
+  badge?: (cfg: {
+    policyConfigured: boolean;
+    rewardConfigured: boolean;
+    isLive: boolean;
+    hasSandbox: boolean;
+    sandbox: SandboxInfo | null;
+    personasUnbound: boolean;
+    personasConfigured: boolean;
+  }) => string | null;
 }
 
 const ACTIONS: ActionDef[] = [
@@ -202,6 +229,15 @@ const ACTIONS: ActionDef[] = [
     href: (e) => `/environments/${e}/reward`,
     requiresSandbox: false,
     badge: ({ rewardConfigured }) => rewardConfigured ? "Custom" : "Default",
+  },
+  {
+    id: "personas",
+    label: "Simulated People",
+    description: "Populate the environment with colleagues, patients, and customers the agent has to work with.",
+    href: (e) => `/environments/${e}/personas`,
+    requiresSandbox: false,
+    badge: ({ personasUnbound, personasConfigured }) =>
+      personasUnbound ? "Needs actions" : personasConfigured ? "Custom" : null,
   },
   {
     id: "evaluate",
@@ -246,12 +282,15 @@ export default async function EnvironmentHubPage({
 }) {
   const { env_name } = await params;
 
-  const [sandbox, evalConfig] = await Promise.all([
+  const [sandbox, evalConfig, personas] = await Promise.all([
     fetch(`${API_BASE}/api/sandbox/${env_name}`, { cache: "no-store" })
       .then((r) => (r.ok ? (r.json() as Promise<SandboxInfo>) : null))
       .catch(() => null),
     fetch(`${API_BASE}/api/sandbox/${env_name}/evaluate`, { cache: "no-store" })
       .then((r) => (r.ok ? (r.json() as Promise<EvalConfig>) : null))
+      .catch(() => null),
+    fetch(`${API_BASE}/api/envs/${env_name}/personas`, { cache: "no-store" })
+      .then((r) => (r.ok ? (r.json() as Promise<PersonaInfo>) : null))
       .catch(() => null),
   ]);
 
@@ -262,7 +301,24 @@ export default async function EnvironmentHubPage({
   const policyConfigured = !!(evalConfig?.policy_requirements?.trim());
   const rewardConfigured = !!(evalConfig?.reward_requirements?.trim());
 
-  const badgeCtx = { policyConfigured, rewardConfigured, isLive, hasSandbox, sandbox };
+  // A cast chosen in the builder arrives with nobody able to act — the
+  // environment's actions did not exist when it was picked. Surface that as a
+  // badge rather than letting the author discover a silent, inert cast during
+  // a run.
+  const roster = personas?.personas?.roster ?? [];
+  const personasUnbound =
+    roster.length > 0 && roster.every((p) => (p.behavior?.allowed_actions ?? []).length === 0);
+  const personasConfigured = roster.length > 0 && !personasUnbound;
+
+  const badgeCtx = {
+    policyConfigured,
+    rewardConfigured,
+    isLive,
+    hasSandbox,
+    sandbox,
+    personasUnbound,
+    personasConfigured,
+  };
   const expiryDate = sandbox
     ? new Date(sandbox.expires_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
     : null;
@@ -405,11 +461,13 @@ export default async function EnvironmentHubPage({
                         {action.requiresSandbox && !hasSandbox && (
                           <span className="text-muted-foreground">No sandbox</span>
                         )}
-                        {badge && (
+                        {badge === "Needs actions" ? (
+                          <span className="text-amber-600 font-medium">▲ Needs actions</span>
+                        ) : badge ? (
                           <span className={badge === "Custom" ? "text-emerald-600 font-medium" : "text-muted-foreground"}>
                             {badge === "Custom" ? "● Custom" : "Default"}
                           </span>
-                        )}
+                        ) : null}
                       </span>
                     </div>
                     <p>{action.description}</p>

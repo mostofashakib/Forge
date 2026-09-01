@@ -8,6 +8,8 @@ from typing import Callable
 
 from forge.contracts import Action, ActionResult, ExecutionBackend, Rubric, Verifier
 from forge.contracts.backend import TransitionHandler
+from forge.contracts.persona import PersonaDriver, PersonaPopulation
+from forge.personas.engine import PersonaEngine
 from forge.runtime.env import ForgeEnv, InitialStateProvider
 from forge.runtime.determinism import run_determinism_check
 from forge.runtime.errors import DeterminismViolation, EnvironmentBuildError
@@ -218,6 +220,8 @@ class EnvBuilder:
         self._mcp_use: MCPUse | None = None
         self._rest_use: RESTUse | None = None
         self._orpc_use: ORPCUse | None = None
+        self._personas: PersonaPopulation | None = None
+        self._persona_driver: PersonaDriver | None = None
 
     def with_initial_state(self, factory: InitialStateProvider) -> "EnvBuilder":
         if not isinstance(factory, InitialStateProvider):
@@ -291,6 +295,27 @@ class EnvBuilder:
 
     def with_default_task(self, task: dict) -> "EnvBuilder":
         self._default_task = task
+        return self
+
+    def with_personas(
+        self,
+        population: PersonaPopulation,
+        driver: PersonaDriver | None = None,
+    ) -> "EnvBuilder":
+        """Populate the environment with simulated humans.
+
+        Every action in every persona's `allowed_actions` must be an action
+        this builder actually registered. Checking it at `build()` rather than
+        mid-episode is the same bargain the rest of the builder makes: a
+        persona configured against a renamed action is a configuration error,
+        and it should surface as one instead of as a colleague who mysteriously
+        never does anything.
+
+        `driver` overrides the population's `driver` field. Pass one to inject
+        a stub in tests, or a bespoke driver an environment supplies itself.
+        """
+        self._personas = population
+        self._persona_driver = driver
         return self
 
     def with_determinism(self, config: DeterminismConfig) -> "EnvBuilder":
@@ -369,7 +394,31 @@ class EnvBuilder:
             orpc_use=self._orpc_use,
             deterministic=self._config.runtime_enabled,
             prompt_template=ForgeAgentPromptTemplate(),
+            personas=self._build_persona_engine(),
         )
         if verify and self._config.runtime_enabled:
-            run_determinism_check(env, seed=verify_seed)
+            with env.personas.deterministic_driver():
+                run_determinism_check(env, seed=verify_seed)
         return env
+
+    def _build_persona_engine(self) -> PersonaEngine | None:
+        if self._personas is None:
+            return None
+        self._reject_unknown_persona_actions()
+        return PersonaEngine(
+            self._personas,
+            driver=self._persona_driver,
+            environment_actions=list(self._transitions),
+            tool_specs=list(self._tool_specs.values()),
+        )
+
+    def _reject_unknown_persona_actions(self) -> None:
+        known = set(self._transitions)
+        for spec in [*self._personas.roster, *self._personas.archetypes]:
+            unknown = sorted(set(spec.behavior.allowed_actions) - known)
+            if unknown:
+                raise EnvironmentBuildError(
+                    f"persona {spec.profile.id!r} is allowed action(s) "
+                    f"{', '.join(unknown)}, which this environment does not "
+                    f"register. Registered actions: {', '.join(sorted(known))}"
+                )

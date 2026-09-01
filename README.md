@@ -54,6 +54,7 @@ Every Forge environment implements a shared set of interfaces in
 | `TerminationPolicy` | How does the episode end? |
 | `EpisodeController` | Who drives the multi-turn loop? |
 | `Transport` | How does the model talk to the environment? |
+| `PersonaDriver` / `PersonaScheduler` | Who else is in the world, and when do they act? |
 
 `Environment` composes the concerns that describe the world. `EpisodeController`
 stays outside because a benchmark, trainer, or rollout worker drives an environment;
@@ -377,7 +378,113 @@ A generated environment package can override compiled behaviour without editing 
 | `@observation_transform(name)` | The observation shown to the agent |
 | `@policy_rule(name)` | An additional policy rule evaluated on every step |
 
-`EnvConfig` carries the per-environment knobs the UI's **Config** page edits — `RewardConfig` (base success, step penalty, policy-violation penalty, invalid-action penalty, reward clamps, semantic weight) and `ObservationConfig` (mode, actor role, visible/hidden entities for RBAC filtering). Overrides live in the package's `custom/` directory, which is included in the runnable source export.
+`EnvConfig` carries the per-environment knobs the UI's **Config** page edits — `RewardConfig` (base success, step penalty, policy-violation penalty, invalid-action penalty, reward clamps, semantic weight), `ObservationConfig` (mode, actor role, visible/hidden entities for RBAC filtering), and `PersonaPopulation` (see [Simulated People](#simulated-people)). Overrides live in the package's `custom/` directory, which is included in the runnable source export.
+
+### Simulated People
+
+Most workflows worth learning are not performed alone. An environment that
+models only records teaches an agent to edit records; one where a supervisor has
+to approve the discharge, and will not approve anything undocumented, teaches the
+job. Environments can be populated with simulated humans who act alongside the
+agent.
+
+The split between what is reproducible and what is lifelike is the whole design:
+
+| Concern | Deterministic? | Owned by |
+|---|---|---|
+| Who is in the cast, and what they are like | Yes — resolved from the episode seed | `PersonaPopulation` |
+| When each person acts, and how often | Yes — from an RNG the engine owns, never the environment's | `PersonaScheduler` |
+| What each person actually does | No — a model decides, in character | `PersonaDriver` |
+| What they are *permitted* to do | Yes — declared up front | `PersonaBehavior.allowed_actions` |
+
+A driver returns a *proposal*. `ActionGuard` checks it against that persona's
+declared action space, the environment's real action surface, and the action's
+required parameters before anything touches state; a proposal that fails is
+recorded as a blocked turn and never applied. So a model can choose freely
+without being able to do anything its author did not grant it.
+
+Personas execute through the same `ExecutionBackend` the agent does, so their
+writes hash, diff, and replay identically — and they act *within* the agent's
+step, before it observes, so a colleague's reply lands in the same step's diff
+rather than appearing out of nowhere in the next one.
+
+Configure a cast in `custom/config.yaml`, or visually at
+`/environments/<name>/personas`:
+
+```yaml
+personas:
+  enabled: true
+  count: 4                  # above the roster, archetypes are cloned to fill it
+  driver: anthropic:claude-sonnet-5   # or `scripted` — free, offline, replayable
+  max_actions_per_step: 1
+  roster:
+    - id: supervisor
+      name: Alan Whitmore
+      role: shift supervisor
+      backstory: Answerable for the whole shift, so approves nothing undocumented.
+      traits: { responsiveness: 45, diligence: 90, formality: 85 }
+      behavior:
+        allowed_actions: [send_message, approve_discharge]
+        wake_on: [send_message]
+        latency_steps: 2          # shortened by their responsiveness trait
+        cooldown_steps: 3
+        max_actions_per_episode: 5
+  archetypes:                     # cloned to fill `count`
+    - id: caller
+      name: Caller
+      role: patient
+      behavior: { allowed_actions: [send_message] }
+```
+
+Six integer traits (responsiveness, initiative, verbosity, diligence, formality,
+patience) render into the driver's prompt as *instructions* rather than numbers,
+so a low-diligence colleague actually answers half the question.
+
+People are **written, not chosen from a list.** The builder and the personas
+page both start from an empty roster: an author describes who each person is,
+what they want, how they write, and where their six dials sit. No premade cast
+is offered, because whatever shipped in one would quietly become the people
+every environment has.
+
+For environments defined in Python, `forge/personas/archetypes.py` provides
+`archetype()` — eight reusable *dispositions* (a gatekeeper, a busy expert, an
+unreliable third party, someone who cuts corners and does not say so) that
+supply traits, cadence, and voice while leaving identity to the caller. A test
+keeps them domain-neutral: none may name an industry, so the library cannot
+quietly push environments toward one. It is a code convenience and a YAML
+`archetype:` shorthand, not a product surface. Every entry ships inert, so an
+unbound persona can never act.
+
+`EnvBuilder.with_personas(...)` wires a cast into an in-process environment and
+`ContainerEnvBase(personas=...)` into a containerized one; both reject at build
+time a persona bound to an action the environment does not implement. CLI and
+browser environments take no cast — there is no coherent notion of a colleague
+inside a shell session. A working example is in
+`examples/clinical_handoff/env.py`.
+
+**In the product, the cast is written before the environment exists and bound
+after it does.** Step 05 of the custom builder (`/environments/new/custom`) is
+where people are described; it deliberately offers no action picker, because at
+that moment the environment has no actions — granting one is refused at the
+request with that as the reason. The build writes the roster into
+`custom/config.yaml`, and because a cast that arrives inert is only a safe
+default if it is impossible to miss, the binding step is surfaced three times:
+in the build log, as a **Needs actions** badge on the environment hub, and as a
+callout at the top of the personas page. From then on the switch that turns the
+cast on and off sits in the New Agent Run dialog, where runs are actually
+launched — it edits the environment rather than the run, since personas are
+resolved when the environment is built, and says so.
+
+One subtlety worth stating because it is invisible: `ContainerEpisodeRunner`
+does not call `ContainerEnvBase.step` — it drives the environment's
+collaborators directly — so the persona tick lives in its `_execute_action` as
+well. Wiring `step` alone would have produced a cast that existed on the
+environment, passed every unit test, and never acted in a real run.
+
+Because a model-backed persona cannot be replayed, `build()` runs its
+determinism probe with the scripted driver swapped in: the cast is still present
+and still acts on the same steps, so the probe proves what it exists to prove —
+that the environment's own machinery is reproducible.
 
 ### Synthetic Data Engine
 
@@ -639,6 +746,7 @@ Browser / API Client
               │           │    ActionValidator              │
               │           │    PolicyEngine  ──→ AuditLog   │
               │           │    ExecutionBackend             │
+              │           │    PersonaEngine  ──→ ActionGuard│
               │           │    Verifier → Rubric            │
               │           │    TerminationPolicy            │
               │           │    TelemetryClient              │
@@ -714,6 +822,7 @@ forge/
     loop.py            # Collect → train → reload → recollect policy iteration
     _backends.py       # Offline GRPO and TRL DPO gradient updates (GPU node)
   customization/       # Per-env overrides: decorator hooks, EnvConfig, loader
+  personas/            # Simulated humans: population, scheduler, guardrails, drivers, engine
   schema/              # StateSchemaManifest and related schemas
   settings.py          # Process-wide settings: determinism mode, seeds, paths, URLs
   reward_presets.py    # Canonical reward-ablation presets shared by every reward path
@@ -724,8 +833,9 @@ forge/
     main.py            # forge CLI: compile, validate, run, replay, diagnose, benchmark *
 backend/
   app/
-    api/               # FastAPI routers: sandbox, envs, episodes, agent_runs, synthetic,
-    │                  #   evaluate, exports, audit, rollouts, detect, compile, benchmark
+    api/               # FastAPI routers: sandbox, envs, personas, episodes, agent_runs,
+    │                  #   synthetic, evaluate, exports, audit, rollouts, detect, compile,
+    │                  #   benchmark
     services/
       export_writers/  # sft_pairs, preference_pairs, grpo_rollouts, failure_dataset, ...
     worker/            # Celery tasks: build_sandbox, run_episode, run_rollout,
@@ -746,7 +856,7 @@ frontend/
       eval/            # Internal checkpoint evaluation on held-out environments
     environments/
       new/             # 4-option landing page (CLI / Browser / Custom / Premade)
-        custom/        # Prompt form + optional user-research toggle
+        custom/        # Prompt form, user-research toggle, and the simulated-people step
         premade/       # Gmail / Slack picker
       [env_name]/
         sandbox/       # Tabbed hub: App / Terminal / Observability
@@ -754,6 +864,7 @@ frontend/
         agent/         # Agent runs + cross-run episode selection
         dashboard/     # Pass rate, reward distribution, step efficiency
         config/        # Environment config editor
+        personas/      # Simulated people: roster, trait dials, action space, seed preview
         policy/        # Policy requirements editor
         reward/        # Reward requirements + scoring method selector
         evaluate/      # Policy and reward evaluation viewer
@@ -762,6 +873,9 @@ frontend/
         violations/    # Per-environment policy audit log
         replay/        # Episode step-through viewer
         graph/         # Visual entity/action relationship map
+examples/
+  gmail_env/           # Reference in-process environment built on the contracts
+  clinical_handoff/    # Simulated-people example: a discharge the agent cannot approve alone
 docker/
   premade/
     gmail/             # Gmail-like environment (seeded with 34 emails, 19 contacts)
@@ -774,6 +888,8 @@ tests/
   training/            # Dataset loading, reward mapping, trainer, checkpoint tests
   cli/                 # forge CLI command tests (run determinism, train, replay)
   customization/       # Hook registry, loader, and config tests
+  personas/            # Cast resolution, cadence, guardrails, drivers, both env families,
+  │                    #   the container run path, and the build-flow wiring
   gmail_env/           # Premade Gmail determinism, transition, and verifier tests
   architecture/        # Separation-of-concerns, UI-determinism, and test-diversity gates
 ```

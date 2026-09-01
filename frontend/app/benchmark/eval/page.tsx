@@ -98,7 +98,6 @@ export default function BenchmarkEvalPage() {
         <div className="benchmark-run__hero-copy">
           <span className="benchmark-run__eyebrow">Evaluation protocol / 04</span>
           <h1>VERIFY THE<br /><em>TRANSFER.</em></h1>
-          <p>Run held-out policy evaluation from the workbench, with Forge-native controls or an optional Harbor task harness.</p>
         </div>
         <div className="benchmark-run__readout" aria-label="Evaluation status">
           <div><span>Engine</span><strong className="text-sm uppercase">{engine}</strong></div>
