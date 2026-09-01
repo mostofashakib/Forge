@@ -23,7 +23,9 @@ from forge.contracts import (
     VerificationResult,
 )
 from forge.envgen.agents.container_agent import ContainerAgentBase
+from forge.contracts.persona import PersonaPopulation
 from forge.envgen.container_env_base import ContainerEnvBase
+from forge.personas.engine import PersonaEngine
 from forge.envgen.episode_base import (
     BaseEpisodeConfig,
     BaseEpisodeResult,
@@ -63,6 +65,10 @@ class EpisodeConfig(BaseEpisodeConfig):
     # httpx timeout per request (seconds)
     http_timeout: float = 15.0
     diff_floor: float = 0.1
+    # Simulated humans who act alongside the agent. Loaded from the
+    # environment's custom/config.yaml; `None` means the environment runs
+    # with nobody else in it.
+    personas: PersonaPopulation | None = None
 
 
 @dataclass
@@ -216,6 +222,11 @@ class ContainerEpisodeRunner(EpisodeController):
             seed=seed if seed is not None and determinism_enabled() else None,
             options={},
         )
+        # This controller drives the environment's collaborators directly
+        # rather than through `ContainerEnvBase.reset`, so the cast has to be
+        # resolved here too — otherwise personas would exist on the env and
+        # never appear in an actual agent run.
+        self.environment.personas.reset(actual_seed)
         return self.environment.observations.encode(state, self._runtime_ctx).payload
 
     @property
@@ -232,6 +243,9 @@ class ContainerEpisodeRunner(EpisodeController):
                 ]),
                 prompt_template=ForgeAgentPromptTemplate(),
                 rubric=ObjectiveScoreRubric(self._cfg.diff_floor),
+                personas=PersonaEngine(self._cfg.personas)
+                if self._cfg.personas is not None
+                else None,
             )
         return self._environment
 
@@ -250,7 +264,7 @@ class ContainerEpisodeRunner(EpisodeController):
         """Build an action manifest from /openapi.json. Cached after first call."""
         return self.tool_provider.action_manifest()
 
-    def _execute_action(self, action: dict) -> dict | None:
+    def _execute_action(self, action: dict, step_index: int = 0) -> dict | None:
         endpoint = action.get("endpoint", "")
         payload = action.get("payload", {})
         try:
@@ -260,10 +274,31 @@ class ContainerEpisodeRunner(EpisodeController):
                 self.environment.state.get(),
                 ctx,
             )
-            return result.state
+            return self._tick_personas(action, result, ctx, step_index)
         except Exception as exc:
             logger.debug("[runner] action %s failed: %s", endpoint, exc)
             return None
+
+    def _tick_personas(self, action: dict, result, ctx, step_index: int) -> dict:
+        """Give the cast its turn on the world the agent just changed.
+
+        `ContainerEnvBase.step` does this itself, but this controller bypasses
+        `step` and calls the backend directly, so the tick has to happen here.
+        The persona turns are recorded on the engine's transcript, which
+        `run_episode` reads back into the episode result.
+        """
+        personas = self.environment.personas
+        if not personas.enabled:
+            return result.state
+        tick = personas.tick(
+            backend=self.environment.backend,
+            state=result.state,
+            ctx=ctx,
+            step_index=step_index,
+            agent_action={"type": action.get("endpoint", "")},
+            events=result.events,
+        )
+        return tick.state
 
     # ------------------------------------------------------------------
     # Episode loop
@@ -382,7 +417,7 @@ class ContainerEpisodeRunner(EpisodeController):
                 break
 
             # Execute the action
-            self._execute_action(action)
+            self._execute_action(action, step_idx)
 
             # Observe new state
             try:

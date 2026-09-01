@@ -71,6 +71,12 @@ class PersonaUpdate(BaseModel):
     personas: dict
 
 
+class EnabledUpdate(BaseModel):
+    """The one-field edit the agent-run launcher makes."""
+
+    enabled: bool
+
+
 class PreviewRequest(BaseModel):
     """Which cast a given seed would actually produce."""
 
@@ -146,6 +152,42 @@ def update_personas(env_name: str, payload: PersonaUpdate) -> PersonaPayload:
     # Rewritten in place: everything else in config.yaml — reward weights,
     # observation filtering — must survive an edit made from the persona page.
     raw["personas"] = dump_population(population)
+    path.write_text(yaml.safe_dump(raw, sort_keys=False))
+    return PersonaPayload(
+        personas=raw["personas"],
+        environment_actions=_environment_actions(env_name),
+        archetypes=_archetype_catalog(),
+    )
+
+
+@router.put("/{env_name}/personas/enabled", response_model=PersonaPayload)
+def set_personas_enabled(env_name: str, payload: EnabledUpdate) -> PersonaPayload:
+    """Switch the cast on or off without touching who is in it.
+
+    Separate from the full PUT so the launcher can flip one flag without
+    round-tripping a roster it never rendered — a launcher that had to send the
+    whole population back would overwrite any edit made on the personas page
+    since it loaded.
+    """
+    path = _config_path(env_name)
+    raw = _read_config(path)
+    try:
+        population = load_population(raw.get("personas"))
+    except PersonaConfigError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    if payload.enabled and not population.roster and not population.archetypes:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"'{env_name}' has no people configured yet. Add someone on the "
+                "Simulated People page before turning them on."
+            ),
+        )
+
+    raw["personas"] = dump_population(
+        population.model_copy(update={"enabled": payload.enabled})
+    )
     path.write_text(yaml.safe_dump(raw, sort_keys=False))
     return PersonaPayload(
         personas=raw["personas"],
