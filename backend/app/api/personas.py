@@ -20,7 +20,6 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from forge.contracts.persona import PersonaPopulation, PersonaSpec
-from forge.personas.archetypes import ARCHETYPES, archetype_ids
 from forge.personas.config import (
     PersonaConfigError,
     dump_population,
@@ -32,15 +31,6 @@ from forge.runtime.tools import RESERVED_PATHS, RESERVED_PREFIX
 from forge.settings import generated_envs_root
 
 router = APIRouter(prefix="/api/envs")
-# The archetype library is not scoped to an environment: the custom builder
-# needs it before any environment exists.
-library_router = APIRouter(prefix="/api")
-
-
-@library_router.get("/persona-archetypes")
-def list_archetypes() -> dict:
-    """The starting cast an author can pick from, before a build exists."""
-    return {"archetypes": _archetype_catalog()}
 
 
 def _validate_env_name(env_name: str) -> None:
@@ -85,7 +75,6 @@ class PersonaPayload(BaseModel):
 
     personas: dict
     environment_actions: list[str] = Field(default_factory=list)
-    archetypes: list[dict] = Field(default_factory=list)
 
 
 class PersonaUpdate(BaseModel):
@@ -169,21 +158,6 @@ def _container_endpoints(app_dir: Path) -> list[str]:
     return sorted(found)
 
 
-def _archetype_catalog() -> list[dict]:
-    return [
-        {
-            "id": archetype_id,
-            **{
-                key: value
-                for key, value in dump_spec(ARCHETYPES[archetype_id]).items()
-                if key != "behavior"
-            },
-            "behavior": ARCHETYPES[archetype_id].behavior.model_dump(),
-        }
-        for archetype_id in archetype_ids()
-    ]
-
-
 @router.get("/{env_name}/personas", response_model=PersonaPayload)
 def get_personas(env_name: str) -> PersonaPayload:
     path = _config_path(env_name)
@@ -195,7 +169,6 @@ def get_personas(env_name: str) -> PersonaPayload:
     return PersonaPayload(
         personas=dump_population(population),
         environment_actions=_environment_actions(env_name),
-        archetypes=_archetype_catalog(),
     )
 
 
@@ -217,7 +190,6 @@ def update_personas(env_name: str, payload: PersonaUpdate) -> PersonaPayload:
     return PersonaPayload(
         personas=raw["personas"],
         environment_actions=_environment_actions(env_name),
-        archetypes=_archetype_catalog(),
     )
 
 
@@ -253,7 +225,6 @@ def set_personas_enabled(env_name: str, payload: EnabledUpdate) -> PersonaPayloa
     return PersonaPayload(
         personas=raw["personas"],
         environment_actions=_environment_actions(env_name),
-        archetypes=_archetype_catalog(),
     )
 
 

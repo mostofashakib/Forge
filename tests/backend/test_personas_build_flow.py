@@ -39,17 +39,12 @@ def cast(**overrides):
     return payload
 
 
-# --- the archetype library, available before any environment exists --------
+# --- no premade cast is served to the builder ------------------------------
 
 
-def test_the_library_is_offered_without_an_environment(client):
-    body = client.get("/api/persona-archetypes").json()
-    assert "meticulous_checker" in [a["id"] for a in body["archetypes"]]
-
-
-def test_library_archetypes_arrive_unable_to_act(client):
-    body = client.get("/api/persona-archetypes").json()
-    assert all(a["behavior"]["allowed_actions"] == [] for a in body["archetypes"])
+def test_the_builder_is_offered_no_premade_cast(client):
+    """The builder authors people; it does not pick them from a shipped list."""
+    assert client.get("/api/persona-archetypes").status_code == 404
 
 
 # --- the create request ----------------------------------------------------

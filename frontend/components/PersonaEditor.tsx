@@ -53,14 +53,9 @@ export interface Population {
   archetypes?: PersonaEntry[];
 }
 
-interface ArchetypeEntry extends PersonaEntry {
-  archetypeId: string;
-}
-
 interface Payload {
   personas: Population;
   environment_actions: string[];
-  archetypes: Array<PersonaEntry & { id: string }>;
 }
 
 // Each dial is labelled by what it changes in the episode, not by its name.
@@ -453,7 +448,6 @@ export default function PersonaEditor({
   const [previewError, setPreviewError] = useState<string | null>(null);
 
   const actions = initial.environment_actions;
-  const archetypes = initial.archetypes as ArchetypeEntry[];
 
   const mutate = useCallback((next: Partial<Population>) => {
     setPopulation((current) => ({ ...current, ...next }));
@@ -516,19 +510,6 @@ export default function PersonaEditor({
 
   function addBlank() {
     setRoster([...population.roster, blankPersona(population.roster.length)]);
-  }
-
-  function addArchetype(archetypeId: string) {
-    const source = archetypes.find((a) => a.archetypeId === archetypeId || a.id === archetypeId);
-    if (!source) return;
-    const taken = new Set(population.roster.map((p) => p.id));
-    let id = source.id;
-    let suffix = 2;
-    while (taken.has(id)) id = `${source.id}_${suffix++}`;
-    setRoster([
-      ...population.roster,
-      { ...structuredClone(source), id, behavior: { ...structuredClone(source.behavior) } },
-    ]);
   }
 
   // Every person unbound is the specific state a builder-created cast lands in,
@@ -664,27 +645,9 @@ export default function PersonaEditor({
       <section className="persona-roster">
         <div className="persona-roster__head">
           <h2>Roster</h2>
-          <div className="persona-roster__add">
-            <select
-              className="persona-select"
-              defaultValue=""
-              onChange={(e) => {
-                if (e.target.value) addArchetype(e.target.value);
-                e.target.value = "";
-              }}
-              aria-label="Add from the archetype library"
-            >
-              <option value="">Add from library…</option>
-              {archetypes.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name} — {a.role}
-                </option>
-              ))}
-            </select>
-            <Button variant="outline" onClick={addBlank}>
-              Add blank
-            </Button>
-          </div>
+          <Button variant="outline" onClick={addBlank}>
+            Add a person
+          </Button>
         </div>
 
         {inertCount > 0 && !unbound && (
@@ -696,8 +659,8 @@ export default function PersonaEditor({
 
         {population.roster.length === 0 ? (
           <p className="persona-empty">
-            No one here yet. Add someone from the library to start with a written
-            disposition, or add a blank persona to write your own.
+            No one here yet. Add a person and describe who they are, how they
+            behave, and what they&apos;re allowed to do.
           </p>
         ) : (
           population.roster.map((persona, index) => (
