@@ -18,6 +18,18 @@ from forge.contracts.episode import (
 from forge.contracts.evaluation import EpisodeEvaluation
 from forge.contracts.initial_state import InitialStateProvider
 from forge.contracts.observation import ObservationEncoder
+from forge.contracts.persona import (
+    PersonaBehavior,
+    PersonaDriver,
+    PersonaPopulation,
+    PersonaProfile,
+    PersonaScheduler,
+    PersonaSpec,
+    PersonaTick,
+    PersonaTraits,
+    PersonaTurn,
+    PersonaView,
+)
 from forge.contracts.prompting import PromptTemplate
 from forge.contracts.reward import Rubric, Verifier
 from forge.contracts.rollout import RolloutOutcome, RolloutRecord
@@ -66,6 +78,16 @@ __all__ = [
     "MaxStepsTerminationPolicy",
     "Observation",
     "ObservationEncoder",
+    "PersonaBehavior",
+    "PersonaDriver",
+    "PersonaPopulation",
+    "PersonaProfile",
+    "PersonaScheduler",
+    "PersonaSpec",
+    "PersonaTick",
+    "PersonaTraits",
+    "PersonaTurn",
+    "PersonaView",
     "PromptTemplate",
     "RewardBreakdown",
     "RewardComponent",

@@ -36,6 +36,8 @@ from forge.contracts.types import Action, ActionResult, StepOutcome
 from forge.runtime.http_state import HttpStateManager
 from forge.runtime.observation_filter import ObservationFilter
 from forge.runtime.rest_transport import RestTransport
+from forge.contracts.persona import PersonaPopulation
+from forge.personas.engine import PersonaEngine
 from forge.runtime.task_source import StaticTaskSource
 from forge.runtime.tasks import select_task, task_payload
 from forge.runtime.trajectory import Trajectory
@@ -270,6 +272,7 @@ class ContainerEnvBase(gymnasium.Env, Environment):
         observation_encoder: ObservationEncoder | None = None,
         rubric: Rubric | None = None,
         termination_policy: TerminationPolicy | None = None,
+        personas: PersonaEngine | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.client = client or httpx.Client(timeout=timeout)
@@ -297,6 +300,10 @@ class ContainerEnvBase(gymnasium.Env, Environment):
         self._step_count = 0
         self._runtime_ctx: RuntimeContext | None = None
         self._current_task: Task | None = None
+        # Simulated colleagues run through `self._backend` exactly as the agent
+        # does, so a persona's write reaches the container's SQLite by the same
+        # POST the agent's would. Inert when no cast is configured.
+        self._personas = personas or PersonaEngine(PersonaPopulation())
 
     # ------------------------------------------------------------------
     # Environment facade
@@ -339,6 +346,11 @@ class ContainerEnvBase(gymnasium.Env, Environment):
         return self._prompt_template
 
     @property
+    def personas(self) -> PersonaEngine:
+        """The simulated humans sharing this environment with the agent."""
+        return self._personas
+
+    @property
     def current_task(self) -> Task | None:
         return self._current_task
 
@@ -375,11 +387,14 @@ class ContainerEnvBase(gymnasium.Env, Environment):
         )
         obs = self._observations.encode(state, self._runtime_ctx).payload
         self._step_count = 0
+        self._personas.reset(actual_seed)
         info = {}
         if self._current_task is not None:
             info["task"] = task_payload(self._current_task)
         if seed is not None:
             info["seed"] = actual_seed
+        if self._personas.enabled:
+            info["personas"] = self._personas.describe()
         return obs, info
 
     def step(self, action: dict) -> tuple[dict, float, bool, bool, dict]:
@@ -391,12 +406,29 @@ class ContainerEnvBase(gymnasium.Env, Environment):
         # contract declares.
         ctx = self._runtime_ctx or RuntimeContext(seed=0, deterministic=False)
         result = self._backend.execute(Action.from_dict(action), {}, ctx)
+        # The cast acts on the state the agent's action just produced, before
+        # the agent observes it — the same ordering the in-process family uses,
+        # so an environment behaves the same way in both.
+        persona_tick = self._personas.tick(
+            backend=self._backend,
+            state=result.state,
+            ctx=ctx,
+            step_index=self._step_count,
+            agent_action=action,
+            events=result.events,
+        )
         trajectory = Trajectory(episode_id="container", steps=[])
+        # Scored against the state after the cast has acted, not before. A task
+        # whose completion depends on a colleague — getting an approval, having
+        # a chart corrected — is otherwise ungradeable: the agent does the right
+        # thing, the persona completes it, and the rubric never sees it.
         if isinstance(self._rubric, _ContainerHookRubric):
-            reward_breakdown = self._rubric.score_response(result.response, result.state)
+            reward_breakdown = self._rubric.score_response(
+                result.response, persona_tick.state
+            )
         else:
             reward_breakdown = self._rubric.score(
-                result.state, trajectory, [], self._current_task
+                persona_tick.state, trajectory, [], self._current_task
             )
         reward = reward_breakdown.total_reward
 
@@ -418,11 +450,16 @@ class ContainerEnvBase(gymnasium.Env, Environment):
         truncated = bool(termination) and termination.truncated
         terminated = bool(termination) and not termination.truncated
 
-        observation = self._observations.encode(result.state, ctx).payload
-        return observation, reward, terminated, truncated, {
+        observation = self._observations.encode(persona_tick.state, ctx).payload
+        info = {
             "status_code": result.response.status_code,
             "reward_breakdown": reward_breakdown.model_dump(),
         }
+        if persona_tick.events:
+            info["events"] = persona_tick.events
+        if persona_tick.turns:
+            info["persona_turns"] = [turn.model_dump() for turn in persona_tick.turns]
+        return observation, reward, terminated, truncated, info
 
     def close(self) -> None:
         self.client.close()

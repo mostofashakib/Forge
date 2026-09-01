@@ -54,6 +54,7 @@ Every Forge environment implements a shared set of interfaces in
 | `TerminationPolicy` | How does the episode end? |
 | `EpisodeController` | Who drives the multi-turn loop? |
 | `Transport` | How does the model talk to the environment? |
+| `PersonaDriver` / `PersonaScheduler` | Who else is in the world, and when do they act? |
 
 `Environment` composes the concerns that describe the world. `EpisodeController`
 stays outside because a benchmark, trainer, or rollout worker drives an environment;
@@ -377,7 +378,76 @@ A generated environment package can override compiled behaviour without editing 
 | `@observation_transform(name)` | The observation shown to the agent |
 | `@policy_rule(name)` | An additional policy rule evaluated on every step |
 
-`EnvConfig` carries the per-environment knobs the UI's **Config** page edits — `RewardConfig` (base success, step penalty, policy-violation penalty, invalid-action penalty, reward clamps, semantic weight) and `ObservationConfig` (mode, actor role, visible/hidden entities for RBAC filtering). Overrides live in the package's `custom/` directory, which is included in the runnable source export.
+`EnvConfig` carries the per-environment knobs the UI's **Config** page edits — `RewardConfig` (base success, step penalty, policy-violation penalty, invalid-action penalty, reward clamps, semantic weight), `ObservationConfig` (mode, actor role, visible/hidden entities for RBAC filtering), and `PersonaPopulation` (see [Simulated People](#simulated-people)). Overrides live in the package's `custom/` directory, which is included in the runnable source export.
+
+### Simulated People
+
+Most workflows worth learning are not performed alone. An environment that
+models only records teaches an agent to edit records; one where a supervisor has
+to approve the discharge, and will not approve anything undocumented, teaches the
+job. Environments can be populated with simulated humans who act alongside the
+agent.
+
+The split between what is reproducible and what is lifelike is the whole design:
+
+| Concern | Deterministic? | Owned by |
+|---|---|---|
+| Who is in the cast, and what they are like | Yes — resolved from the episode seed | `PersonaPopulation` |
+| When each person acts, and how often | Yes — from an RNG the engine owns, never the environment's | `PersonaScheduler` |
+| What each person actually does | No — a model decides, in character | `PersonaDriver` |
+| What they are *permitted* to do | Yes — declared up front | `PersonaBehavior.allowed_actions` |
+
+A driver returns a *proposal*. `ActionGuard` checks it against that persona's
+declared action space, the environment's real action surface, and the action's
+required parameters before anything touches state; a proposal that fails is
+recorded as a blocked turn and never applied. So a model can choose freely
+without being able to do anything its author did not grant it.
+
+Personas execute through the same `ExecutionBackend` the agent does, so their
+writes hash, diff, and replay identically — and they act *within* the agent's
+step, before it observes, so a colleague's reply lands in the same step's diff
+rather than appearing out of nowhere in the next one.
+
+Configure a cast in `custom/config.yaml`, or visually at
+`/environments/<name>/personas`:
+
+```yaml
+personas:
+  enabled: true
+  count: 4                  # above the roster, archetypes are cloned to fill it
+  driver: anthropic:claude-sonnet-5   # or `scripted` — free, offline, replayable
+  max_actions_per_step: 1
+  roster:
+    - archetype: by_the_book_supervisor
+      id: supervisor
+      behavior:
+        allowed_actions: [send_message, approve_discharge]
+        wake_on: [send_message]
+        latency_steps: 2          # shortened by their responsiveness trait
+        cooldown_steps: 3
+        max_actions_per_episode: 5
+  archetypes:
+    - archetype: anxious_patient
+      behavior: { allowed_actions: [send_message] }
+```
+
+Six integer traits (responsiveness, initiative, verbosity, diligence, formality,
+patience) render into the driver's prompt as *instructions* rather than numbers,
+so a low-diligence colleague actually answers half the question. Seven archetypes
+ship in `forge/personas/archetypes.py` — every one inert until it is bound to an
+environment's actions, so an unbound persona can never act.
+
+`EnvBuilder.with_personas(...)` wires a cast into an in-process environment and
+`ContainerEnvBase(personas=...)` into a containerized one; both reject at build
+time a persona bound to an action the environment does not implement. CLI and
+browser environments take no cast — there is no coherent notion of a colleague
+inside a shell session. A working example is in
+`examples/clinical_handoff/env.py`.
+
+Because a model-backed persona cannot be replayed, `build()` runs its
+determinism probe with the scripted driver swapped in: the cast is still present
+and still acts on the same steps, so the probe proves what it exists to prove —
+that the environment's own machinery is reproducible.
 
 ### Synthetic Data Engine
 
@@ -639,6 +709,7 @@ Browser / API Client
               │           │    ActionValidator              │
               │           │    PolicyEngine  ──→ AuditLog   │
               │           │    ExecutionBackend             │
+              │           │    PersonaEngine  ──→ ActionGuard│
               │           │    Verifier → Rubric            │
               │           │    TerminationPolicy            │
               │           │    TelemetryClient              │
@@ -714,6 +785,7 @@ forge/
     loop.py            # Collect → train → reload → recollect policy iteration
     _backends.py       # Offline GRPO and TRL DPO gradient updates (GPU node)
   customization/       # Per-env overrides: decorator hooks, EnvConfig, loader
+  personas/            # Simulated humans: population, scheduler, guardrails, drivers, engine
   schema/              # StateSchemaManifest and related schemas
   settings.py          # Process-wide settings: determinism mode, seeds, paths, URLs
   reward_presets.py    # Canonical reward-ablation presets shared by every reward path
@@ -724,8 +796,9 @@ forge/
     main.py            # forge CLI: compile, validate, run, replay, diagnose, benchmark *
 backend/
   app/
-    api/               # FastAPI routers: sandbox, envs, episodes, agent_runs, synthetic,
-    │                  #   evaluate, exports, audit, rollouts, detect, compile, benchmark
+    api/               # FastAPI routers: sandbox, envs, personas, episodes, agent_runs,
+    │                  #   synthetic, evaluate, exports, audit, rollouts, detect, compile,
+    │                  #   benchmark
     services/
       export_writers/  # sft_pairs, preference_pairs, grpo_rollouts, failure_dataset, ...
     worker/            # Celery tasks: build_sandbox, run_episode, run_rollout,
@@ -754,6 +827,7 @@ frontend/
         agent/         # Agent runs + cross-run episode selection
         dashboard/     # Pass rate, reward distribution, step efficiency
         config/        # Environment config editor
+        personas/      # Simulated people: roster, trait dials, action space, seed preview
         policy/        # Policy requirements editor
         reward/        # Reward requirements + scoring method selector
         evaluate/      # Policy and reward evaluation viewer
@@ -762,6 +836,9 @@ frontend/
         violations/    # Per-environment policy audit log
         replay/        # Episode step-through viewer
         graph/         # Visual entity/action relationship map
+examples/
+  gmail_env/           # Reference in-process environment built on the contracts
+  clinical_handoff/    # Simulated-people example: a discharge the agent cannot approve alone
 docker/
   premade/
     gmail/             # Gmail-like environment (seeded with 34 emails, 19 contacts)
@@ -774,6 +851,7 @@ tests/
   training/            # Dataset loading, reward mapping, trainer, checkpoint tests
   cli/                 # forge CLI command tests (run determinism, train, replay)
   customization/       # Hook registry, loader, and config tests
+  personas/            # Cast resolution, cadence, guardrails, drivers, both env families
   gmail_env/           # Premade Gmail determinism, transition, and verifier tests
   architecture/        # Separation-of-concerns, UI-determinism, and test-diversity gates
 ```
