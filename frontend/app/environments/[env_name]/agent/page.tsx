@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { API_BASE } from "@/lib/api";
+import PersonaRunToggle from "@/components/PersonaRunToggle";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -273,6 +274,8 @@ function NewRunModal({
               />
             </div>
           </div>
+
+          <PersonaRunToggle envName={envName} />
 
           {error && <p className="text-sm text-red-600">{error}</p>}
 

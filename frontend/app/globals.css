@@ -606,6 +606,52 @@
   .interface-choice__options button small { @apply text-[0.63rem] leading-4 text-muted-foreground; }
   .interface-choice__options button.is-active { @apply border-foreground bg-foreground text-background; }
   .interface-choice__options button.is-active small { @apply text-background/70; }
+  .cast-picker { @apply grid border border-foreground/30 bg-card lg:grid-cols-[14rem_1fr]; box-shadow: 5px 5px 0 oklch(0.20 0.02 62 / 0.11); }
+  .cast-picker__heading { @apply flex gap-3 border-b border-foreground/20 bg-muted/25 p-5 lg:col-start-1 lg:row-span-3 lg:border-b-0 lg:border-r; }
+  .cast-picker__heading > span { @apply font-mono text-[0.58rem] text-primary; }
+  .cast-picker__heading h2 { @apply text-xs font-semibold uppercase tracking-[0.13em]; }
+  .cast-picker__heading p { @apply mt-2 text-[0.68rem] leading-5 text-muted-foreground; }
+  .cast-roster { @apply flex flex-col gap-3 p-5 sm:p-6; }
+  .cast-roster__empty { @apply border border-dashed border-foreground/25 p-5 text-center text-[0.68rem] leading-5 text-muted-foreground; }
+  .cast-roster__add { @apply border border-dashed border-foreground/40 py-3 text-center font-mono text-[0.62rem] uppercase tracking-[0.12em] text-primary transition-colors hover:border-foreground hover:bg-muted/40 disabled:opacity-40; }
+
+  .cast-person { @apply border border-foreground/25 bg-muted/20; }
+  .cast-person__head { @apply flex flex-wrap items-center gap-3 p-3.5; }
+  .cast-person__head > span { @apply font-mono text-[0.58rem] text-primary; }
+  .cast-person__head strong { @apply text-[0.7rem] font-semibold uppercase tracking-[0.1em]; }
+  .cast-person__head em { @apply flex-1 truncate not-italic text-[0.63rem] text-muted-foreground; }
+  .cast-person__head button { @apply font-mono text-[0.58rem] uppercase tracking-[0.08em] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline disabled:opacity-40; }
+  .cast-person__head button:last-child:hover { @apply text-destructive; }
+  .cast-person__body { @apply space-y-4 border-t border-foreground/15 p-4; }
+  .cast-person__fields { @apply grid gap-4 sm:grid-cols-2; }
+  .cast-person label { @apply flex flex-col gap-1.5; }
+  .cast-person span { @apply text-[0.62rem] font-semibold uppercase tracking-[0.1em]; }
+  .cast-person small { @apply text-[0.6rem] leading-4 text-muted-foreground; }
+  .cast-person input, .cast-person textarea {
+    @apply border border-foreground/25 bg-background px-2 py-1.5 text-xs focus-visible:border-foreground focus-visible:outline-none disabled:opacity-40;
+  }
+  .cast-person textarea { @apply resize-none leading-5; }
+  .cast-person__dials { @apply border-t border-foreground/15 pt-4; }
+  .cast-person__dials legend { @apply text-[0.62rem] font-semibold uppercase tracking-[0.1em]; }
+  .cast-person__dials > p { @apply mb-3 mt-1 text-[0.6rem] leading-4 text-muted-foreground; }
+  .cast-dials { @apply grid gap-x-5 gap-y-3.5 sm:grid-cols-2 xl:grid-cols-3; }
+  .cast-dial { @apply flex flex-col gap-1; }
+  .cast-dial__head { @apply flex items-baseline justify-between; }
+  .cast-dial__head span { @apply text-[0.6rem] font-semibold uppercase tracking-[0.08em]; }
+  .cast-dial__head b { @apply font-mono text-[0.58rem] tabular-nums text-muted-foreground; }
+  .cast-dial input { @apply h-1 w-full cursor-pointer appearance-none bg-foreground/20 accent-[var(--primary)] disabled:opacity-40; }
+  .cast-dial__scale { @apply flex justify-between; }
+  .cast-dial__scale small { @apply text-[0.55rem] text-muted-foreground; }
+
+  .cast-picker__settings { @apply grid gap-4 border-t border-foreground/15 px-5 pb-5 pt-4 sm:grid-cols-3 sm:px-6; }
+  .cast-picker__settings label { @apply flex flex-col gap-1.5; }
+  .cast-picker__settings span { @apply text-[0.62rem] font-semibold uppercase tracking-[0.1em]; }
+  .cast-picker__settings input, .cast-picker__settings select {
+    @apply h-9 border border-foreground/25 bg-transparent px-2 text-xs focus-visible:border-foreground focus-visible:outline-none disabled:opacity-40;
+  }
+  .cast-picker__settings small { @apply text-[0.6rem] leading-4 text-muted-foreground; }
+  .cast-picker__note { @apply border-t border-foreground/15 px-5 pb-5 pt-4 text-[0.65rem] leading-5 text-muted-foreground sm:px-6; }
+  .cast-picker__note strong { @apply text-foreground; }
   .custom-builder__submit { @apply flex w-full items-center justify-between bg-primary px-6 py-4 text-xs font-semibold uppercase tracking-[0.14em] text-primary-foreground transition-all disabled:cursor-not-allowed disabled:opacity-40; box-shadow: 5px 5px 0 var(--foreground); }
   .custom-builder__submit:hover:not(:disabled) { @apply -translate-y-0.5 bg-foreground text-background; box-shadow: 7px 7px 0 var(--primary); }
   .custom-builder__estimate { @apply text-center font-mono text-[0.55rem] leading-5 text-muted-foreground; }
@@ -674,6 +720,88 @@
     background: oklch(0.88 0.010 265);
     border-radius: 99px;
   }
+
+  /* ---------------------------------------------------------------- */
+  /* Simulated people                                                  */
+  /* ---------------------------------------------------------------- */
+
+  .persona-editor { @apply space-y-6; }
+  .persona-editor__head { @apply flex flex-wrap items-start justify-between gap-4; }
+  .persona-editor__head h1 { @apply text-2xl font-bold; }
+  .persona-editor__head > div:first-child p { @apply mt-1 max-w-2xl text-sm text-muted-foreground; }
+  .persona-editor__env { @apply font-medium text-foreground; }
+  .persona-editor__actions { @apply flex shrink-0 items-center gap-3; }
+
+  .persona-panel { @apply space-y-5; }
+  .persona-panel__title { @apply text-sm font-semibold uppercase tracking-[0.14em] text-muted-foreground; }
+
+  .persona-switch { @apply flex cursor-pointer items-start gap-3; }
+  .persona-switch input { @apply mt-1 size-4 shrink-0 accent-[var(--primary)]; }
+  .persona-switch span { @apply flex flex-col gap-0.5; }
+  .persona-switch strong { @apply text-sm font-medium; }
+  .persona-switch em { @apply not-italic text-xs text-muted-foreground; }
+
+  .persona-grid { @apply grid gap-4 sm:grid-cols-2 lg:grid-cols-3; }
+  .persona-grid--two { @apply lg:grid-cols-2; }
+  .persona-hint { @apply mt-1 text-xs leading-snug text-muted-foreground; }
+  .persona-error { @apply rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive; }
+  .persona-warning { @apply mb-3 rounded-md border border-amber-400/50 bg-amber-50 px-3 py-2 text-sm text-amber-900; }
+  .persona-empty { @apply rounded-md border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground; }
+
+  .persona-select {
+    @apply h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm shadow-xs;
+    @apply focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none;
+  }
+
+  .persona-roster { @apply space-y-4; }
+  .persona-roster__head { @apply flex flex-wrap items-center justify-between gap-3; }
+  .persona-roster__head h2 { @apply text-lg font-semibold; }
+  .persona-roster__add { @apply flex items-center gap-2; }
+  .persona-roster__add .persona-select { @apply w-56; }
+
+  .persona-card { @apply overflow-hidden; }
+  .persona-card__head { @apply flex flex-row flex-wrap items-center justify-between gap-3 space-y-0; }
+  .persona-card__identity { @apply min-w-0; }
+  .persona-card__name { @apply truncate text-base font-semibold; }
+  .persona-card__role { @apply truncate text-xs text-muted-foreground; }
+  .persona-card__meta { @apply flex shrink-0 items-center gap-3; }
+  .persona-badge { @apply font-mono text-[0.65rem]; }
+  .persona-badge--inert { @apply border-amber-400/60 text-amber-700; }
+  .persona-card__toggle { @apply text-xs font-medium text-primary underline-offset-4 hover:underline; }
+  .persona-card__remove { @apply text-xs text-muted-foreground underline-offset-4 hover:text-destructive hover:underline; }
+  .persona-card__body { @apply space-y-6 border-t pt-6; }
+
+  .persona-section { @apply space-y-3; }
+  .persona-section h4 { @apply text-sm font-semibold uppercase tracking-[0.1em] text-muted-foreground; }
+
+  .persona-traits { @apply grid gap-x-6 gap-y-4 sm:grid-cols-2 lg:grid-cols-3; }
+  .persona-trait { @apply space-y-1.5; }
+  .persona-trait__head { @apply flex items-baseline justify-between; }
+  .persona-trait__label { @apply text-xs font-medium; }
+  .persona-trait__value { @apply font-mono text-xs tabular-nums text-muted-foreground; }
+  .persona-trait__range { @apply h-1.5 w-full cursor-pointer appearance-none rounded-full bg-muted accent-[var(--primary)]; }
+  .persona-trait__scale { @apply flex justify-between text-[0.65rem] text-muted-foreground; }
+
+  .persona-actions { @apply space-y-2; }
+  .persona-actions__legend { @apply text-xs font-medium; }
+  .persona-actions__grid { @apply flex flex-wrap gap-2; }
+  .persona-chip {
+    @apply rounded-full border border-border px-3 py-1 font-mono text-xs text-muted-foreground transition-colors;
+    @apply hover:border-primary/50 hover:text-foreground;
+  }
+  .persona-chip--on { @apply border-primary bg-primary/10 text-primary; }
+
+  .persona-callout { @apply rounded-md border border-amber-400/60 bg-amber-50 px-4 py-3; }
+  .persona-callout strong { @apply block text-sm font-semibold text-amber-900; }
+  .persona-callout p { @apply mt-1 max-w-2xl text-xs leading-5 text-amber-900/80; }
+
+  .persona-preview__head { @apply flex flex-row items-center justify-between gap-4 space-y-0; }
+  .persona-preview__seed { @apply flex items-center gap-2; }
+  .persona-preview__seed input { @apply w-24; }
+  .persona-table { @apply w-full text-sm; }
+  .persona-table th { @apply border-b py-2 pr-4 text-left text-xs font-medium uppercase tracking-wider text-muted-foreground; }
+  .persona-table td { @apply border-b border-border/50 py-2 pr-4 align-top; }
+  .persona-table td:nth-child(3), .persona-table td:nth-child(4) { @apply font-mono text-xs text-muted-foreground; }
 }
 
 @media (prefers-reduced-motion: reduce) {

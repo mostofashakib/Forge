@@ -124,6 +124,59 @@ def run_episode_task(self, rollout_job_id: str, episode_index: int, seed: int) -
     return episode_id
 
 
+def _load_personas(env_dir):
+    """The cast configured for this environment, or None if it has none.
+
+    Read here rather than inside the runner so a malformed `personas:` block
+    degrades an agent run to an empty environment with a logged warning,
+    instead of failing every episode of the run.
+    """
+    config_path = env_dir / "custom" / "config.yaml"
+    if not config_path.exists():
+        return None
+    try:
+        import yaml
+
+        from forge.personas.config import load_population
+
+        raw = yaml.safe_load(config_path.read_text()) or {}
+        population = load_population(raw.get("personas"))
+    except Exception as exc:
+        logger.warning("[personas] could not load cast for %s: %s", env_dir.name, exc)
+        return None
+    return population if population.enabled else None
+
+
+def _write_personas(env_dir, personas: dict) -> int:
+    """Persist the cast chosen in the builder into the environment's config.
+
+    The envgen pipeline never creates a `custom/` directory — only the compiler
+    does — so this creates one. Nobody is given an action here: the app's
+    endpoints exist only now that it is generated, and binding them is a
+    decision the author makes on the personas page against the real surface.
+    A failure to write is logged and swallowed: losing the cast is worth far
+    less than losing a build that otherwise succeeded.
+    """
+    import yaml
+
+    from forge.personas.config import dump_population, load_population
+
+    try:
+        population = load_population(personas)
+        custom_dir = env_dir / "custom"
+        custom_dir.mkdir(parents=True, exist_ok=True)
+        config_path = custom_dir / "config.yaml"
+        raw = {}
+        if config_path.exists():
+            raw = yaml.safe_load(config_path.read_text()) or {}
+        raw["personas"] = dump_population(population)
+        config_path.write_text(yaml.safe_dump(raw, sort_keys=False))
+        return len(population.roster) + len(population.archetypes)
+    except Exception as exc:
+        logger.warning("[personas] could not write cast for %s: %s", env_dir.name, exc)
+        return 0
+
+
 def pipeline_flags(plan) -> dict[str, bool]:
     """Which optional specialists a generation plan actually includes.
 
@@ -151,6 +204,7 @@ def build_sandbox_task(
     with_ui: bool = False,
     source_product_name: str = "",
     source_product_url: str = "",
+    personas: dict | None = None,
 ) -> None:
     """Run sandbox build in a worker, stream progress via Redis pub/sub.
 
@@ -294,6 +348,10 @@ def build_sandbox_task(
         publish({"log": "[forge] all agents finished — building Docker image…"})
 
         envs_root = generated_envs_root()
+        if personas:
+            written = _write_personas(envs_root / env_name, personas)
+            if written:
+                publish({"log": f"[forge] wrote {written} simulated {'person' if written == 1 else 'people'} — pick what they can do on the Simulated People page ✓"})
         app_dir = envs_root / env_name / "app"
         runtime = ContainerRuntime()
 
@@ -612,6 +670,7 @@ def run_container_episode_task(self, run_id: str, episode_index: int, seed: int)
                 consecutive_below_threshold=consecutive_below_threshold,
                 dead_end_patience=dead_end_patience,
                 success_threshold=success_threshold,
+                personas=_load_personas(envs_root / env_name),
             )
             # Load manifest from disk if available — enables HashNormalizer + StateDiffFloor
             manifest = None
