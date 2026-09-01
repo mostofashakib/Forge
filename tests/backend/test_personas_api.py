@@ -61,7 +61,7 @@ def test_the_environment_action_surface_is_reported_for_the_editor(client, ward)
 def test_the_archetype_library_is_offered(client, ward):
     body = client.get("/api/envs/ward/personas").json()
     ids = [a["id"] for a in body["archetypes"]]
-    assert "meticulous_nurse" in ids
+    assert "meticulous_checker" in ids
 
 
 def test_an_unknown_environment_is_a_404(client, ward):
@@ -107,7 +107,7 @@ def test_a_saved_cast_reads_back_identically(client, ward):
         "roster": [nurse(wake_on=["post_message"], latency_steps=2)],
         "archetypes": [
             {
-                "archetype": "anxious_patient",
+                "archetype": "anxious_requester",
                 "behavior": {"allowed_actions": ["post_message"]},
             }
         ],
@@ -175,7 +175,7 @@ def test_preview_shows_the_cast_a_seed_actually_produces(client, ward):
                 "roster": [nurse()],
                 "archetypes": [
                     {
-                        "archetype": "anxious_patient",
+                        "archetype": "anxious_requester",
                         "behavior": {"allowed_actions": ["post_message"]},
                     }
                 ],
@@ -195,7 +195,7 @@ def test_preview_is_stable_for_the_same_seed(client, ward):
             "enabled": True,
             "count": 4,
             "archetypes": [
-                {"archetype": "anxious_patient", "behavior": {"allowed_actions": ["post_message"]}}
+                {"archetype": "anxious_requester", "behavior": {"allowed_actions": ["post_message"]}}
             ],
         },
         "seed": 7,

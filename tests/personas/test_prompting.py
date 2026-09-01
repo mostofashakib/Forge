@@ -89,20 +89,20 @@ def test_every_archetype_ships_inert():
 
 
 def test_binding_an_archetype_gives_it_an_action_space():
-    spec = archetype("meticulous_nurse", allowed_actions=["post_message"])
+    spec = archetype("meticulous_checker", allowed_actions=["post_message"])
     assert spec.behavior.allowed_actions == ["post_message"]
     assert spec.profile.traits.diligence == 95
 
 
 def test_binding_does_not_mutate_the_library_entry():
-    archetype("meticulous_nurse", allowed_actions=["post_message"])
-    assert ARCHETYPES["meticulous_nurse"].behavior.allowed_actions == []
+    archetype("meticulous_checker", allowed_actions=["post_message"])
+    assert ARCHETYPES["meticulous_checker"].behavior.allowed_actions == []
 
 
 def test_an_unknown_archetype_lists_the_available_ones():
     import pytest
 
-    with pytest.raises(KeyError, match="meticulous_nurse"):
+    with pytest.raises(KeyError, match="meticulous_checker"):
         archetype("space_pirate")
 
 

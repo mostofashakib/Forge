@@ -83,9 +83,14 @@ def discharge_was_approved(state, trajectory, task) -> bool:
 def ward_population() -> PersonaPopulation:
     """Two people, with deliberately different reasons for existing.
 
-    The supervisor is the gate: the agent cannot approve a discharge itself, so
-    the task is unreachable without asking someone. The nurse is noise with a
-    purpose — she volunteers information on her own initiative, which is what
+    Both start from a domain-neutral disposition and are dressed for this ward.
+    That separation is the intended usage: the library knows what a gatekeeper
+    is like, and only this environment knows that its gatekeeper is a shift
+    supervisor named Alan who signs off discharges.
+
+    The supervisor is the gate — the agent cannot approve a discharge itself,
+    so the task is unreachable without asking someone. The nurse is noise with
+    a purpose: she volunteers information on her own initiative, which is what
     teaches an agent to read messages it did not ask for.
     """
     return PersonaPopulation(
@@ -94,15 +99,31 @@ def ward_population() -> PersonaPopulation:
         max_actions_per_step=1,
         roster=[
             archetype(
-                "by_the_book_supervisor",
+                "gatekeeper",
                 persona_id="supervisor",
+                name="Alan Whitmore",
+                role="shift supervisor",
+                backstory=(
+                    "Answerable for anything that goes wrong on the shift, and "
+                    "so unwilling to approve a discharge he cannot justify to "
+                    "the review afterwards."
+                ),
+                goals=["Keep the ward auditable", "Discharge nobody undocumented"],
                 allowed_actions=["send_message", "approve_discharge"],
                 wake_on=["send_message"],
                 latency_steps=2,
             ),
             archetype(
-                "meticulous_nurse",
+                "meticulous_checker",
                 persona_id="nurse",
+                name="Priya Raman",
+                role="charge nurse",
+                backstory=(
+                    "Has caught three medication errors this month and checks "
+                    "everything twice. Knows the ward's practical details "
+                    "better than anyone."
+                ),
+                goals=["Keep patients safe", "Make sure the chart matches reality"],
                 allowed_actions=["send_message"],
                 wake_on=["send_message"],
                 activity=20,

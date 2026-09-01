@@ -33,7 +33,7 @@ def cast(**overrides):
     payload = {
         "enabled": True,
         "driver": "scripted",
-        "roster": [{"archetype": "meticulous_nurse", "id": "nurse"}],
+        "roster": [{"archetype": "meticulous_checker", "id": "nurse"}],
     }
     payload.update(overrides)
     return payload
@@ -44,7 +44,7 @@ def cast(**overrides):
 
 def test_the_library_is_offered_without_an_environment(client):
     body = client.get("/api/persona-archetypes").json()
-    assert "meticulous_nurse" in [a["id"] for a in body["archetypes"]]
+    assert "meticulous_checker" in [a["id"] for a in body["archetypes"]]
 
 
 def test_library_archetypes_arrive_unable_to_act(client):
@@ -89,7 +89,7 @@ def test_an_out_of_range_trait_is_refused():
 
 def test_an_archetype_is_expanded_so_the_build_does_not_depend_on_the_library():
     req = request_with(cast())
-    assert req.personas["roster"][0]["name"] == "Priya Raman"
+    assert req.personas["roster"][0]["name"] == "Meticulous checker"
     assert "archetype" not in req.personas["roster"][0]
 
 
