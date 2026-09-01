@@ -36,6 +36,36 @@ class CreateSandboxRequest(BaseModel):
     source_product_name: str = Field(default="", max_length=200)
     source_product_url: str = Field(default="", max_length=2_000)
     ttl_days: int = Field(default=30, ge=1, le=365)
+    # The simulated people who will share the environment with the agent. The
+    # builder chooses who is in the world; nobody can be given an action here,
+    # because the environment's actions do not exist until it is generated.
+    personas: dict | None = None
+
+    @field_validator("personas")
+    @classmethod
+    def validate_personas(cls, value: dict | None) -> dict | None:
+        """Reject a malformed cast at the request, not mid-build.
+
+        A build that fails twenty minutes in because a trait was out of range
+        is a much worse error than a 422 here.
+        """
+        if value is None:
+            return None
+        from forge.personas.config import PersonaConfigError, dump_population, load_population
+
+        try:
+            population = load_population(value)
+        except PersonaConfigError as exc:
+            raise ValueError(str(exc)) from exc
+        for spec in [*population.roster, *population.archetypes]:
+            if spec.behavior.allowed_actions:
+                raise ValueError(
+                    f"persona '{spec.profile.id}' cannot be granted actions at "
+                    "creation time — the environment's actions do not exist "
+                    "yet. Choose what each person can do on the Simulated "
+                    "People page once the build finishes."
+                )
+        return dump_population(population)
 
     @field_validator("env_name")
     @classmethod
@@ -212,6 +242,7 @@ async def create_sandbox(request: CreateSandboxRequest, db: Session = Depends(ge
                     with_ui=request.with_ui,
                     source_product_name=request.source_product_name,
                     source_product_url=request.source_product_url,
+                    personas=request.personas,
                 ),
             ),
             timeout=15.0,

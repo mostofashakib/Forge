@@ -24,8 +24,12 @@ logger = logging.getLogger(__name__)
 
 # Forge's own control plane is not part of the agent's action surface, and
 # neither is the browsable app. Excluded from discovery for that reason.
-_RESERVED_PREFIX = "/forge/"
-_RESERVED_PATHS = {"/ui"}
+# Paths the platform owns. Public because callers outside the runtime need
+# the same exclusion to describe an environment's action surface — the
+# persona editor reads routes from source rather than from a running
+# container, and must land on the identical set.
+RESERVED_PREFIX = "/forge/"
+RESERVED_PATHS = {"/ui"}
 
 
 class SpecToolProvider(ToolProvider):
@@ -106,7 +110,7 @@ class OpenAPIToolProvider(ToolProvider):
         components = schema.get("components", {}).get("schemas", {})
         actions: list[dict] = []
         for path, path_item in schema.get("paths", {}).items():
-            if path.startswith(_RESERVED_PREFIX) or path in _RESERVED_PATHS:
+            if path.startswith(RESERVED_PREFIX) or path in RESERVED_PATHS:
                 continue
             post_op = path_item.get("post")
             if post_op is None:

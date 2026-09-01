@@ -606,6 +606,29 @@
   .interface-choice__options button small { @apply text-[0.63rem] leading-4 text-muted-foreground; }
   .interface-choice__options button.is-active { @apply border-foreground bg-foreground text-background; }
   .interface-choice__options button.is-active small { @apply text-background/70; }
+  .cast-picker { @apply grid border border-foreground/30 bg-card lg:grid-cols-[14rem_1fr]; box-shadow: 5px 5px 0 oklch(0.20 0.02 62 / 0.11); }
+  .cast-picker__heading { @apply flex gap-3 border-b border-foreground/20 bg-muted/25 p-5 lg:col-start-1 lg:row-span-4 lg:border-b-0 lg:border-r; }
+  .cast-picker__heading > span { @apply font-mono text-[0.58rem] text-primary; }
+  .cast-picker__heading h2 { @apply text-xs font-semibold uppercase tracking-[0.13em]; }
+  .cast-picker__heading p { @apply mt-2 text-[0.68rem] leading-5 text-muted-foreground; }
+  .cast-picker__grid { @apply grid gap-3 p-5 sm:grid-cols-2 sm:p-6 xl:grid-cols-3; }
+  .cast-card { @apply flex flex-col gap-1 border border-foreground/25 p-3 text-left transition-colors disabled:opacity-40; }
+  .cast-card:hover:not(:disabled) { @apply border-foreground; }
+  .cast-card strong { @apply text-[0.68rem] font-semibold uppercase tracking-[0.1em]; }
+  .cast-card em { @apply not-italic font-mono text-[0.58rem] text-primary; }
+  .cast-card small { @apply text-[0.63rem] leading-4 text-muted-foreground; }
+  .cast-card--on { @apply border-foreground bg-foreground text-background; }
+  .cast-card--on em { @apply text-background; }
+  .cast-card--on small { @apply text-background/70; }
+  .cast-picker__settings { @apply grid gap-4 border-t border-foreground/15 px-5 pb-5 pt-4 sm:grid-cols-3 sm:px-6; }
+  .cast-picker__settings label { @apply flex flex-col gap-1.5; }
+  .cast-picker__settings span { @apply text-[0.62rem] font-semibold uppercase tracking-[0.1em]; }
+  .cast-picker__settings input, .cast-picker__settings select {
+    @apply h-9 border border-foreground/25 bg-transparent px-2 text-xs focus-visible:border-foreground focus-visible:outline-none disabled:opacity-40;
+  }
+  .cast-picker__settings small { @apply text-[0.6rem] leading-4 text-muted-foreground; }
+  .cast-picker__note { @apply border-t border-foreground/15 px-5 pb-5 pt-4 text-[0.65rem] leading-5 text-muted-foreground sm:px-6; }
+  .cast-picker__note strong { @apply text-foreground; }
   .custom-builder__submit { @apply flex w-full items-center justify-between bg-primary px-6 py-4 text-xs font-semibold uppercase tracking-[0.14em] text-primary-foreground transition-all disabled:cursor-not-allowed disabled:opacity-40; box-shadow: 5px 5px 0 var(--foreground); }
   .custom-builder__submit:hover:not(:disabled) { @apply -translate-y-0.5 bg-foreground text-background; box-shadow: 7px 7px 0 var(--primary); }
   .custom-builder__estimate { @apply text-center font-mono text-[0.55rem] leading-5 text-muted-foreground; }
@@ -744,6 +767,10 @@
     @apply hover:border-primary/50 hover:text-foreground;
   }
   .persona-chip--on { @apply border-primary bg-primary/10 text-primary; }
+
+  .persona-callout { @apply rounded-md border border-amber-400/60 bg-amber-50 px-4 py-3; }
+  .persona-callout strong { @apply block text-sm font-semibold text-amber-900; }
+  .persona-callout p { @apply mt-1 max-w-2xl text-xs leading-5 text-amber-900/80; }
 
   .persona-preview__head { @apply flex flex-row items-center justify-between gap-4 space-y-0; }
   .persona-preview__seed { @apply flex items-center gap-2; }
