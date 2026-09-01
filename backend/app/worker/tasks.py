@@ -124,6 +124,29 @@ def run_episode_task(self, rollout_job_id: str, episode_index: int, seed: int) -
     return episode_id
 
 
+def _load_personas(env_dir):
+    """The cast configured for this environment, or None if it has none.
+
+    Read here rather than inside the runner so a malformed `personas:` block
+    degrades an agent run to an empty environment with a logged warning,
+    instead of failing every episode of the run.
+    """
+    config_path = env_dir / "custom" / "config.yaml"
+    if not config_path.exists():
+        return None
+    try:
+        import yaml
+
+        from forge.personas.config import load_population
+
+        raw = yaml.safe_load(config_path.read_text()) or {}
+        population = load_population(raw.get("personas"))
+    except Exception as exc:
+        logger.warning("[personas] could not load cast for %s: %s", env_dir.name, exc)
+        return None
+    return population if population.enabled else None
+
+
 def pipeline_flags(plan) -> dict[str, bool]:
     """Which optional specialists a generation plan actually includes.
 
@@ -612,6 +635,7 @@ def run_container_episode_task(self, run_id: str, episode_index: int, seed: int)
                 consecutive_below_threshold=consecutive_below_threshold,
                 dead_end_patience=dead_end_patience,
                 success_threshold=success_threshold,
+                personas=_load_personas(envs_root / env_name),
             )
             # Load manifest from disk if available — enables HashNormalizer + StateDiffFloor
             manifest = None

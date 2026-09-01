@@ -128,11 +128,11 @@ export default function EnvironmentsPage() {
           </div>
           <p className="environment-hero__eyebrow">Build controlled worlds for capable agents.</p>
           <h1 className="environment-hero__title">ENVIRONMENTS</h1>
-          <p className="text-sm leading-6 text-muted-foreground mt-5 max-w-xl">
-            {allNames.length === 0
-              ? "Turn application behavior into reproducible, inspectable training grounds."
-              : `${allNames.length} training ground${allNames.length !== 1 ? "s" : ""} connected to your local foundry.`}
-          </p>
+          {allNames.length > 0 && (
+            <p className="text-sm leading-6 text-muted-foreground mt-5 max-w-xl">
+              {`${allNames.length} training ground${allNames.length !== 1 ? "s" : ""} connected to your local foundry.`}
+            </p>
+          )}
           <Link href="/environments/new" className="forge-cta mt-8">
             <span className="forge-cta__plus" aria-hidden="true">+</span>
             Create environment

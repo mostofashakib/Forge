@@ -245,3 +245,80 @@ def test_preview_does_not_write_to_disk(client, ward):
         json={"personas": {"enabled": True, "roster": [nurse()]}, "seed": 1},
     )
     assert (ward / "custom" / "config.yaml").read_text() == before
+
+
+# --- the launcher's on/off switch ----------------------------------------
+
+
+def test_the_switch_turns_a_configured_cast_on(client, ward):
+    client.put(
+        "/api/envs/ward/personas",
+        json={"personas": {"enabled": False, "roster": [nurse()]}},
+    )
+    response = client.put("/api/envs/ward/personas/enabled", json={"enabled": True})
+    assert response.status_code == 200
+    assert response.json()["personas"]["enabled"] is True
+    saved = yaml.safe_load((ward / "custom" / "config.yaml").read_text())
+    assert saved["personas"]["enabled"] is True
+
+
+def test_the_switch_turns_a_cast_off_again(client, ward):
+    client.put(
+        "/api/envs/ward/personas",
+        json={"personas": {"enabled": True, "roster": [nurse()]}},
+    )
+    response = client.put("/api/envs/ward/personas/enabled", json={"enabled": False})
+    assert response.json()["personas"]["enabled"] is False
+
+
+def test_the_switch_does_not_disturb_the_roster(client, ward):
+    """A launcher that sent the whole population back would clobber edits."""
+    client.put(
+        "/api/envs/ward/personas",
+        json={
+            "personas": {
+                "enabled": False,
+                "count": 3,
+                "driver": "anthropic:claude-sonnet-5",
+                "roster": [nurse(wake_on=["post_message"], latency_steps=4)],
+            }
+        },
+    )
+    before = client.get("/api/envs/ward/personas").json()["personas"]
+    client.put("/api/envs/ward/personas/enabled", json={"enabled": True})
+    after = client.get("/api/envs/ward/personas").json()["personas"]
+    assert after["roster"] == before["roster"]
+    assert after["count"] == 3
+    assert after["driver"] == "anthropic:claude-sonnet-5"
+
+
+def test_the_switch_leaves_the_rest_of_the_config_intact(client, ward):
+    client.put(
+        "/api/envs/ward/personas",
+        json={"personas": {"enabled": False, "roster": [nurse()]}},
+    )
+    client.put("/api/envs/ward/personas/enabled", json={"enabled": True})
+    saved = yaml.safe_load((ward / "custom" / "config.yaml").read_text())
+    assert saved["reward"]["base_success"] == 2.0
+
+
+def test_turning_on_an_empty_cast_is_refused_with_a_next_step(client, ward):
+    """Switching on nobody would silently do nothing — say so instead."""
+    response = client.put("/api/envs/ward/personas/enabled", json={"enabled": True})
+    assert response.status_code == 422
+    assert "Simulated People page" in response.json()["detail"]
+
+
+def test_turning_off_an_empty_cast_is_harmless(client, ward):
+    """False-positive guard: the refusal above must not block the off direction."""
+    assert (
+        client.put("/api/envs/ward/personas/enabled", json={"enabled": False}).status_code
+        == 200
+    )
+
+
+def test_the_switch_on_an_unknown_environment_is_a_404(client, ward):
+    assert (
+        client.put("/api/envs/nope/personas/enabled", json={"enabled": True}).status_code
+        == 404
+    )
