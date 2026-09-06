@@ -13,9 +13,9 @@ export default function BenchmarkEvalPage() {
   const [experiment, setExperiment] = useState("experiments/internal_heldout.yaml");
   const [runsDir, setRunsDir] = useState("runs");
   const [seed, setSeed] = useState("");
-  const [harborTaskPath, setHarborTaskPath] = useState("example_tasks/slack_task_1");
-  const [harborAgent, setHarborAgent] = useState("fleet.agents.rl_agent:SlackExternalAgent");
-  const [harborModel, setHarborModel] = useState("gemma4:26b");
+  const [harborTaskPath, setHarborTaskPath] = useState("example_tasks/task_manager");
+  const [harborAgent, setHarborAgent] = useState("agent.harbor_agent:TrackerAgent");
+  const [harborModel, setHarborModel] = useState("ollama/qwen3.6:35b");
   const [harborAvailable, setHarborAvailable] = useState<boolean | null>(null);
   const [phase, setPhase] = useState<Phase>("idle");
   const [logs, setLogs] = useState<string[]>([]);
@@ -140,7 +140,7 @@ export default function BenchmarkEvalPage() {
               <EvalField label="Harbor task path" value={harborTaskPath} disabled={isRunning} onChange={setHarborTaskPath} />
               <EvalField label="Agent" hint="built-in or import path" value={harborAgent} disabled={isRunning} onChange={setHarborAgent} />
               <EvalField label="Model" value={harborModel} disabled={isRunning} onChange={setHarborModel} />
-              {harborAvailable === false && <p className="benchmark-domain-empty m-5">Harbor is optional and currently unavailable. Run <code>./example_tasks/run.sh setup</code> when you want to enable it.</p>}
+              {harborAvailable === false && <p className="benchmark-domain-empty m-5">Harbor is optional and currently unavailable. Run <code>uv tool install harbor</code> when you want to enable it.</p>}
             </>
           )}
 

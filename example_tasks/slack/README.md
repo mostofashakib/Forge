@@ -754,6 +754,124 @@ solution end to end and requires exactly 1.0: a contract that fails a
 known-correct episode is wrong about the task, and that check caught two real
 defects the first time it ran.
 
+## The agent
+
+`agent/` is a small provider-agnostic loop for driving this task. It is not part
+of the environment and not part of the grade: the environment is served over the
+socket to whatever harness Harbor points at it, and `-a claude-code` still works
+unchanged. This is the harness for the case Harbor is a heavy way to reach --
+does a model, any model, get anywhere on this at all.
+
+It is the same package as the one in `example_tasks/task_manager/agent/`, bound
+to this workspace: the `slack` client instead of `tasks`, this environment's
+named operator prompts, and this contract for `--grade`. The loop, the provider
+adapters, the schema generation and the trajectory writer are identical, which
+is the point -- they are domain-free.
+
+Two adapter layers meet in one loop, and neither knows the other exists.
+
+| layer | what it decides | ships with |
+| --- | --- | --- |
+| `agent/providers.py` | which model answers | `ollama` (default), `openai`, `openrouter`, `anthropic` |
+| `agent/backends.py` | where its tool calls run | a Harbor container, the `slack` CLI over a socket, or this process |
+| `agent/schemas.py` | what shape the answer may take | generated from the tool definitions, passed on every call |
+
+### Switching provider
+
+The whole of the switch is the model spec, `provider/model`:
+
+```bash
+./run.sh                                            # ollama/qwen3.6:35b
+MODEL=openrouter/anthropic/claude-opus-5 ./run.sh
+MODEL=anthropic/claude-opus-5 ./run.sh
+MODEL=openai/gpt-5 ./run.sh
+```
+
+Only the first segment is consumed, and only when it names a registered
+provider, so `openrouter/anthropic/claude-opus-5` reaches OpenRouter with the
+rest as the model id while a bare `qwen3.6:35b` stays a model name for the
+default provider. Everything else has a per-provider default: the endpoint, the
+model, and the credential's variable name. Ollama declares no credential
+variable at all, which is how the resolver knows never to ask for one.
+
+Adding a provider is a subclass and a decorator:
+
+```python
+@register_provider
+class TogetherProvider(OpenAIProvider):
+    name = "together"
+    default_model = "meta-llama/Llama-4-70b"
+    default_base_url = "https://api.together.xyz/v1"
+    api_key_env = ("TOGETHER_API_KEY",)
+```
+
+### Every call carries a schema
+
+Output shape is constrained at decode time rather than parsed and hoped over. A
+model cannot name a tool that does not exist, invent an argument, or send a
+string where the schema declares a list, because the grammar it decodes against
+will not represent one. `agent/schemas.py` generates the constraint from the
+same `get_tool_definitions()` the world serves, so the two cannot drift.
+
+| provider | `output_mode` | how |
+| --- | --- | --- |
+| `ollama` | `schema` | `format` carries an action schema over all 48 tools: `tool` is an enum over the real names, `arguments` is that tool's own input schema, picked by a discriminated union |
+| `openai`, `openrouter` | `strict_tools` | `strict: true` on each function definition, schemas normalized to what strict mode requires |
+| `anthropic` | `strict_tools` | `input_schema` per tool, validated server-side |
+
+Ollama's `format` and `tools` are mutually exclusive -- send both and the reply
+comes back schema-shaped with `tool_calls: null`, and nothing says tool calling
+stopped working. A schema pins shape and says nothing about meaning, so the tool
+catalogue goes into the prompt beside it.
+
+The loop then validates each decoded call **before** dispatching it, which is
+what makes the guarantee independent of any provider's promise about its own
+constrained decoding. That matters more here than in a smaller workspace,
+because this one does not enforce required arguments: `search_messages` with no
+query is answered rather than refused, so a model that drops the query would
+otherwise search everything and be told nothing was wrong. The client refuses it
+and names the field. The same holds for types -- passing a bare string where
+`user_ids` expects a list comes back from the workspace as "User U was not
+found", because the string was iterated character by character.
+
+### Why Ollama is the default
+
+Because the default should cost nothing and require no account, and because the
+environment has no network. The loop runs on the host and the tool calls run in
+the container, so a model on `localhost:11434` can drive a task whose
+environment cannot reach anything, and the agent's container is never handed a
+credential it has no use for. The boundary is untouched: the agent still reaches
+the workspace only through the `slack` client, over `agent.sock`, as the `agent`
+user Harbor set.
+
+Set expectations, though. This task is hard by design, and a local 35B model
+does not solve it: `qwen3.6:35b` scores around **0.23** — it completes some code
+reviews and writes a coherent status report, but does not follow the evidence
+chain deep enough to reach the terminal state. That is a useful floor and a fast
+smoke test for changes to the environment, not a demonstration that the task is
+easy. `example_tasks/task_manager` is the one the same model solves outright.
+
+### Without Harbor
+
+```bash
+export PYTHONPATH=environment:.
+
+# a throwaway workspace in this process, then the real verifier on the result
+python3 -m agent --local --grade
+
+# the compose stack, or any provider
+python3 -m agent --docker slack-main-1
+python3 -m agent --local --grade --model openrouter/anthropic/claude-opus-5
+```
+
+`--grade` runs the same contract and the same weights the graded run does.
+
+`tests/test_agent_adapters.py` covers the package, and ends where it matters: a
+scripted episode against the real world, graded by the real verifier. Joining
+the cutover bridge — a channel the acting user is not seeded into — is paid for,
+doing more of the work pays more, and an episode that calls nothing scores
+exactly 0.0, so "the loop ran" and "the loop did the task" cannot be confused.
+
 ## RL and grading contracts
 
 `SlackIncidentEnvironment` contract 7.0 exposes reset/setup/session, prompts,
@@ -780,11 +898,17 @@ against the event ledger.
 ## Dependencies
 
 **The task itself has no Python dependencies.** Every module in `environment/`,
-`verifiers/`, `tests/` and `tools/` imports the standard library and nothing
-else -- no `requirements.txt`, no `pyproject.toml`, no install step. That is a
-constraint rather than an accident: the graded container is built without pip,
-and a verifier that dies importing its own config reports zero for reasons that
-have nothing to do with the agent.
+`verifiers/`, `tests/`, `tools/` and `agent/` imports the standard library and
+nothing else -- no `requirements.txt`, no `pyproject.toml`, no install step.
+That is a constraint rather than an accident: the graded container is built
+without pip, and a verifier that dies importing its own config reports zero for
+reasons that have nothing to do with the agent.
+
+There is exactly one exemption, and it is one file: `agent/harbor_agent.py`
+imports Harbor, because translating Harbor's agent protocol into this package's
+loop is the whole of what it does. It runs on the machine that starts the run,
+never in the graded image, and `tests/test_environment_contract.py` pins the
+exemption by filename so a second one cannot be added quietly.
 
 What you need is the toolchain around it:
 
@@ -795,17 +919,21 @@ What you need is the toolchain around it:
 | Harbor | 0.22.0 | `uv tool install harbor`, or your usual installer |
 | `jq` | any | used by `solution/solve.sh` *inside* the image, installed by the Dockerfile |
 
-Only running a **model** needs credentials. Create `.env` at the repository
-root:
+**Nothing here needs an API key by default.** The default agent drives a local
+Ollama model, so a model run needs Ollama on the machine that starts the run and
+one tool-calling model pulled:
 
 ```bash
-OPEN_ROUTER_KEY=sk-or-...
+ollama pull qwen3.6:35b
 ```
 
-`run.sh` re-exports it as `ANTHROPIC_API_KEY` with
-`ANTHROPIC_BASE_URL=https://openrouter.ai/api`, because Harbor's Claude Code
-adapter resolves its credential through those names. The oracle run, the test
-suites and the offline grader need no key at all.
+A hosted provider needs its own credential, and only its own, in `.env` at the
+repository root -- `OPEN_ROUTER_KEY` for `openrouter/...`, `ANTHROPIC_API_KEY`
+for `anthropic/...`, `OPENAI_API_KEY` for `openai/...`. `run.sh` checks for the
+one the chosen model actually needs and says which is missing rather than
+demanding all of them. `AGENT=claude-code` still routes through OpenRouter under
+Anthropic's variable names, because that harness resolves its credential through
+those. The oracle run, the test suites and the offline grader need no key.
 
 ## Running
 
@@ -817,17 +945,22 @@ From the repository root:
 # Deterministic reference run -- no model, no API key. Scores exactly 1.0.
 harbor run -p ./example_tasks/slack -a oracle
 
-# Claude Opus 4.7 through OpenRouter; reads OPEN_ROUTER_KEY from .env.
+# The default agent on a local Ollama model. No key, no cost, no network out.
 # Writes a job under example_tasks/slack/jobs/harbor/, cleaning up prior containers first.
 ./example_tasks/slack/run.sh
 ./example_tasks/slack/run.sh --no-cleanup  # keep containers from an earlier run alive
+
+# Another provider is one variable; another harness is another.
+MODEL=openrouter/anthropic/claude-opus-5 ./example_tasks/slack/run.sh
+AGENT=claude-code MODEL=anthropic/claude-opus-4.7 ./example_tasks/slack/run.sh
 
 # Stop this repository's Harbor processes, containers and viewer ports
 ./example_tasks/slack/kill.sh
 ```
 
 The environment service is `no-network`. The agent phase is allowlisted to
-`openrouter.ai` and nothing else.
+`openrouter.ai` and nothing else -- which the default agent does not use,
+because its model call happens on the host.
 
 ### The test suites
 

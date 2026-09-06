@@ -8,7 +8,7 @@ artifacts = [
 ]
 
 [task]
-name = "collinear-candidate/slack-incident-reconciliation"
+name = "forge/slack-incident-reconciliation"
 version = "9.0.0"
 description = "Drive a live enterprise cutover through staged reviews, timing clarification, deep historical evidence, customer workflow verification, rollback validation, bridge coverage, and a rehearsal that invalidates earlier readiness evidence before reporting the terminal state."
 authors = [{ name = "Mostofa Shakib" }]
@@ -23,7 +23,14 @@ database = "sqlite"
 originality = "Net-new long-horizon migration-readiness scenario for this exercise."
 
 [verifier]
-timeout_sec = 180.0
+# The self-tests run inside this budget alongside the graded outcome, and they
+# are not cheap: the reward matrix alone replays enough episodes to take about
+# ninety seconds, and the whole set takes a little over two minutes on an idle
+# machine. 180s left no margin at all -- a run whose agent had just been driving
+# a local model timed the verifier out and lost an episode that had otherwise
+# completed. This is sized for the work actually being done, not for the graded
+# check alone.
+timeout_sec = 420.0
 environment_mode = "shared"
 user = "root"
 

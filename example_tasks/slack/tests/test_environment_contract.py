@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import sys
 import tempfile
 from pathlib import Path, PurePosixPath
 
@@ -253,6 +254,41 @@ def test_the_reference_solution_reads_each_thread_in_the_channel_it_is_in() -> N
             )
 
 
+def test_the_agent_package_imports_nothing_it_would_have_to_install() -> None:
+    """`agent/` has to run wherever this task runs, without an install step.
+
+    That is what lets `python3 -m agent` work from a bare checkout and what
+    keeps the package honest about being a client: the moment it needs a wheel,
+    it stops being something you can point at a container and run. The one
+    exception is confined to one file -- `agent/harbor_agent.py` is the
+    translation between Harbor's agent protocol and this package's own loop, so
+    it necessarily imports Harbor, and it runs on the machine that starts the
+    run rather than in the graded image.
+    """
+    import ast
+
+    stdlib = set(sys.stdlib_module_names)
+    local = {"agent", "slack_sim", "verifiers"}
+    exempt = {"harbor_agent.py": {"harbor"}}
+    offenders: list[str] = []
+    for path in sorted((ROOT / "agent").rglob("*.py")):
+        allowed = local | exempt.get(path.name, set())
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            names: list[str] = []
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+                names = [node.module]
+            for name in names:
+                if name.split(".")[0] not in stdlib | allowed:
+                    offenders.append(f"{path.name}: {name}")
+    assert not offenders, f"agent/ imports third-party packages: {sorted(set(offenders))}"
+
+    # And it must stay out of the image, for the same reason the solution does.
+    ignored = (ROOT / ".dockerignore").read_text(encoding="utf-8").split()
+    assert "agent" in ignored, f"agent/ is not excluded from the build context: {ignored}"
+
+
 def test_every_check_in_this_module_is_actually_called() -> None:
     """This suite dispatches by name rather than by discovery, so a check that
     nobody adds to `main` passes by never running. That is a worse failure than
@@ -280,6 +316,7 @@ def main() -> None:
         test_the_agent_image_carries_no_part_of_the_world_it_was_refused()
         test_the_agent_image_guard_fails_on_the_edits_it_exists_to_catch()
         test_the_reference_solution_reads_each_thread_in_the_channel_it_is_in()
+        test_the_agent_package_imports_nothing_it_would_have_to_install()
         test_every_check_in_this_module_is_actually_called()
 
     with tempfile.TemporaryDirectory(prefix="slack-contract-") as temp_dir:

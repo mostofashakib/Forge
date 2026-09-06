@@ -41,9 +41,14 @@ class CreateEvaluationRequest(BaseModel):
     experiment: str | None = "experiments/internal_heldout.yaml"
     seed: int | None = None
     runs_dir: str = Field(default="runs", min_length=1, max_length=255)
-    harbor_task_path: str | None = "example_tasks/slack_task_1"
-    harbor_agent: str | None = "fleet.agents.rl_agent:SlackExternalAgent"
-    harbor_model: str | None = "gemma4:26b"
+    # The example task's own adapter agent, on a local model. Both halves of
+    # the default matter: the agent resolves `provider/model` itself, so
+    # changing provider here is one string and needs no code, and Ollama needs
+    # no account -- a default that reaches for a hosted key nobody has set is a
+    # default that fails on first use.
+    harbor_task_path: str | None = "example_tasks/task_manager"
+    harbor_agent: str | None = "agent.harbor_agent:TrackerAgent"
+    harbor_model: str | None = "ollama/qwen3.6:35b"
 
     @model_validator(mode="after")
     def validate_engine_fields(self):
@@ -107,7 +112,7 @@ def evaluation_capabilities():
             "forge": {"available": True},
             "harbor": {
                 "available": bool(shutil.which("harbor") or bundled_harbor.is_file()),
-                "setup_hint": "Run ./example_tasks/run.sh setup to enable Harbor.",
+                "setup_hint": "Run `uv tool install harbor` to enable Harbor.",
             },
         }
     }

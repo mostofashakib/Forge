@@ -175,17 +175,17 @@ def test_evaluation_rejects_paths_outside_forge(api_client):
 def test_harbor_command_does_not_use_a_shell(tmp_path):
     from backend.app.worker.tasks import _harbor_command
 
-    task_path = tmp_path / "slack_task_1"
+    task_path = tmp_path / "task_manager"
     command, working_dir = _harbor_command({
         "harbor_task_path": str(task_path),
-        "harbor_agent": "fleet.agents.rl_agent:SlackExternalAgent",
-        "harbor_model": "gemma4:26b",
+        "harbor_agent": "agent.harbor_agent:TrackerAgent",
+        "harbor_model": "ollama/qwen3.6:35b",
     }, "/opt/bin/harbor")
 
     assert command == [
-        "/opt/bin/harbor", "run", "-p", "slack_task_1",
-        "--agent-import-path", "fleet.agents.rl_agent:SlackExternalAgent",
-        "--model", "gemma4:26b",
+        "/opt/bin/harbor", "run", "-p", "task_manager",
+        "--agent-import-path", "agent.harbor_agent:TrackerAgent",
+        "--model", "ollama/qwen3.6:35b",
     ]
     assert working_dir == tmp_path
 
