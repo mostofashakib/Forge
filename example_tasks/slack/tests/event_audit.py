@@ -9,7 +9,7 @@ Two ways in:
 
     # Replay whatever a real agent did, from a Harbor trajectory.
     python3 tests/event_audit.py --event timing_confirmed \
-        --trajectory ../jobs/harbor/<job>/<trial>/agent/trajectory.json
+        --trajectory jobs/harbor/<job>/<trial>/agent/trajectory.json
 
 Each run reports the state before, the action, every predicate the rule weighed
 with its candidates and what matched, whether the event moved, and what became

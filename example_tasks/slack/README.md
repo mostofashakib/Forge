@@ -380,7 +380,7 @@ PYTHONPATH=environment:tests python3 tests/event_audit.py \
     --event timing_confirmed --body "Is 9:30 still the plan?"
 
 PYTHONPATH=environment:tests python3 tests/event_audit.py \
-    --event timing_confirmed --trajectory ../jobs/harbor/<job>/<trial>/agent/trajectory.json
+    --event timing_confirmed --trajectory jobs/harbor/<job>/<trial>/agent/trajectory.json
 ```
 
 It prints the state before, every predicate with its candidates, whether the
@@ -743,7 +743,7 @@ Run it against any collected state export:
 
 ```bash
 PYTHONPATH=environment:. python3 -m verifiers.run \
-    --state ../jobs/harbor/<job>/<trial>/artifacts/var/lib/slack/state-export.json
+    --state jobs/harbor/<job>/<trial>/artifacts/var/lib/slack/state-export.json
 PYTHONPATH=environment:. python3 -m verifiers.run --state <export> --preset binary_final_state
 ```
 
@@ -964,7 +964,7 @@ because its model call happens on the host.
 
 ### The test suites
 
-Sixteen suites, run as plain scripts with no test runner. `PYTHONPATH` needs
+Seventeen suites, run as plain scripts with no test runner. `PYTHONPATH` needs
 the simulator and the shared test helpers:
 
 ```bash
@@ -973,7 +973,7 @@ export PYTHONPATH=environment:tests:.
 
 python3 tests/test_slack_surface.py      # one suite
 
-# all sixteen, in the order the verifier runs them. The list is read out of
+# all seventeen, in the order the verifier runs them. The list is read out of
 # test.sh rather than globbed, so it cannot drift -- and a glob would also
 # sweep in test_migration_readiness.py, which is not a suite (see below).
 sed -n 's/^for suite in \(.*\); do$/\1/p' tests/test.sh | tr ' ' '\n' |

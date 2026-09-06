@@ -459,7 +459,7 @@ Run the grader against any collected state export:
 
 ```bash
 PYTHONPATH=environment:. python3 -m verifiers.run \
-    --state ../jobs/harbor/<job>/<trial>/artifacts/var/lib/tasks/state-export.json
+    --state jobs/harbor/<job>/<trial>/artifacts/var/lib/tasks/state-export.json
 PYTHONPATH=environment:. python3 -m verifiers.run --state <export> --preset binary_final_state
 ```
 
@@ -478,6 +478,11 @@ of the environment and not part of the grade: the environment is served over the
 socket to whatever harness Harbor points at it, and `-a claude-code` still works
 unchanged. This is the harness for the case Harbor is a heavy way to reach --
 does a model, any model, do the task at all.
+
+`example_tasks/slack/agent/` is the same package bound to that workspace. The
+loop, the provider adapters, the schema generation and the trajectory writer are
+identical; what differs is the client it calls, the operator prompts it reads,
+and the contract `--grade` scores against.
 
 Two adapter layers meet in one loop, and neither knows the other exists.
 
