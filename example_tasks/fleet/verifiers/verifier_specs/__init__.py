@@ -1,1 +1,0 @@
-"""Shared Harbor verifier specs."""

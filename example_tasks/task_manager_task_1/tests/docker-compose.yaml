@@ -1,5 +1,0 @@
-services:
-  main:
-    build:
-      context: ../..
-      dockerfile: task_manager_task_1/tests/Dockerfile

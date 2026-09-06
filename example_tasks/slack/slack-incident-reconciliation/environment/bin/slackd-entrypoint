@@ -1,0 +1,10 @@
+#!/bin/sh
+# Runs as root only long enough to take ownership of the socket directory,
+# then drops to slackd for the life of the process. The workspace database is
+# never touched by a privileged process after this point.
+set -eu
+install -d -o slackd -g slackd -m 0755 /run/slack
+exec setpriv --reuid=slackd --regid=slackd --clear-groups \
+     python3 -m slack_sim.server \
+       --db /var/lib/slack/slack.db \
+       --snapshot /var/lib/slack/slack_seed_snapshot.sql

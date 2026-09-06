@@ -1,0 +1,24 @@
+# The build context is the task root, so keep everything that is not shipped out
+# of it: caches, the agent-facing prompt, the reference solution, the offline
+# grader auditor -- that one calls a model, and nothing in the graded image is
+# allowed to -- and the host-side halves of the task.
+#
+# `agent` and the ops scripts run on the machine that starts the run, never
+# inside it. The agent's model call in particular happens on the host, which is
+# what lets a container with no network be driven by a model on localhost; a
+# copy of the client in the image would only be a second place for a credential
+# to end up.
+**/__pycache__
+**/*.pyc
+.git
+jobs
+instruction.md
+solution
+README.md
+tools
+agent
+run.sh
+kill.sh
+view.sh
+analyze.sh
+audit.sh

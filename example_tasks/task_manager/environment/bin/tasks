@@ -1,0 +1,4 @@
+#!/bin/sh
+# The agent's only interface to the task tracker. The workspace itself runs in a
+# different container; this is a client and holds no state.
+exec python3 -m task_sim.agent_cli "$@"
