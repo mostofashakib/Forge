@@ -1005,7 +1005,7 @@ def run_evaluation_task(run_id: str, engine: str, config: dict) -> None:
                 executable = str(bundled)
             if executable is None:
                 raise RuntimeError(
-                    "Harbor is not installed. Run ./example_tasks/run.sh setup first."
+                    "Harbor is not installed. Run `uv tool install harbor` first."
                 )
             command, working_dir = _harbor_command(config, executable)
             publish({"log": f"[eval] Harbor task: {working_dir / command[3]}"})

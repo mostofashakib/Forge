@@ -17,7 +17,7 @@ export PYTHONPATH=/opt/grading:/opt:/tests
 mkdir -p /logs/verifier
 
 selftest_status=0
-for suite in test_virtual_clock test_scenario_engine test_slack_surface test_mcp_server test_event_activation test_trigger_fairness test_verifiers test_harbor_reward test_reward_validation test_reward_matrix test_integrity_violations test_migration_fixture test_migration_reward test_tool_contract test_rl_contract test_environment_contract; do
+for suite in test_virtual_clock test_scenario_engine test_slack_surface test_mcp_server test_event_activation test_trigger_fairness test_verifiers test_harbor_reward test_reward_validation test_reward_matrix test_integrity_violations test_migration_fixture test_migration_reward test_tool_contract test_rl_contract test_agent_adapters test_environment_contract; do
   echo "--- ${suite} ---"
   if ! python3 "/tests/${suite}.py"; then
     echo "SELF-TEST FAILED: ${suite}" >&2

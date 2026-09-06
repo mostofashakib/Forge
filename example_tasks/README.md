@@ -65,23 +65,31 @@ harbor run -p ./example_tasks/slack -a oracle
 ./example_tasks/task_manager/kill.sh
 ```
 
-`task_manager/` also ships a provider-agnostic agent in
-[`task_manager/agent/`](task_manager/agent/). Switching model is one variable,
-and the environment stays offline either way because the loop runs on the host:
+Both tasks ship the same provider-agnostic agent, bound to their own workspace
+([`slack/agent/`](slack/agent/), [`task_manager/agent/`](task_manager/agent/)).
+Ollama is the default because it costs nothing and needs no account; switching
+model is one variable, and the environment stays offline either way because the
+loop runs on the host and only the tool calls go into the container.
 
 ```bash
 MODEL=ollama/gemma4:26b ./example_tasks/task_manager/run.sh
-MODEL=openrouter/anthropic/claude-opus-5 ./example_tasks/task_manager/run.sh
+MODEL=openrouter/anthropic/claude-opus-5 ./example_tasks/slack/run.sh
 
 # Or without Harbor at all: a throwaway workspace, then the real verifier.
 cd example_tasks/task_manager && PYTHONPATH=environment:. python3 -m agent --local --grade
 ```
 
+Every model call carries a schema generated from the task's own tool
+definitions, so a model cannot name a tool that does not exist or invent an
+argument. `qwen3.6:35b` solves `task_manager/` outright at 1.0 and reaches about
+0.23 on `slack/`, which is a useful floor rather than a demonstration that the
+harder task is easy.
+
 ## Tests
 
 Plain scripts, no test runner. Each task's `tests/test.sh` **is** its Harbor
 verifier, and running it from a checkout runs the same suites the graded
-container does — 16 for `slack/`, 13 for `task_manager/`:
+container does — 17 for `slack/`, 13 for `task_manager/`:
 
 ```bash
 cd example_tasks/task_manager
