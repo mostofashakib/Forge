@@ -13,6 +13,7 @@ work is paid partially.
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -223,11 +224,26 @@ def test_the_command_line_grader_reports_the_same_number(root: Path) -> None:
     state_file = root / "state.json"
     state_file.write_text(json.dumps(scenario.drive_terminal(db)), encoding="utf-8")
 
-    package_root = Path(__file__).resolve().parent.parent
+    # Resolved from the packages as imported, not from this file's directory.
+    # Harbor uploads only `tests/` and mounts it at /tests, so `parent.parent`
+    # is `/` in the graded image while the verifier actually lives under
+    # /opt/grading -- the subprocess then failed to import the very module it
+    # was meant to be exercising, and said so only inside a container nobody
+    # was reading.
+    import slack_sim
+    import verifiers
+
+    verifiers_root = Path(verifiers.__file__).resolve().parent.parent
+    simulator_root = Path(slack_sim.__file__).resolve().parent.parent
+    # dict.fromkeys keeps the order and drops the duplicate: in the image both
+    # packages sit under /opt/grading, in a checkout they do not.
+    search_path = os.pathsep.join(
+        dict.fromkeys([str(verifiers_root), str(simulator_root)])
+    )
     result = subprocess.run(
         [sys.executable, "-m", "verifiers.run", "--state", str(state_file)],
-        capture_output=True, text=True, cwd=package_root,
-        env={"PYTHONPATH": f"{package_root / 'environment'}:{package_root}", "PATH": "/usr/bin:/bin"},
+        capture_output=True, text=True, cwd=verifiers_root,
+        env={"PYTHONPATH": search_path, "PATH": "/usr/bin:/bin"},
     )
     assert result.returncode == 0, result.stderr
     assert "reward=1.0000" in result.stdout, result.stdout

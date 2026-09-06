@@ -20,10 +20,15 @@ on environments the policy never trained on → reload the checkpoint and collec
 
 ## Example RL Tasks
 
-Forge includes deterministic reference tasks in [`example_tasks/`](example_tasks/).
-These examples demonstrate Slack and task-management environments, scripted
-solutions, layered verifiers, and Harbor-based evaluation workflows. See the
-[example tasks guide](example_tasks/README.md) for setup and usage.
+Forge includes two deterministic reference tasks in
+[`example_tasks/`](example_tasks/): a Slack incident reconciliation and a
+task-manager handover. Each is a complete, self-contained Harbor task with no
+shared package and no install step — a two-container environment joined by Unix
+sockets, tools served over MCP, a virtual clock, a data-driven scenario engine,
+and a weighted layered verifier that reads the world's own action log rather
+than the agent's trajectory. Both ship a reference solution that scores exactly
+1.0 and a suite that runs as the Harbor verifier itself. See the
+[example tasks guide](example_tasks/README.md) for prerequisites and usage.
 
 ---
 
@@ -583,8 +588,9 @@ The same evaluation is available in **Benchmark → Eval**. Choose **Forge nativ
 enter the checkpoint and experiment paths, and start the run to stream worker output
 and inspect the result metrics in the UI. **Harbor** is available as an optional
 evaluation engine for local Harbor task directories; it remains outside Forge's base
-dependencies. Enable it with `./example_tasks/run.sh setup`, then select the task,
-agent, and model from the Eval page.
+dependencies. Install it with `uv tool install harbor`, then select the task, agent,
+and model from the Eval page — the tasks in `example_tasks/` need nothing else,
+having no Python dependencies of their own.
 
 ```bash
 # 1. Train one declared seed using only train_envs.
