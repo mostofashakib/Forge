@@ -1,0 +1,35 @@
+# The agent runs in `main`; the Slack workspace runs in `slack`. They share
+# nothing but a directory holding two Unix sockets, so the agent has no
+# filesystem path to workspace state and no network dependency on it either --
+# which keeps the boundary intact under Harbor's no-network egress policy.
+services:
+  main:
+    build:
+      # The task root, so the image can ship the grading-side verifier package
+      # alongside the answer key. Nothing outside `environment/` is copied into
+      # the agent stage.
+      context: ..
+      dockerfile: environment/Dockerfile
+      target: agent
+    volumes:
+      - slack-ipc:/run/slack
+    depends_on:
+      slack:
+        condition: service_healthy
+
+  slack:
+    build:
+      context: ..
+      dockerfile: environment/Dockerfile
+      target: world
+    volumes:
+      - slack-ipc:/run/slack
+    healthcheck:
+      test: ["CMD", "python3", "-m", "slack_sim.admin_cli", "ping"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 2s
+
+volumes:
+  slack-ipc:

@@ -1,0 +1,5 @@
+#!/bin/sh
+# Privileged workspace operations. Reaches admin.sock, which is mode 0600 and
+# owned by tasksd, so an unprivileged caller gets EACCES regardless of this
+# script's own mode.
+exec python3 -m task_sim.admin_cli "$@"
