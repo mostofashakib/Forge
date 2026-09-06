@@ -27,7 +27,9 @@ shared package and no install step — a two-container environment joined by Uni
 sockets, tools served over MCP, a virtual clock, a data-driven scenario engine,
 and a weighted layered verifier that reads the world's own action log rather
 than the agent's trajectory. Both ship a reference solution that scores exactly
-1.0 and a suite that runs as the Harbor verifier itself. See the
+1.0, a suite that runs as the Harbor verifier itself, and a provider-agnostic
+agent that defaults to a local Ollama model — so a task can be run end to end
+with no API key, and switching to a hosted provider is one variable. See the
 [example tasks guide](example_tasks/README.md) for prerequisites and usage.
 
 ---

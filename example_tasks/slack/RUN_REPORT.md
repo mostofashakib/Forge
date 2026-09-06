@@ -85,13 +85,13 @@ Three specific gaps are known and unrepaired. Nine fields in `GROUND_TRUTH`, amo
 
 Run these from the repository root. Docker must be running, and Harbor must be installed.
 
-To run Claude Opus 4.7 through OpenRouter, put `OPEN_ROUTER_KEY` in `.env` and use the wrapper:
+The runs below are Claude Opus 4.7 through OpenRouter. Put `OPEN_ROUTER_KEY` in `.env` at the repository root and name that harness explicitly, because the wrapper now defaults to the task's own adapter agent on a local Ollama model:
 
 ```bash
-./example_tasks/slack/run.sh
+AGENT=claude-code MODEL=anthropic/claude-opus-4.7 ./example_tasks/slack/run.sh
 ```
 
-The wrapper clears earlier task containers, selects `anthropic/claude-opus-4.7`, uses high reasoning effort, and writes the job under `example_tasks/slack/jobs/harbor`.
+The wrapper clears earlier task containers, uses high reasoning effort, and writes the job under `example_tasks/slack/jobs/harbor`. Plain `./example_tasks/slack/run.sh` runs the default local model instead and needs no key at all; it will not reproduce the scores in this report.
 
 To stop a run or clear old task containers without starting another one:
 
@@ -116,26 +116,10 @@ cd example_tasks/slack
 export PYTHONDONTWRITEBYTECODE=1
 export PYTHONPATH=environment:tests:.
 
-for suite in \
-  test_virtual_clock \
-  test_scenario_engine \
-  test_slack_surface \
-  test_mcp_server \
-  test_event_activation \
-  test_trigger_fairness \
-  test_verifiers \
-  test_harbor_reward \
-  test_reward_validation \
-  test_reward_matrix \
-  test_integrity_violations \
-  test_migration_fixture \
-  test_migration_reward \
-  test_tool_contract \
-  test_rl_contract \
-  test_environment_contract
-do
-  python3 "tests/${suite}.py" || exit 1
-done
+# The list is read out of test.sh rather than written down again, so it cannot
+# drift from the one the verifier actually runs -- which it had, by a suite.
+sed -n 's/^for suite in \(.*\); do$/\1/p' tests/test.sh | tr ' ' '\n' |
+  while read -r suite; do python3 "tests/${suite}.py" || exit 1; done
 ```
 
 To grade a collected sidecar export again:
@@ -143,7 +127,7 @@ To grade a collected sidecar export again:
 ```bash
 cd example_tasks/slack
 PYTHONPATH=environment:. python3 -m verifiers.run \
-  --state ../jobs/harbor/<job>/<trial>/artifacts/var/lib/slack/state-export.json
+  --state jobs/harbor/<job>/<trial>/artifacts/var/lib/slack/state-export.json
 ```
 
 The saved run's own `result.json`, `verifier/details.json`, `verifier/reward.json`, and `verifier/test-stdout.txt` contain the score, individual checks, validity flag, and environment test results.
