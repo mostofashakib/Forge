@@ -17,6 +17,8 @@ from slack_sim.environment import SlackIncidentEnvironment
 from slack_sim.identity import LOGGED_IN_USER
 from slack_sim.service import TOOL_NAMES, export_state
 
+import dynamic_scenario as scenario
+
 
 def test_the_harness_hands_the_agent_the_workspace() -> None:
     """The agent must arrive holding the tools, not hunting for them.
@@ -179,6 +181,78 @@ def test_the_agent_image_guard_fails_on_the_edits_it_exists_to_catch() -> None:
     )
 
 
+def test_the_reference_solution_reads_each_thread_in_the_channel_it_is_in() -> None:
+    """Pin `solve.sh`'s channel variables against the seed.
+
+    Nothing executes the reference solution -- the suites replay a scripted
+    sequence in `dynamic_scenario.drive_terminal` instead -- so the script and
+    the episode the tests call "the oracle" can drift apart in silence. They
+    did: the script read CUT002, LAT022 and LAT027 out of `$ACME` while the
+    seed puts all three in the cutover bridge, a channel Ben is not a member
+    of. `thread_ts` returned empty, `set -e` killed the script partway, and
+    `harbor run -a oracle` paid 0.49 for a task whose entire calibration rests
+    on the reference scoring exactly 1.0. Every suite stayed green throughout.
+
+    A static check rather than a run, because executing the script needs a live
+    socket and this has to work from a checkout. It catches the mistake that
+    was actually made: asking the wrong channel for a thread, and reading a
+    channel without joining it first.
+    """
+    import re
+
+    script = (ROOT / "solution" / "solve.sh").read_text(encoding="utf-8")
+    with tempfile.TemporaryDirectory(prefix="slack-solution-") as directory:
+        database = scenario.seeded(Path(directory) / "seed")
+        # Memberships come from the seed and message locations from the played
+        # episode, and the difference is the whole point: half the threads the
+        # solution reads are latent and have no channel until something
+        # activates them, while the episode itself joins the bridge -- so
+        # reading memberships back out of the finished state would report every
+        # channel as already joined and quietly pass.
+        opening = export_state(database)
+        state = scenario.drive_terminal(database)
+    by_name = {channel["name"]: channel["channel_id"] for channel in state["channels"]}
+    channel_of = {message["message_id"]: message["channel_id"] for message in state["messages"]}
+
+    # `VAR=$(channel_id <name>)`, plus the one that has to be searched for
+    # because it is absent from list_channels until the solution joins it.
+    variables = {
+        name: by_name[channel]
+        for name, channel in re.findall(r"(\w+)=\$\(channel_id (\S+)\)", script)
+        if channel in by_name
+    }
+    variables.update({
+        name: by_name[channel]
+        for name, channel in re.findall(
+            r'(\w+)=\$\(slack search_channels.*?\.name == "([^"]+)"', script, re.S
+        )
+        if channel in by_name
+    })
+    assert len(variables) >= 5, f"channel variables did not resolve: {sorted(variables)}"
+
+    lookups = re.findall(r'thread_ts "\$(\w+)" (\w+)', script)
+    assert len(lookups) >= 4, f"expected the script to look threads up by id: {lookups}"
+    for variable, message_id in lookups:
+        assert variables.get(variable) == channel_of.get(message_id), (
+            f"solve.sh reads {message_id} from ${variable} "
+            f"({variables.get(variable)}), but it is in {channel_of.get(message_id)}"
+        )
+
+    # Reading a channel the acting user is not in is refused, so anything
+    # beyond the seeded membership has to be joined first -- the step whose
+    # absence caused the failure this test exists for.
+    joined = {
+        row["channel_id"] for row in opening["memberships"]
+        if row["user_id"] == LOGGED_IN_USER.user_id
+    }
+    for variable, channel_id in sorted(variables.items()):
+        if channel_id not in joined:
+            assert f'join_channel --channel-id "${variable}"' in script, (
+                f"solve.sh reads ${variable} ({channel_id}), which "
+                f"{LOGGED_IN_USER.display_name} is not a member of, without joining it"
+            )
+
+
 def test_every_check_in_this_module_is_actually_called() -> None:
     """This suite dispatches by name rather than by discovery, so a check that
     nobody adds to `main` passes by never running. That is a worse failure than
@@ -205,6 +279,7 @@ def main() -> None:
         test_the_instruction_does_not_smuggle_in_the_interface()
         test_the_agent_image_carries_no_part_of_the_world_it_was_refused()
         test_the_agent_image_guard_fails_on_the_edits_it_exists_to_catch()
+        test_the_reference_solution_reads_each_thread_in_the_channel_it_is_in()
         test_every_check_in_this_module_is_actually_called()
 
     with tempfile.TemporaryDirectory(prefix="slack-contract-") as temp_dir:

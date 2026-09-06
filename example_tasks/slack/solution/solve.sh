@@ -75,20 +75,29 @@ slack reply_to_thread --thread-parent-id MSG224 --body \
 slack reply_to_thread --thread-parent-id CUT001 --body \
   'Nina, can you confirm whether 9:30 was an actual approved change request or only a question?' >/dev/null
 slack get_channel_messages --channel-id "$ACME" >/dev/null
-COVERAGE_TS=$(thread_ts "$ACME" CUT002)
-slack get_thread_replies --channel-id "$ACME" --thread-ts "$COVERAGE_TS" >/dev/null
+
+# Cutover coordination has its own channel and Ben is not on it, so it is not
+# in list_channels and reading it is refused. Find it and join it: the coverage
+# change, the rollback dependency and the rehearsal thread all live there, not
+# in acme-migration.
+BRIDGE=$(slack search_channels --query cutover \
+  | jq -r '.result.channels[] | select(.name == "acme-cutover-bridge") | .channel_id')
+slack join_channel --channel-id "$BRIDGE" >/dev/null
+slack get_channel_messages --channel-id "$BRIDGE" >/dev/null
+COVERAGE_TS=$(thread_ts "$BRIDGE" CUT002)
+slack get_thread_replies --channel-id "$BRIDGE" --thread-ts "$COVERAGE_TS" >/dev/null
 
 # Verify the newly discovered rollback dependency. The final rehearsal then
 # starts at its deterministic 7:30 PM virtual-clock time.
 slack reply_to_thread --thread-parent-id LAT022 --body \
   'Sam, please verify the rollback worker by running the recovery invocation and report its status.' >/dev/null
-REHEARSAL_TS=$(thread_ts "$ACME" LAT027)
-slack get_thread_replies --channel-id "$ACME" --thread-ts "$REHEARSAL_TS" >/dev/null
+REHEARSAL_TS=$(thread_ts "$BRIDGE" LAT027)
+slack get_thread_replies --channel-id "$BRIDGE" --thread-ts "$REHEARSAL_TS" >/dev/null
 # Rehearsal invalidates the provisional rollback green; explicitly request the
 # corrective pin change and another real invocation.
 slack reply_to_thread --thread-parent-id LAT027 --body \
   'The rollback rehearsal exposed a stale recovery config pin. Correct the pin and rerun the rollback invocation before closing rehearsal.' >/dev/null
-slack get_thread_replies --channel-id "$ACME" --thread-ts "$REHEARSAL_TS" >/dev/null
+slack get_thread_replies --channel-id "$BRIDGE" --thread-ts "$REHEARSAL_TS" >/dev/null
 
 # Only the trajectory now: grading reads the world's state export and the
 # reply in Daniel's thread, never a file the agent wrote.

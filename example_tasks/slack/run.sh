@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 ENV_FILE="$REPO_ROOT/.env"
-TASK_PATH="$SCRIPT_DIR/slack-incident-reconciliation"
+TASK_PATH="$SCRIPT_DIR"
 MODEL="anthropic/claude-opus-4.7"
 # Keep one level of directories below JOBS_PATH: each child is a complete
 # Harbor job containing config.json/result.json plus its trial directories.

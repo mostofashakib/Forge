@@ -3,7 +3,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-TASK_SLUG="slack-incident-reconciliation"
+# Harbor names each trial after this directory and each Compose project after
+# the trial, lowercased. Deriving the prefix rather than writing it down means
+# renaming the directory cannot leave this script quietly matching nothing --
+# which is exactly what a hardcoded name would do the moment the task moved.
+TASK_SLUG="$(basename "$SCRIPT_DIR" | tr '[:upper:]' '[:lower:]')"
 VIEWER_PORTS="8080-8089"
 
 process_belongs_to_repo() {

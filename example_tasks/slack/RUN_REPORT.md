@@ -88,22 +88,22 @@ Run these from the repository root. Docker must be running, and Harbor must be i
 To run Claude Opus 4.7 through OpenRouter, put `OPEN_ROUTER_KEY` in `.env` and use the wrapper:
 
 ```bash
-./collinear-candidate/run.sh
+./example_tasks/slack/run.sh
 ```
 
-The wrapper clears earlier task containers, selects `anthropic/claude-opus-4.7`, uses high reasoning effort, and writes the job under `collinear-candidate/jobs/harbor`.
+The wrapper clears earlier task containers, selects `anthropic/claude-opus-4.7`, uses high reasoning effort, and writes the job under `example_tasks/slack/jobs/harbor`.
 
 To stop a run or clear old task containers without starting another one:
 
 ```bash
-./collinear-candidate/kill.sh
+./example_tasks/slack/kill.sh
 ```
 
 To run the deterministic reference solution:
 
 ```bash
 harbor run \
-  -p ./collinear-candidate/slack-incident-reconciliation \
+  -p ./example_tasks/slack \
   -a oracle \
   --force-build \
   --yes
@@ -112,7 +112,7 @@ harbor run \
 To run the same verifier self-tests locally:
 
 ```bash
-cd collinear-candidate/slack-incident-reconciliation
+cd example_tasks/slack
 export PYTHONDONTWRITEBYTECODE=1
 export PYTHONPATH=environment:tests:.
 
@@ -141,7 +141,7 @@ done
 To grade a collected sidecar export again:
 
 ```bash
-cd collinear-candidate/slack-incident-reconciliation
+cd example_tasks/slack
 PYTHONPATH=environment:. python3 -m verifiers.run \
   --state ../jobs/harbor/<job>/<trial>/artifacts/var/lib/slack/state-export.json
 ```

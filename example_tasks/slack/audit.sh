@@ -17,7 +17,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 ENV_FILE="$REPO_ROOT/.env"
-TASK_DIR="$SCRIPT_DIR/slack-incident-reconciliation"
+TASK_DIR="$SCRIPT_DIR"
 
 if [[ $# -lt 1 ]]; then
   echo "usage: $(basename "$0") <trial-dir>... [--offline] [--json out.json]" >&2

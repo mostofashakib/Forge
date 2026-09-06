@@ -815,15 +815,15 @@ From the repository root:
 
 ```bash
 # Deterministic reference run -- no model, no API key. Scores exactly 1.0.
-harbor run -p ./collinear-candidate/slack-incident-reconciliation -a oracle
+harbor run -p ./example_tasks/slack -a oracle
 
 # Claude Opus 4.7 through OpenRouter; reads OPEN_ROUTER_KEY from .env.
-# Writes a job under collinear-candidate/jobs/harbor/, cleaning up prior containers first.
-./collinear-candidate/run.sh
-./collinear-candidate/run.sh --no-cleanup  # keep containers from an earlier run alive
+# Writes a job under example_tasks/slack/jobs/harbor/, cleaning up prior containers first.
+./example_tasks/slack/run.sh
+./example_tasks/slack/run.sh --no-cleanup  # keep containers from an earlier run alive
 
 # Stop this repository's Harbor processes, containers and viewer ports
-./collinear-candidate/kill.sh
+./example_tasks/slack/kill.sh
 ```
 
 The environment service is `no-network`. The agent phase is allowlisted to
@@ -835,7 +835,7 @@ Sixteen suites, run as plain scripts with no test runner. `PYTHONPATH` needs
 the simulator and the shared test helpers:
 
 ```bash
-cd collinear-candidate/slack-incident-reconciliation
+cd example_tasks/slack
 export PYTHONPATH=environment:tests:.
 
 python3 tests/test_slack_surface.py      # one suite
@@ -948,10 +948,10 @@ violation -- the refusal is the only trace the episode would otherwise keep.
 ### Inspecting a finished run
 
 ```bash
-./collinear-candidate/view.sh  # Harbor viewer over collinear-candidate/jobs/harbor/
-./collinear-candidate/analyze.sh collinear-candidate/jobs/harbor/<job>/<trial>
-./collinear-candidate/audit.sh collinear-candidate/jobs/harbor/<job>/<trial>
-./collinear-candidate/audit.sh collinear-candidate/jobs/harbor/<job>/<trial> --offline --json audit.json
+./example_tasks/slack/view.sh  # Harbor viewer over example_tasks/slack/jobs/harbor/
+./example_tasks/slack/analyze.sh example_tasks/slack/jobs/harbor/<job>/<trial>
+./example_tasks/slack/audit.sh example_tasks/slack/jobs/harbor/<job>/<trial>
+./example_tasks/slack/audit.sh example_tasks/slack/jobs/harbor/<job>/<trial> --offline --json audit.json
 ```
 
 `audit.sh` is the odd one: it never touches a reward. `tools/grader_audit.py`
@@ -964,4 +964,4 @@ depend on it. `--offline` skips the model and reports only what the rules did.
 Both `analyze.sh` and `view.sh` need the same `.env` credentials the agent run
 uses, and both default to Sonnet 5 rather than a tier alias -- OpenRouter
 rejects `haiku` / `sonnet` / `opus` as model ids, which is why the viewer's own
-Summarize button fails where `./collinear-candidate/analyze.sh` works.
+Summarize button fails where `./example_tasks/slack/analyze.sh` works.
