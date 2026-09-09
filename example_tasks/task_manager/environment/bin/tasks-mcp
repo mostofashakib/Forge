@@ -1,5 +1,0 @@
-#!/bin/sh
-# The task tracker as an MCP server. Harbor registers this from task.toml, so
-# the agent's harness discovers the tools; nothing in the prompt has to name
-# them. The workspace itself runs in another container -- this is a client.
-exec python3 -m task_sim.mcp_server "$@"
