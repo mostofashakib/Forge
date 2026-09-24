@@ -232,8 +232,8 @@ def delete_agent_run(env_name: str, run_id: str, db: Session = Depends(get_db)):
         if ep.jsonl_path:
             try:
                 Path(ep.jsonl_path).unlink(missing_ok=True)
-            except Exception:
-                pass
+            except OSError as exc:
+                logger.warning("[agent-runs] could not remove %s: %s", ep.jsonl_path, exc)
         db.delete(ep)
 
     db.delete(run)

@@ -850,7 +850,7 @@ def run_benchmark_task(
         try:
             r.publish(channel, _json.dumps(msg))
         except Exception:
-            pass
+            logger.debug("[task:benchmark] progress publish failed", exc_info=True)
 
     _update_run_status(run_id, "running")
     publish({"log": f"[benchmark] starting run {run_id} — domains={domains} depth={depth} seeds={seeds}"})

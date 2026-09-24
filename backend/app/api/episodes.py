@@ -3,9 +3,10 @@ from __future__ import annotations
 import asyncio
 import json as _json
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from backend.app.database import get_db
+from backend.app.database import get_db, get_session_factory
 from backend.app.services import episode_service, runner_service
 from forge.runtime.replay import ReplayService
 
@@ -120,20 +121,35 @@ def branch(episode_id: str, step_n: int, db: Session = Depends(get_db)):
     return {"actions": actions}
 
 
+def _episode_record(episode_id: str):
+    """Episode, plus its steps when they are final, read in a short session.
+
+    A stream lasts as long as the episode, so it must not hold a pooled
+    connection (and its open transaction) the whole time.
+    """
+    with get_session_factory()() as db:
+        ep = episode_service.get_episode(episode_id, db)
+        done = ep is not None and ep.status == "completed"
+        steps = episode_service.get_episode_steps(episode_id, db) if done else []
+        return ep, steps
+
+
+def _branch_actions(episode_id: str, step_n: int) -> list[dict]:
+    with get_session_factory()() as db:
+        return ReplayService().branch_from(episode_id, step_n, db)
+
+
 @router.websocket("/{episode_id}/stream")
-async def stream_episode(
-    websocket: WebSocket, episode_id: str, db: Session = Depends(get_db)
-):
+async def stream_episode(websocket: WebSocket, episode_id: str):
     await websocket.accept()
 
-    ep = episode_service.get_episode(episode_id, db)
+    ep, steps = await run_in_threadpool(_episode_record, episode_id)
     if not ep:
         await websocket.close(code=1008)
         return
 
     # Completed episode: replay stored steps then close
     if ep.status == "completed":
-        steps = episode_service.get_episode_steps(episode_id, db)
         for step in steps:
             await websocket.send_json({
                 "type": "step",
@@ -191,8 +207,8 @@ async def stream_episode(
                     msg = get_msg.result()
                     if isinstance(msg, dict) and msg.get("type") == "fork":
                         step_n = int(msg["step"])
-                        prefix_actions = ReplayService().branch_from(
-                            episode_id, step_n, db
+                        prefix_actions = await run_in_threadpool(
+                            _branch_actions, episode_id, step_n
                         )
                         old_task = runner_service.episode_tasks.get(episode_id)
                         if old_task and not old_task.done():

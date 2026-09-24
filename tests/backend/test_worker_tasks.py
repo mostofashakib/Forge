@@ -93,3 +93,22 @@ def test_benchmark_parses_each_manifest_once(benchmark_db):
         assert db.get(BenchmarkRun, "bm_1").status == "done"
     assert runner.__enter__.return_value.run_episode.call_count == 3
     assert parse.call_count == 1
+
+
+def test_benchmark_survives_and_logs_a_failing_progress_publish(benchmark_db, caplog):
+    redis_client = MagicMock()
+    redis_client.publish.side_effect = ConnectionError("redis went away")
+
+    with patch("redis.from_url", return_value=redis_client), \
+         patch("forge.benchmark.compiled_tasks.CompiledTaskProvider"), \
+         patch("forge.benchmark.data_collector.DataCollector") as collector, \
+         patch("forge.benchmark.report.BenchmarkReport"), \
+         caplog.at_level(logging.DEBUG, logger="backend.app.worker.tasks"):
+        collector.return_value.pending_runs.return_value = []
+        tasks.run_benchmark_task.apply(args=["bm_1", ["mail"], 1, 3, str(benchmark_db / "out")])
+
+    from backend.app import database
+    from backend.app.models import BenchmarkRun
+    with database.get_session_factory()() as db:
+        assert db.get(BenchmarkRun, "bm_1").status == "done"
+    assert "progress publish failed" in caplog.text

@@ -797,3 +797,25 @@ def test_browser_episode_closes_its_docker_client(client):
         run_container_episode_task("run_browser", 0, 0)
 
     docker_client.close.assert_called_once()
+
+
+def test_delete_run_reports_a_trajectory_file_it_could_not_remove(client, tmp_path, caplog):
+    import logging
+    from backend.app import database
+
+    _add_running_general_sandbox(client, "locked_env")
+    _add_run("run_locked", "locked_env")
+    with database.get_session_factory()() as db:
+        db.add(AgentEpisode(
+            id="ep_locked", run_id="run_locked", episode_index=0, seed=0,
+            status="completed", started_at=datetime.now(timezone.utc),
+            jsonl_path=str(tmp_path / "locked.jsonl"),
+        ))
+        db.commit()
+
+    with patch("pathlib.Path.unlink", side_effect=PermissionError("read-only")), \
+         caplog.at_level(logging.WARNING):
+        resp = client.delete("/api/sandbox/locked_env/agent-runs/run_locked")
+
+    assert resp.status_code == 204
+    assert "locked.jsonl" in caplog.text

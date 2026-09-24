@@ -639,8 +639,10 @@ async def sandbox_exec(websocket: WebSocket, env_name: str):
                     os.write(master_fd, text.encode())
                 except OSError:
                     break
-        except Exception:
+        except WebSocketDisconnect:
             pass
+        except Exception:
+            logger.exception("[sandbox:exec] terminal input failed for %s", env_name)
         finally:
             closed.set()
 

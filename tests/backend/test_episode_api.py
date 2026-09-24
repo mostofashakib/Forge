@@ -368,3 +368,28 @@ def test_websocket_stream_running_episode(api_client, monkeypatch):
 
     assert msg1["type"] == "step"
     assert msg2["type"] == "complete"
+
+
+def test_open_episode_stream_does_not_hold_a_db_connection(api_client):
+    import asyncio
+    from backend.app import database
+    from backend.app.models import Episode
+    from backend.app.services import runner_service
+
+    episode_id = "ep_000000aa"
+    with database.get_session_factory()() as db:
+        db.add(Episode(
+            id=episode_id, env_name="test_env", task_name="t", seed=0xAA, agent_id="a",
+            status="running", total_steps=0, total_reward=0.0, passed=False,
+            started_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        ))
+        db.commit()
+    runner_service.episode_queues[episode_id] = asyncio.Queue()
+    runner_service.episode_queues[episode_id].put_nowait({"type": "step", "step_index": 0})
+
+    try:
+        with api_client.websocket_connect(f"/api/episodes/{episode_id}/stream") as ws:
+            assert ws.receive_json()["type"] == "step"
+            assert database.get_engine().pool.checkedout() == 0
+    finally:
+        runner_service.episode_queues.pop(episode_id, None)
