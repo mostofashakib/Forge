@@ -54,6 +54,10 @@ __pycache__/
 # claude code
 .claude/
 
+# codex
+.codex
+.codex/
+
 # visual companion brainstorm sessions
 .superpowers/
 superpowers/
