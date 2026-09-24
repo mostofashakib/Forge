@@ -311,6 +311,11 @@ def _image_cached_locally(image: str) -> bool:
         return False
 
 
+# Generous enough for a cold pip install, but a hung build must not hold a
+# worker slot forever.
+_BUILD_TIMEOUT_S = 900
+
+
 def _pull_with_retry(image: str, max_attempts: int = 5, pull_timeout: int = 120) -> None:
     """Pull a Docker image via CLI, retrying on transient network errors.
 
@@ -502,7 +507,10 @@ class ContainerRuntime:
                 check=True,
                 capture_output=True,
                 text=True,
+                timeout=_BUILD_TIMEOUT_S,
             )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(f"docker build timed out after {_BUILD_TIMEOUT_S}s") from exc
         except subprocess.CalledProcessError as exc:
             output = (exc.stderr or exc.stdout or "(no output)").strip()
             raise RuntimeError(
@@ -694,8 +702,9 @@ class ContainerRuntime:
         result = []
         for c in containers:
             env_name = c.labels.get("forge.env", "")
-            c.reload()
-            ports = c.ports.get("8000/tcp")
+            # list() already inspects each container, so no reload is needed.
+            port_key = "3000/tcp" if c.labels.get("forge.type") == "browser" else "8000/tcp"
+            ports = c.ports.get(port_key)
             if env_name and ports:
                 result.append((env_name, c.id, int(ports[0]["HostPort"])))
         return result

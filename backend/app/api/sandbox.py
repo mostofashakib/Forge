@@ -1,5 +1,6 @@
 from __future__ import annotations
 import asyncio
+import concurrent.futures
 import json
 import logging
 import os
@@ -7,18 +8,28 @@ from datetime import datetime, timedelta, timezone
 import uuid
 import redis
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.concurrency import run_in_threadpool
 import re
 from typing import Literal
 from urllib.parse import urlparse
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy.orm import Session
-from backend.app.database import get_db
+from backend.app.api._pubsub_relay import relay_pubsub
+from backend.app.database import get_db, get_session_factory
 from backend.app.docker_utils import is_docker_daemon_unavailable
 from backend.app.models import SandboxEnvironment
 from forge.settings import generated_envs_root, redis_url, sandbox_limit
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/sandbox")
+
+DISPATCH_TIMEOUT_S = 15.0
+# Bounds how long a request waits on Celery. A dispatch that outlives the
+# timeout keeps its thread here, never one of the request threads.
+_dispatch_pool = concurrent.futures.ThreadPoolExecutor(
+    max_workers=4, thread_name_prefix="sandbox-dispatch"
+)
+_BUILD_IN_PROGRESS = ("queued", "building")
 
 
 class CreateSandboxRequest(BaseModel):
@@ -158,7 +169,7 @@ def _remove_undispatched_sandbox(db: Session, sandbox: SandboxEnvironment) -> No
 
 
 @router.post("/", status_code=202)
-async def create_sandbox(request: CreateSandboxRequest, db: Session = Depends(get_db)):
+def create_sandbox(request: CreateSandboxRequest, db: Session = Depends(get_db)):
     logger.info("[sandbox] POST /api/sandbox/ — env_name=%s", request.env_name)
 
     active_count = _active_sandbox_count(db)
@@ -185,16 +196,9 @@ async def create_sandbox(request: CreateSandboxRequest, db: Session = Depends(ge
     redis_connection_url = redis_url()
     logger.info("[sandbox] checking Redis at %s…", redis_connection_url)
     try:
-        loop = asyncio.get_running_loop()
-        pong = await asyncio.wait_for(
-            loop.run_in_executor(
-                None,
-                lambda: redis.from_url(
-                    redis_connection_url, socket_connect_timeout=2, socket_timeout=2
-                ).ping(),
-            ),
-            timeout=4.0,
-        )
+        pong = redis.from_url(
+            redis_connection_url, socket_connect_timeout=2, socket_timeout=2
+        ).ping()
         if not pong:
             raise RuntimeError("PING returned false")
         logger.info("[sandbox] Redis healthy")
@@ -223,38 +227,34 @@ async def create_sandbox(request: CreateSandboxRequest, db: Session = Depends(ge
     logger.info("[sandbox] DB row created for %s (job_id=%s)", request.env_name, job_id)
 
     logger.info("[sandbox] dispatching build_sandbox_task to Celery for %s…", request.env_name)
-    try:
-        from backend.app.worker.tasks import build_sandbox_task
-        loop = asyncio.get_running_loop()
-        result = await asyncio.wait_for(
-            loop.run_in_executor(
-                None,
-                lambda: build_sandbox_task.delay(
-                    job_id=job_id,
-                    env_name=request.env_name,
-                    env_type=request.env_type,
-                    description=request.description,
-                    domain=request.domain,
-                    policy_requirements=request.policy_requirements,
-                    reward_requirements=request.reward_requirements,
-                    reference_urls=request.reference_urls,
-                    use_user_researcher=request.use_user_researcher,
-                    with_ui=request.with_ui,
-                    source_product_name=request.source_product_name,
-                    source_product_url=request.source_product_url,
-                    personas=request.personas,
-                ),
-            ),
-            timeout=15.0,
+    from backend.app.worker.tasks import build_sandbox_task
+    dispatch = _dispatch_pool.submit(
+        lambda: build_sandbox_task.delay(
+            job_id=job_id,
+            env_name=request.env_name,
+            env_type=request.env_type,
+            description=request.description,
+            domain=request.domain,
+            policy_requirements=request.policy_requirements,
+            reward_requirements=request.reward_requirements,
+            reference_urls=request.reference_urls,
+            use_user_researcher=request.use_user_researcher,
+            with_ui=request.with_ui,
+            source_product_name=request.source_product_name,
+            source_product_url=request.source_product_url,
+            personas=request.personas,
         )
+    )
+    try:
+        result = dispatch.result(timeout=DISPATCH_TIMEOUT_S)
         logger.info("[sandbox] task queued — celery task_id=%s env_name=%s", result.id, request.env_name)
-    except asyncio.TimeoutError:
+    except concurrent.futures.TimeoutError:
         logger.error("[sandbox] Celery dispatch timed out for %s", request.env_name)
-        # The executor thread may still complete after our timeout. Preserve
+        # The dispatch thread may still complete after our timeout. Preserve
         # the row for a late worker, but never leave it falsely queued.
         sandbox.status = "error"
         db.commit()
-        raise HTTPException(status_code=503, detail="Worker unavailable — Celery did not accept the task within 15 s. Check Redis and the Celery worker.")
+        raise HTTPException(status_code=503, detail=f"Worker unavailable — Celery did not accept the task within {DISPATCH_TIMEOUT_S:g} s. Check Redis and the Celery worker.")
     except Exception:
         logger.exception("[sandbox] FAILED to dispatch task for %s", request.env_name)
         _remove_undispatched_sandbox(db, sandbox)
@@ -287,53 +287,11 @@ def get_sandbox(env_name: str, db: Session = Depends(get_db)):
     if not sandbox:
         raise HTTPException(status_code=404, detail="Sandbox not found")
     if sandbox.status == "running" and sandbox.container_id:
+        import docker, docker.errors
+        client = None
         try:
-            import docker, docker.errors
             client = docker.from_env()
-            container = client.containers.get(sandbox.container_id)
-            container.reload()
-            # A container that's been respawned by Docker's restart policy is
-            # crashing on boot (LLM-generated app likely has a bug). It looks
-            # "running" only momentarily between crashes — flag it as error
-            # so the UI stops claiming it's healthy.
-            restart_count = container.attrs.get("RestartCount", 0) or 0
-            if container.status == "restarting" or restart_count > 0:
-                sandbox.status = "error"
-                db.commit()
-            elif container.status != "running":
-                sandbox.status = "stopped"
-                db.commit()
-            else:
-                # Resync container_port from the live container — heals the
-                # DB-says-running-but-port-is-null state that can happen after
-                # a host reboot, a half-failed /start, or worker reattach.
-                # CLI envs intentionally have no HTTP port, so leave them alone.
-                if sandbox.image_tag != "builtin:cli":
-                    port_key = "3000/tcp" if sandbox.image_tag == "builtin:browser" else "8000/tcp"
-                    bindings = container.ports.get(port_key) or []
-                    live_port = 0
-                    if bindings and isinstance(bindings, list):
-                        host_port = bindings[0].get("HostPort") if isinstance(bindings[0], dict) else None
-                        try:
-                            live_port = int(host_port) if host_port else 0
-                        except (TypeError, ValueError):
-                            live_port = 0
-                    if live_port > 0:
-                        if sandbox.container_port != live_port:
-                            sandbox.container_port = live_port
-                            db.commit()
-                    elif not sandbox.container_port:
-                        # Container is up but the port mapping doesn't exist
-                        # (or didn't survive a daemon restart). Demote to
-                        # "stopped" so the UI shows a Start button — /start
-                        # will run a fresh container with a real port binding.
-                        logger.warning(
-                            "[sandbox:get] %s container running but no %s binding "
-                            "(container.ports=%s) — demoting to stopped so user can restart",
-                            env_name, port_key, container.ports,
-                        )
-                        sandbox.status = "stopped"
-                        db.commit()
+            _sync_with_container(sandbox, client.containers.get(sandbox.container_id), db)
         except docker.errors.NotFound:
             sandbox.status = "stopped"
             db.commit()
@@ -351,7 +309,57 @@ def get_sandbox(env_name: str, db: Session = Depends(get_db)):
                     type(exc).__name__,
                     exc,
                 )
+        finally:
+            if client is not None:
+                client.close()
     return sandbox
+
+
+def _sync_with_container(sandbox: SandboxEnvironment, container, db: Session) -> None:
+    """Heal the persisted status and port from what Docker reports right now."""
+    container.reload()
+    # A container that's been respawned by Docker's restart policy is
+    # crashing on boot (LLM-generated app likely has a bug). It looks
+    # "running" only momentarily between crashes — flag it as error
+    # so the UI stops claiming it's healthy.
+    restart_count = container.attrs.get("RestartCount", 0) or 0
+    if container.status == "restarting" or restart_count > 0:
+        sandbox.status = "error"
+        db.commit()
+    elif container.status != "running":
+        sandbox.status = "stopped"
+        db.commit()
+    else:
+        # Resync container_port from the live container — heals the
+        # DB-says-running-but-port-is-null state that can happen after
+        # a host reboot, a half-failed /start, or worker reattach.
+        # CLI envs intentionally have no HTTP port, so leave them alone.
+        if sandbox.image_tag != "builtin:cli":
+            port_key = "3000/tcp" if sandbox.image_tag == "builtin:browser" else "8000/tcp"
+            bindings = container.ports.get(port_key) or []
+            live_port = 0
+            if bindings and isinstance(bindings, list):
+                host_port = bindings[0].get("HostPort") if isinstance(bindings[0], dict) else None
+                try:
+                    live_port = int(host_port) if host_port else 0
+                except (TypeError, ValueError):
+                    live_port = 0
+            if live_port > 0:
+                if sandbox.container_port != live_port:
+                    sandbox.container_port = live_port
+                    db.commit()
+            elif not sandbox.container_port:
+                # Container is up but the port mapping doesn't exist
+                # (or didn't survive a daemon restart). Demote to
+                # "stopped" so the UI shows a Start button — /start
+                # will run a fresh container with a real port binding.
+                logger.warning(
+                    "[sandbox:get] %s container running but no %s binding "
+                    "(container.ports=%s) — demoting to stopped so user can restart",
+                    sandbox.id, port_key, container.ports,
+                )
+                sandbox.status = "stopped"
+                db.commit()
 
 
 @router.post("/{env_name}/start")
@@ -412,8 +420,9 @@ def get_sandbox_logs(env_name: str, tail: int = 200, db: Session = Depends(get_d
         raise HTTPException(status_code=404, detail="Sandbox not found")
     if not sandbox.container_id:
         return {"logs": "", "exit_code": None, "restart_count": 0}
+    import docker, docker.errors
+    client = None
     try:
-        import docker, docker.errors
         client = docker.from_env()
         container = client.containers.get(sandbox.container_id)
         container.reload()
@@ -432,6 +441,9 @@ def get_sandbox_logs(env_name: str, tail: int = 200, db: Session = Depends(get_d
     except Exception as exc:
         logger.exception("[sandbox:logs] failed for %s", env_name)
         raise HTTPException(status_code=500, detail=f"Failed to read container logs: {exc}") from exc
+    finally:
+        if client is not None:
+            client.close()
 
 
 @router.post("/{env_name}/stop", status_code=204)
@@ -470,6 +482,26 @@ def delete_sandbox(env_name: str, db: Session = Depends(get_db)):
     db.commit()
 
 
+def _finished_build_message(env_name: str) -> dict | None:
+    """The terminal progress message for a build that already ended, else None."""
+    with get_session_factory()() as db:
+        sandbox = db.get(SandboxEnvironment, env_name)
+        if sandbox is None:
+            return {"done": True, "error": f"Sandbox '{env_name}' not found"}
+        if sandbox.status in _BUILD_IN_PROGRESS:
+            return None
+        if sandbox.status == "error":
+            return {"done": True, "error": "Build failed — check the worker logs for details."}
+        return {"done": True}
+
+
+def _container_id(env_name: str) -> str | None:
+    """Look up the container in a short session, not one held for a socket's lifetime."""
+    with get_session_factory()() as db:
+        sandbox = db.get(SandboxEnvironment, env_name)
+        return sandbox.container_id if sandbox else None
+
+
 @router.websocket("/ws/progress/{env_name}")
 async def sandbox_progress(websocket: WebSocket, env_name: str):
     """Stream build progress from a Celery worker via Redis pub/sub."""
@@ -487,15 +519,14 @@ async def sandbox_progress(websocket: WebSocket, env_name: str):
         await websocket.close(code=1011)
         return
     try:
-        async for message in pubsub.listen():
-            if message["type"] != "message":
-                continue
-            data = json.loads(message["data"])
-            logger.debug("[ws:progress] → %s: %s", env_name, data)
-            await websocket.send_json(data)
-            if data.get("done"):
-                logger.info("[ws:progress] build done signal received for %s", env_name)
-                break
+        # Checked after subscribing, so a build that ends in between still
+        # reaches this client through the channel.
+        finished = await run_in_threadpool(_finished_build_message, env_name)
+        if finished is not None:
+            await websocket.send_json(finished)
+        else:
+            await relay_pubsub(websocket, pubsub, is_final=lambda data: bool(data.get("done")))
+        logger.info("[ws:progress] build done for %s", env_name)
     except WebSocketDisconnect:
         logger.info("[ws:progress] client disconnected — env_name=%s", env_name)
     except Exception:
@@ -511,7 +542,7 @@ async def sandbox_progress(websocket: WebSocket, env_name: str):
 
 
 @router.websocket("/ws/feed/{env_name}")
-async def sandbox_event_feed(websocket: WebSocket, env_name: str, db: Session = Depends(get_db)):
+async def sandbox_event_feed(websocket: WebSocket, env_name: str):
     """Tail forge:events:<env_name> Redis Stream and push to frontend."""
     try:
         await websocket.accept()
@@ -543,11 +574,11 @@ async def sandbox_event_feed(websocket: WebSocket, env_name: str, db: Session = 
 
 
 @router.websocket("/ws/exec/{env_name}")
-async def sandbox_exec(websocket: WebSocket, env_name: str, db: Session = Depends(get_db)):
+async def sandbox_exec(websocket: WebSocket, env_name: str):
     """Bridge WebSocket to docker exec shell via PTY for full interactive terminal support."""
     await websocket.accept()
-    sandbox = db.get(SandboxEnvironment, env_name)
-    if not sandbox or not sandbox.container_id:
+    container_id = await run_in_threadpool(_container_id, env_name)
+    if not container_id:
         await websocket.send_text("Container not running\r\n")
         await websocket.close()
         return
@@ -563,7 +594,7 @@ async def sandbox_exec(websocket: WebSocket, env_name: str, db: Session = Depend
     fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
 
     proc = _subprocess.Popen(
-        ["docker", "exec", "-it", sandbox.container_id, "/bin/bash"],
+        ["docker", "exec", "-it", container_id, "/bin/bash"],
         stdin=slave_fd,
         stdout=slave_fd,
         stderr=slave_fd,
@@ -608,21 +639,26 @@ async def sandbox_exec(websocket: WebSocket, env_name: str, db: Session = Depend
                     os.write(master_fd, text.encode())
                 except OSError:
                     break
-        except Exception:
+        except WebSocketDisconnect:
             pass
+        except Exception:
+            logger.exception("[sandbox:exec] terminal input failed for %s", env_name)
         finally:
             closed.set()
 
     ws_task = asyncio.create_task(_ws_reader())
-    await closed.wait()
-    ws_task.cancel()
-
-    loop.remove_reader(master_fd)
     try:
-        os.close(master_fd)
-    except OSError:
-        pass
-    proc.terminate()
+        await closed.wait()
+    finally:
+        ws_task.cancel()
+        loop.remove_reader(master_fd)
+        try:
+            os.close(master_fd)
+        except OSError:
+            pass
+        proc.terminate()
+        # The reaping thread finishes even if this handler is cancelled mid-await.
+        await asyncio.to_thread(proc.wait)
     try:
         await websocket.close()
     except RuntimeError:
@@ -630,19 +666,19 @@ async def sandbox_exec(websocket: WebSocket, env_name: str, db: Session = Depend
 
 
 @router.websocket("/ws/activity/{env_name}")
-async def sandbox_activity(websocket: WebSocket, env_name: str, db: Session = Depends(get_db)):
+async def sandbox_activity(websocket: WebSocket, env_name: str):
     """Stream container logs to the Observability panel."""
     await websocket.accept()
-    sandbox = db.get(SandboxEnvironment, env_name)
+    container_id = await run_in_threadpool(_container_id, env_name)
     closed = asyncio.Event()
 
     async def _docker_logs() -> None:
-        if not sandbox or not sandbox.container_id:
+        if not container_id:
             return
         proc = None
         try:
             proc = await asyncio.create_subprocess_exec(
-                "docker", "logs", "--follow", "--timestamps", sandbox.container_id,
+                "docker", "logs", "--follow", "--timestamps", container_id,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
             )
@@ -669,11 +705,12 @@ async def sandbox_activity(websocket: WebSocket, env_name: str, db: Session = De
                 exc,
             )
         finally:
-            try:
-                if proc is not None:
+            if proc is not None:
+                try:
                     proc.terminate()
-            except ProcessLookupError:
-                logger.debug("[sandbox:activity] Docker log process already exited for %s", env_name)
+                except ProcessLookupError:
+                    logger.debug("[sandbox:activity] Docker log process already exited for %s", env_name)
+                await proc.wait()
 
     async def _ws_watcher() -> None:
         try:

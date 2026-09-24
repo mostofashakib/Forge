@@ -1,5 +1,5 @@
 from __future__ import annotations
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 from forge.settings import database_url
 
@@ -16,7 +16,16 @@ def get_engine():
     if _engine is None:
         url = database_url()
         _engine = create_engine(url, connect_args={"check_same_thread": False})
+        if _engine.dialect.name == "sqlite":
+            event.listen(_engine, "connect", _enable_wal)
     return _engine
+
+
+def _enable_wal(dbapi_connection, _record) -> None:
+    """Let the API read while Celery workers write, instead of locking each other out."""
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.close()
 
 
 def get_session_factory():

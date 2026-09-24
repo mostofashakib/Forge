@@ -113,6 +113,62 @@ def test_get_stats_returns_zero_stats_for_empty_env():
     db.close()
 
 
+
+def _seed_failed_episodes(db, count: int) -> None:
+    from backend.app.models import Episode, EpisodeStep
+    for i in range(count):
+        ep_id = f"ep_fail{i:04d}"
+        db.add(Episode(
+            id=ep_id, env_name="stats_env", task_name="t", seed=i, agent_id="a",
+            status="completed", total_steps=2, total_reward=0.0, passed=False,
+            started_at=datetime.now(timezone.utc),
+        ))
+        # Step 1 fails "late_check" but step 0 fails first: order decides the cluster.
+        for index, check in ((1, "late_check"), (0, "first_check")):
+            db.add(EpisodeStep(
+                episode_id=ep_id, step_index=index, action="{}", reward=0.0,
+                verifier_results=json.dumps([{"checks": [{"name": check, "passed": False}]}]),
+                diff="{}",
+                events=json.dumps([{"type": "policy_violation"}] if i == 0 else []),
+                state_hash_before="a", state_hash_after="b",
+                terminated=index == 1, truncated=False,
+            ))
+    db.commit()
+
+
+def test_get_stats_clusters_by_first_failed_check_in_step_order():
+    from backend.app.services import episode_service
+    db = make_memory_db()
+    _seed_failed_episodes(db, 3)
+    stats = episode_service.get_stats("stats_env", db)
+    assert stats["policy_violation_count"] == 1
+    assert [(c["check_name"], c["count"]) for c in stats["top_failures"]] == [("first_check", 3)]
+    db.close()
+
+
+def test_get_stats_query_count_is_independent_of_failed_episodes():
+    from sqlalchemy import event
+    from backend.app.services import episode_service
+    db = make_memory_db()
+    _seed_failed_episodes(db, 6)
+    db.expunge_all()
+    selects: list[str] = []
+
+    def _record(_conn, _cursor, statement, *_args):
+        if statement.lstrip().upper().startswith("SELECT"):
+            selects.append(statement)
+
+    engine = db.get_bind()
+    event.listen(engine, "before_cursor_execute", _record)
+    try:
+        episode_service.get_stats("stats_env", db)
+    finally:
+        event.remove(engine, "before_cursor_execute", _record)
+    assert len(selects) <= 2, selects
+    assert not any("episode_steps.diff" in s for s in selects)
+    db.close()
+
+
 # --- REST API tests ---
 import pytest
 from fastapi.testclient import TestClient
@@ -312,3 +368,28 @@ def test_websocket_stream_running_episode(api_client, monkeypatch):
 
     assert msg1["type"] == "step"
     assert msg2["type"] == "complete"
+
+
+def test_open_episode_stream_does_not_hold_a_db_connection(api_client):
+    import asyncio
+    from backend.app import database
+    from backend.app.models import Episode
+    from backend.app.services import runner_service
+
+    episode_id = "ep_000000aa"
+    with database.get_session_factory()() as db:
+        db.add(Episode(
+            id=episode_id, env_name="test_env", task_name="t", seed=0xAA, agent_id="a",
+            status="running", total_steps=0, total_reward=0.0, passed=False,
+            started_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        ))
+        db.commit()
+    runner_service.episode_queues[episode_id] = asyncio.Queue()
+    runner_service.episode_queues[episode_id].put_nowait({"type": "step", "step_index": 0})
+
+    try:
+        with api_client.websocket_connect(f"/api/episodes/{episode_id}/stream") as ws:
+            assert ws.receive_json()["type"] == "step"
+            assert database.get_engine().pool.checkedout() == 0
+    finally:
+        runner_service.episode_queues.pop(episode_id, None)

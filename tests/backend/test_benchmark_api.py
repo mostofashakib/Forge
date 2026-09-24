@@ -225,3 +225,37 @@ def test_run_benchmark_task_no_redis(monkeypatch, tmp_path):
         run = db.get(BenchmarkRun, "bm_tasktest01")
         assert run.status == "failed"
         assert run.error is not None
+
+
+def test_progress_socket_sees_a_run_that_finishes_while_subscribing(api_client):
+    import asyncio
+    from backend.app import database
+
+    with database.get_session_factory()() as session:
+        session.add(BenchmarkRun(
+            id="bm_race", status="running", domains="d", depth=1, seeds=1,
+            output_dir="out", created_at=datetime.now(timezone.utc),
+        ))
+        session.commit()
+
+    class _PubSub:
+        async def subscribe(self, _channel):
+            # The run completes, and publishes, before this subscription lands.
+            with database.get_session_factory()() as session:
+                session.get(BenchmarkRun, "bm_race").status = "done"
+                session.commit()
+
+        async def unsubscribe(self, _channel):
+            pass
+
+        async def listen(self):
+            return
+            yield
+
+    redis_client = MagicMock()
+    redis_client.pubsub.return_value = _PubSub()
+    redis_client.aclose = MagicMock(side_effect=lambda: asyncio.sleep(0))
+
+    with patch("redis.asyncio.from_url", return_value=redis_client):
+        with api_client.websocket_connect("/api/benchmark/ws/progress/bm_race") as ws:
+            assert ws.receive_json() == {"done": True}

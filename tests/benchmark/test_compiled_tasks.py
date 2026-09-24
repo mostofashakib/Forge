@@ -105,7 +105,7 @@ def test_collector_produces_pending_runs_for_generated_env(tmp_path):
     provider = CompiledTaskProvider(loader=lambda name: ci)
     cfg = CollectionConfig(domains=["crm_env"], depth=5, seeds=2, output_dir=tmp_path)
     collector = DataCollector(cfg, task_provider=provider)
-    runs = collector._pending_runs(CollectionCheckpoint(output_dir=tmp_path))
+    runs = collector.pending_runs(CollectionCheckpoint(output_dir=tmp_path))
     assert [(r["domain"], r["task_name"], r["seed"]) for r in runs] == [
         ("crm_env", "close_ticket", 0),
         ("crm_env", "close_ticket", 1),
@@ -116,7 +116,7 @@ def test_collector_no_pending_runs_when_env_has_no_tasks(tmp_path):
     provider = CompiledTaskProvider(loader=lambda name: None)
     cfg = CollectionConfig(domains=["mystery_env"], depth=5, seeds=3, output_dir=tmp_path)
     collector = DataCollector(cfg, task_provider=provider)
-    assert collector._pending_runs(CollectionCheckpoint(output_dir=tmp_path)) == []
+    assert collector.pending_runs(CollectionCheckpoint(output_dir=tmp_path)) == []
 
 
 # ---------------------------------------------------------------------------

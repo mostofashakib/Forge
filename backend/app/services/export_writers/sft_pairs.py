@@ -2,7 +2,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from sqlalchemy.orm import Session
-from ._queries import get_episodes, get_steps
+from ._queries import get_episodes, get_steps_by_episode
 from .common import action_to_command
 
 
@@ -13,11 +13,12 @@ def write(env_name: str, db: Session, out_dir: Path) -> None:
     Compatible with OpenAI fine-tuning, TRL SFTTrainer, and Axolotl.
     """
     episodes = get_episodes(env_name, db)
+    steps_by_episode = get_steps_by_episode(env_name, db)
     with (out_dir / "sft_pairs.jsonl").open("w") as f:
         for ep in episodes:
             if not ep.passed:
                 continue
-            steps = get_steps(ep.id, db)
+            steps = steps_by_episode.get(ep.id, [])
             if not steps:
                 continue
             command_history: list[str] = []

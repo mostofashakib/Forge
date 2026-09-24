@@ -312,7 +312,7 @@ async def test_websocket_feed_tolerates_disconnect_before_accept():
     )
 
     with patch("forge.envgen.telemetry.stream.StreamConsumer") as consumer:
-        await sandbox_event_feed(websocket, "fast_unmount", db=MagicMock())
+        await sandbox_event_feed(websocket, "fast_unmount")
 
     consumer.assert_not_called()
 
@@ -334,7 +334,7 @@ async def test_websocket_feed_tolerates_disconnect_during_send():
     consumer.tail.return_value = events()
     consumer.close = AsyncMock()
     with patch("forge.envgen.telemetry.stream.StreamConsumer", return_value=consumer):
-        await sandbox_event_feed(websocket, "closed_during_send", db=MagicMock())
+        await sandbox_event_feed(websocket, "closed_during_send")
 
     consumer.close.assert_awaited_once()
 

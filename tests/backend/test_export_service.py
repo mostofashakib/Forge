@@ -80,7 +80,7 @@ def test_write_rewards(db_with_episodes, tmp_path):
 
 
 def test_sft_pairs_passed_only(db_with_episodes, tmp_path, monkeypatch):
-    monkeypatch.setattr("backend.app.services.export_service.BASE_DIR", tmp_path)
+    monkeypatch.setenv("FORGE_GENERATED_ENVS_DIR", str(tmp_path))
     job = ExportJob(
         id="ex_sft00001",
         env_name="test_env",
@@ -109,7 +109,7 @@ def test_write_trajectories_for_unknown_env_is_empty(db_with_episodes, tmp_path)
 def test_sft_pairs_exclude_failed_episodes(db_with_episodes, tmp_path, monkeypatch):
     # False-positive guard: failed episodes (i=1,3) must NOT contribute SFT
     # pairs even though they exist in the same env.
-    monkeypatch.setattr("backend.app.services.export_service.BASE_DIR", tmp_path)
+    monkeypatch.setenv("FORGE_GENERATED_ENVS_DIR", str(tmp_path))
     job = ExportJob(
         id="ex_sftneg01",
         env_name="test_env",
@@ -128,7 +128,7 @@ def test_sft_pairs_exclude_failed_episodes(db_with_episodes, tmp_path, monkeypat
 
 
 def test_preference_pairs(db_with_episodes, tmp_path, monkeypatch):
-    monkeypatch.setattr("backend.app.services.export_service.BASE_DIR", tmp_path)
+    monkeypatch.setenv("FORGE_GENERATED_ENVS_DIR", str(tmp_path))
     job = ExportJob(
         id="ex_pref0001",
         env_name="test_env",
@@ -146,3 +146,70 @@ def test_preference_pairs(db_with_episodes, tmp_path, monkeypatch):
         assert "chosen" in pair
         assert "rejected" in pair
         assert pair["chosen"]["total_reward"] >= pair["rejected"]["total_reward"]
+
+
+def _count_statements(session):
+    from sqlalchemy import event
+
+    statements: list[str] = []
+
+    def _record(_conn, _cursor, statement, *_args):
+        statements.append(statement)
+
+    engine = session.get_bind()
+    event.listen(engine, "before_cursor_execute", _record)
+    return statements, lambda: event.remove(engine, "before_cursor_execute", _record)
+
+
+@pytest.mark.parametrize("fmt", [
+    "trajectories", "rewards", "verifier_results", "sft_pairs",
+    "preference_pairs", "grpo_rollouts", "failure_dataset",
+])
+def test_writer_query_count_is_independent_of_episode_count(db_with_episodes, tmp_path, fmt):
+    from backend.app.services.export_writers import WRITERS
+
+    statements, stop = _count_statements(db_with_episodes)
+    try:
+        WRITERS[fmt]("test_env", db_with_episodes, tmp_path)
+    finally:
+        stop()
+    selects = [s for s in statements if s.lstrip().upper().startswith("SELECT")]
+    assert len(selects) <= 2, selects
+
+
+def test_writers_do_not_load_unused_step_blobs(db_with_episodes, tmp_path):
+    from backend.app.services.export_writers import WRITERS
+
+    statements, stop = _count_statements(db_with_episodes)
+    try:
+        for writer in WRITERS.values():
+            writer("test_env", db_with_episodes, tmp_path)
+    finally:
+        stop()
+    loaded = " ".join(statements)
+    assert "episode_steps.diff" not in loaded
+    assert "episode_steps.events" not in loaded
+
+
+def test_trajectory_steps_stay_grouped_and_ordered(db_with_episodes, tmp_path):
+    _write_trajectories("test_env", db_with_episodes, tmp_path)
+    for line in (tmp_path / "trajectories.jsonl").read_text().splitlines():
+        record = json.loads(line)
+        assert [s["step_index"] for s in record["steps"]] == [0, 1, 2]
+
+
+def test_run_export_honours_envs_dir_set_after_import(db_with_episodes, tmp_path, monkeypatch):
+    target = tmp_path / "configured"
+    monkeypatch.setenv("FORGE_GENERATED_ENVS_DIR", str(target))
+    job = ExportJob(
+        id="ex_cfg00001",
+        env_name="test_env",
+        formats=json.dumps(["rewards"]),
+        status="pending",
+        created_at=datetime.now(timezone.utc),
+    )
+    db_with_episodes.add(job)
+    db_with_episodes.commit()
+    run_export("ex_cfg00001", db_with_episodes)
+    db_with_episodes.refresh(job)
+    assert Path(job.output_path) == target / "test_env" / "exports" / "ex_cfg00001"

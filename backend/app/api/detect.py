@@ -15,9 +15,7 @@ still returned.
 """
 from __future__ import annotations
 
-import json
 import logging
-from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -25,7 +23,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from backend.app.database import get_db
-from backend.app.models import AgentEpisode, AgentRun, SandboxEnvironment
+from backend.app.models import AgentEpisode, SandboxEnvironment
+from backend.app.services.episode_sample import load_trajectory_steps, recent_completed_episodes
 from forge.validation.detectors import EpisodeFeatures, analyze_episodes
 
 logger = logging.getLogger(__name__)
@@ -48,7 +47,7 @@ class _Finding(BaseModel):
     ]
     severity: Literal["high", "medium", "low"]
     episode_ids: list[str] = Field(
-        description="Short IDs (first 8 chars) of the episodes involved."
+        description="Ids of the episodes involved, exactly as shown after \"Episode\"."
     )
     description: str = Field(description="One sentence stating what was detected.")
     evidence: str = Field(description="Specific step or pattern that triggered this finding.")
@@ -110,22 +109,6 @@ class DetectionPrompts:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _load_steps(ep: AgentEpisode, max_steps: int = _MAX_STEPS) -> list[dict]:
-    if not ep.jsonl_path or not Path(ep.jsonl_path).exists():
-        return []
-    try:
-        lines = Path(ep.jsonl_path).read_text(encoding="utf-8").strip().splitlines()
-        steps = []
-        for line in lines:
-            rec = json.loads(line)
-            if rec.get("type") == "episode_summary":
-                continue
-            steps.append(rec)
-        return steps[-max_steps:]
-    except Exception:
-        return []
-
-
 def _episode_features(
     episodes: list[AgentEpisode],
     steps_map: dict[str, list[dict]],
@@ -168,7 +151,7 @@ def _build_prompt(
                 f"  reward={s.get('reward', 0):.2f}"
             )
         header = (
-            f"Episode {ep.id[:8]}"
+            f"Episode {ep.id}"
             f" steps={ep.total_steps}"
             f" reward={ep.total_reward:.3f}"
             f" score={ep.final_objective_score:.3f}"
@@ -188,22 +171,8 @@ def detect_issues(env_name: str, db: Session = Depends(get_db)):
     if sb is None:
         raise HTTPException(status_code=404, detail="Sandbox not found")
 
-    runs = (
-        db.query(AgentRun)
-        .filter(AgentRun.env_name == env_name)
-        .order_by(AgentRun.created_at.desc())
-        .limit(10)
-        .all()
-    )
-    run_ids = [r.id for r in runs]
-
-    episodes = (
-        db.query(AgentEpisode)
-        .filter(AgentEpisode.run_id.in_(run_ids), AgentEpisode.status == "completed")
-        .order_by(AgentEpisode.completed_at.asc())
-        .limit(_MAX_EPISODES)
-        .all()
-    )
+    sample = recent_completed_episodes(env_name, db, limit=_MAX_EPISODES, oldest_first=True)
+    episodes = sample.episodes
 
     if not episodes:
         raise HTTPException(
@@ -211,7 +180,7 @@ def detect_issues(env_name: str, db: Session = Depends(get_db)):
             detail="No completed episodes found. Run agents first.",
         )
 
-    steps_map = {ep.id: _load_steps(ep) for ep in episodes}
+    steps_map = {ep.id: load_trajectory_steps(ep, max_steps=_MAX_STEPS) for ep in episodes}
 
     # Drift, collapse, outliers, and short-trajectory reward hacking are
     # statistics. Computing them is exact, instant, free, and reproducible —
@@ -220,7 +189,7 @@ def detect_issues(env_name: str, db: Session = Depends(get_db)):
 
     trajectory_text = _build_prompt(episodes, steps_map)
 
-    objective = runs[0].objective if runs else "unknown"
+    objective = sample.latest_objective or "unknown"
     user = (
         f"Environment: {env_name}  ({sb.env_type or 'cli'})\n"
         f"Objective: {objective}\n"

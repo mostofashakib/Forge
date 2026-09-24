@@ -7,11 +7,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, model_validator
 from typing import Literal
 from sqlalchemy.orm import Session
 
-from backend.app.database import get_db
+from backend.app.api._pubsub_relay import relay_pubsub
+from backend.app.database import get_db, get_session_factory
 from backend.app.models import BenchmarkRun
 from forge.paths import confined_relative_path
 from forge.settings import redis_url
@@ -215,25 +217,24 @@ def download_benchmark_csv(run_id: str, db: Session = Depends(get_db)):
     )
 
 
+def _finished_run_message(run_id: str) -> dict | None:
+    """The terminal progress message for a run that already ended, else None."""
+    with get_session_factory()() as db:
+        run = db.get(BenchmarkRun, run_id)
+        if run is None:
+            return {"error": "run not found"}
+        if run.status == "done":
+            return {"done": True}
+        if run.status == "failed":
+            return {"error": run.error or "run failed"}
+        return None
+
+
 @router.websocket("/ws/progress/{run_id}")
-async def benchmark_progress_ws(websocket: WebSocket, run_id: str, db: Session = Depends(get_db)):
+async def benchmark_progress_ws(websocket: WebSocket, run_id: str):
     """Stream benchmark run progress from Celery worker via Redis pub/sub."""
     import redis
     await websocket.accept()
-
-    run = db.get(BenchmarkRun, run_id)
-    if run is None:
-        await websocket.send_json({"error": "run not found"})
-        await websocket.close()
-        return
-    if run.status == "done":
-        await websocket.send_json({"done": True})
-        await websocket.close()
-        return
-    if run.status == "failed":
-        await websocket.send_json({"error": run.error or "run failed"})
-        await websocket.close()
-        return
 
     redis_connection_url = redis_url()
     channel = f"forge:benchmark:{run_id}"
@@ -248,13 +249,17 @@ async def benchmark_progress_ws(websocket: WebSocket, run_id: str, db: Session =
         return
 
     try:
-        async for message in pubsub.listen():
-            if message["type"] != "message":
-                continue
-            data = json.loads(message["data"])
-            await websocket.send_json(data)
-            if data.get("done") or data.get("error"):
-                break
+        # Checked after subscribing, so a run that ends in between still
+        # reaches this client through the channel.
+        finished = await run_in_threadpool(_finished_run_message, run_id)
+        if finished is not None:
+            await websocket.send_json(finished)
+        else:
+            await relay_pubsub(
+                websocket,
+                pubsub,
+                is_final=lambda data: bool(data.get("done") or data.get("error")),
+            )
     except WebSocketDisconnect:
         logger.info("[ws:benchmark] client disconnected — run_id=%s", run_id)
     except Exception:

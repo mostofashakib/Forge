@@ -2,6 +2,8 @@
 from __future__ import annotations
 import asyncio
 import secrets
+import threading
+from collections.abc import Callable
 from pathlib import Path
 from forge.settings import generated_envs_root
 from forge.runtime.policy import RandomPolicy
@@ -92,9 +94,40 @@ async def _run_episode(
     jsonl_path: Path,
     prefix_actions: list[dict],
 ) -> None:
+    """Play the episode on a worker thread so env work never blocks the event loop."""
     queue = episode_queues.get(episode_id)
-    SessionFactory = get_session_factory()
-    db = SessionFactory()
+    loop = asyncio.get_running_loop()
+    stop = threading.Event()
+
+    def emit(event: dict) -> None:
+        if queue is not None:
+            loop.call_soon_threadsafe(queue.put_nowait, event)
+
+    try:
+        await asyncio.to_thread(
+            _play_episode, episode_id, env_name, seed, jsonl_path, prefix_actions, emit, stop
+        )
+    except asyncio.CancelledError:
+        stop.set()
+        raise
+    except Exception as exc:
+        emit({"type": "error", "message": str(exc)})
+    finally:
+        await asyncio.sleep(0)  # let queued events land before the queue is dropped
+        episode_tasks.pop(episode_id, None)
+        episode_queues.pop(episode_id, None)
+
+
+def _play_episode(
+    episode_id: str,
+    env_name: str,
+    seed: int,
+    jsonl_path: Path,
+    prefix_actions: list[dict],
+    emit: Callable[[dict], None],
+    stop: threading.Event,
+) -> None:
+    db = get_session_factory()()
     try:
         jsonl_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -110,46 +143,39 @@ async def _run_episode(
 
         obs, info = env.reset(seed=seed)
         terminated = truncated = False
+        step_count = 0
 
         for action in prefix_actions:
             # Consume the deterministic policy choice that the original run
             # made at this step, then replay the recorded action exactly.
             policy.act(obs)
             obs, _reward, terminated, truncated, _step_info = env.step(action)
+            step_count += 1
             if terminated or truncated:
                 break
 
         while not (terminated or truncated):
+            if stop.is_set():
+                return
             action = policy.act(obs)
             obs, reward, terminated, truncated, step_info = env.step(action)
-
-            event = {
+            step_count += 1
+            emit({
                 "type": "step",
-                "step_index": env._step_count - 1,
+                "step_index": step_count - 1,
                 "action": action,
                 "reward": reward,
                 "diff": step_info.get("reward_breakdown", {}),
                 "verifier_results": step_info.get("verifier_results", []),
                 "events": step_info.get("events", []),
                 "terminated": terminated,
-            }
-            if queue:
-                await queue.put(event)
-            await asyncio.sleep(0)
+            })
 
-        complete_event = {
+        emit({
             "type": "complete",
-            "total_reward": env._total_reward,
+            "total_reward": env.finalize_episode().total_reward,
             "passed": terminated,
-            "total_steps": env._step_count,
-        }
-        if queue:
-            await queue.put(complete_event)
-        await asyncio.sleep(0)  # yield so consumers can drain before cleanup
-    except Exception as exc:
-        if queue:
-            await queue.put({"type": "error", "message": str(exc)})
+            "total_steps": step_count,
+        })
     finally:
         db.close()
-        episode_tasks.pop(episode_id, None)
-        episode_queues.pop(episode_id, None)  # safe: consumer had a chance to drain above

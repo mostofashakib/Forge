@@ -8,72 +8,23 @@ from __future__ import annotations
 
 import json
 import logging
-from pathlib import Path
+from dataclasses import asdict
 from typing import Literal
-
-from forge.reward_presets import RewardPreset
-
-_ENVS_ROOT = Path("generated_envs")
-_VALID_SCORING_METHODS = ("llm", "embeddings", "rouge", "bleu")
-
-
-def _reward_config_path(env_name: str) -> Path:
-    return _ENVS_ROOT / env_name / "reward_config.json"
-
-
-def _load_scoring_methods(env_name: str) -> list[str]:
-    path = _reward_config_path(env_name)
-    if path.exists():
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            # Support both old single-string format and new list format.
-            if "scoring_methods" in data:
-                return data["scoring_methods"] or ["llm"]
-            if "scoring_method" in data:
-                return [data["scoring_method"]]
-        except Exception:
-            pass
-    return ["llm"]
-
-
-def _load_reward_preset(env_name: str) -> str:
-    path = _reward_config_path(env_name)
-    if path.exists():
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            return RewardPreset(
-                data.get("reward_preset", RewardPreset.FULL_LAYERED_PARTIAL)
-            ).value
-        except Exception:
-            pass
-    return RewardPreset.FULL_LAYERED_PARTIAL.value
-
-
-def _save_scoring_methods(env_name: str, methods: list[str]) -> None:
-    path = _reward_config_path(env_name)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    data = {"reward_preset": _load_reward_preset(env_name), "scoring_methods": methods}
-    path.write_text(json.dumps(data), encoding="utf-8")
-
-
-def _save_reward_preset(env_name: str, preset: RewardPreset) -> None:
-    path = _reward_config_path(env_name)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    data = {
-        "reward_preset": preset.value,
-        "scoring_methods": _load_scoring_methods(env_name),
-    }
-    path.write_text(json.dumps(data), encoding="utf-8")
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from backend.app.database import get_db
-from backend.app.models import AgentEpisode, AgentRun, SandboxEnvironment
+from backend.app.services.episode_sample import load_trajectory_steps, recent_completed_episodes
+from backend.app.services.reward_config import load_reward_config, save_reward_config
+from forge.reward_presets import RewardPreset
+from backend.app.models import AgentEpisode, SandboxEnvironment
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/sandbox", tags=["evaluate"])
+
+_VALID_SCORING_METHODS = ("llm", "embeddings", "rouge", "bleu")
 
 # ---------------------------------------------------------------------------
 # Request / response schemas
@@ -130,29 +81,12 @@ _MAX_EPISODES = 5
 _MAX_STEPS_PER_EP = 15
 
 
-def _load_trajectory_summary(ep: AgentEpisode) -> list[dict]:
-    """Return a compact step list (up to _MAX_STEPS_PER_EP) from the JSONL."""
-    if not ep.jsonl_path or not Path(ep.jsonl_path).exists():
-        return []
-    try:
-        lines = Path(ep.jsonl_path).read_text(encoding="utf-8").strip().splitlines()
-        steps = []
-        for line in lines:
-            rec = json.loads(line)
-            if rec.get("type") == "episode_summary":
-                continue
-            steps.append(rec)
-        return steps[-_MAX_STEPS_PER_EP:]
-    except Exception:
-        return []
-
-
 def _build_trajectory_text(episodes: list[tuple[AgentEpisode, list[dict]]]) -> str:
     """Format episode summaries for the LLM prompt."""
     parts: list[str] = []
     for ep, steps in episodes:
         header = (
-            f"Episode {ep.id[:8]} "
+            f"Episode {ep.id} "
             f"(steps={ep.total_steps}, reward={ep.total_reward:.3f}, "
             f"termination={ep.termination_reason or 'unknown'})"
         )
@@ -175,7 +109,7 @@ Given policy requirements (natural-language rules) and a sample of agent traject
 identify concrete violations.
 
 For each violation produce:
-  - episode_id: first 8 chars of the episode UUID
+  - episode_id: the episode id exactly as shown after "Episode"
   - step_index: integer index of the offending step
   - command: the command or action that violated the rule (max 120 chars)
   - rule_violated: short phrase naming the rule that was broken
@@ -193,7 +127,7 @@ Given reward requirements (natural-language criteria) and episode summaries, pro
 re-evaluation score for each episode between 0.0 (terrible) and 1.0 (perfect).
 
 For each episode produce:
-  - episode_id: first 8 chars of the episode UUID
+  - episode_id: the episode id exactly as shown after "Episode"
   - new_score: float 0.0–1.0 under the new requirements
   - delta: new_score minus the original reward (can be negative)
   - reasoning: one sentence explaining the score
@@ -280,11 +214,11 @@ def _run_reward_eval_ml(
         try:
             raw = scorer.score(requirements, candidate)
         except Exception as exc:
-            logger.warning("[evaluate] ML score failed for ep %s: %s", ep.id[:8], exc)
+            logger.warning("[evaluate] ML score failed for ep %s: %s", ep.id, exc)
             raw = 0.0
         delta = round(raw - (ep.total_reward or 0.0), 4)
         reevals.append(_RewardReevaluation(
-            episode_id=ep.id[:8],
+            episode_id=ep.id,
             new_score=round(raw, 4),
             delta=delta,
             reasoning=f"Similarity score ({method}) between requirements and trajectory.",
@@ -303,26 +237,30 @@ def _run_reward_eval_multi(
     episodes: list[tuple[AgentEpisode, list[dict]]],
     methods: list[str],
 ) -> tuple[_RewardEvalResult, dict[str, list[float]]]:
-    """Run all selected methods and return averaged scores plus per-method breakdown."""
-    per_method: dict[str, list[float]] = {}
+    """Run all selected methods and return averaged scores plus per-method breakdown.
 
+    Scores are matched to episodes by id: the LLM may reorder or skip episodes,
+    and an episode no method scored is left out rather than given a zero.
+    """
+    scores_by_method: dict[str, dict[str, float]] = {}
     for method in methods:
         if method == "llm":
             result = _run_reward_eval(requirements, episodes)
-            per_method["llm"] = [r.new_score for r in result.reevaluations]
         else:
             result = _run_reward_eval_ml(requirements, episodes, method)
-            per_method[method] = [r.new_score for r in result.reevaluations]
+        scores_by_method[method] = {r.episode_id: r.new_score for r in result.reevaluations}
 
     n_eps = len(episodes)
     merged: list[_RewardReevaluation] = []
-    for i, (ep, _) in enumerate(episodes):
-        scores_for_ep = [per_method[m][i] for m in methods if i < len(per_method.get(m, []))]
-        avg_score = sum(scores_for_ep) / len(scores_for_ep) if scores_for_ep else 0.0
+    for ep, _ in episodes:
+        scored = [(m, scores_by_method[m][ep.id]) for m in methods if ep.id in scores_by_method[m]]
+        if not scored:
+            continue
+        avg_score = sum(score for _, score in scored) / len(scored)
         delta = round(avg_score - (ep.total_reward or 0.0), 4)
-        factors = [f"{m}={per_method[m][i]:.3f}" for m in methods if i < len(per_method.get(m, []))]
+        factors = [f"{m}={score:.3f}" for m, score in scored]
         merged.append(_RewardReevaluation(
-            episode_id=ep.id[:8],
+            episode_id=ep.id,
             new_score=round(avg_score, 4),
             delta=delta,
             reasoning=f"Averaged across {len(methods)} scoring method(s).",
@@ -334,6 +272,10 @@ def _run_reward_eval_multi(
         f"Multi-method re-evaluation ({', '.join(methods)}) across {n_eps} episodes. "
         f"Avg score: {overall_avg:.3f}."
     )
+    per_method = {
+        m: [scores[ep.id] for ep, _ in episodes if ep.id in scores]
+        for m, scores in scores_by_method.items()
+    }
     return _RewardEvalResult(reevaluations=merged, summary=summary), per_method
 
 
@@ -349,8 +291,7 @@ def get_evaluate(env_name: str, db: Session = Depends(get_db)):
     return {
         "policy_requirements": sb.policy_requirements or "",
         "reward_requirements": sb.reward_requirements or "",
-        "scoring_methods": _load_scoring_methods(env_name),
-        "reward_preset": _load_reward_preset(env_name),
+        **asdict(load_reward_config(env_name)),
     }
 
 
@@ -376,9 +317,9 @@ def update_evaluate(
             )
         if not body.scoring_methods:
             raise HTTPException(status_code=422, detail="At least one scoring method required.")
-        _save_scoring_methods(env_name, body.scoring_methods)
+        save_reward_config(env_name, scoring_methods=body.scoring_methods)
     if body.reward_preset is not None:
-        _save_reward_preset(env_name, body.reward_preset)
+        save_reward_config(env_name, reward_preset=body.reward_preset.value)
     db.commit()
     return {"status": "saved"}
 
@@ -405,23 +346,7 @@ def run_evaluate(
             detail=f"No {body.eval_type} requirements configured. Save requirements first.",
         )
 
-    # Load a sample of recent completed agent episodes.
-    runs = (
-        db.query(AgentRun)
-        .filter(AgentRun.env_name == env_name)
-        .order_by(AgentRun.created_at.desc())
-        .limit(10)
-        .all()
-    )
-    run_ids = [r.id for r in runs]
-
-    eps = (
-        db.query(AgentEpisode)
-        .filter(AgentEpisode.run_id.in_(run_ids), AgentEpisode.status == "completed")
-        .order_by(AgentEpisode.completed_at.desc())
-        .limit(_MAX_EPISODES)
-        .all()
-    )
+    eps = recent_completed_episodes(env_name, db, limit=_MAX_EPISODES).episodes
 
     if not eps:
         raise HTTPException(
@@ -429,7 +354,7 @@ def run_evaluate(
             detail="No completed episodes found for this environment. Run agents first.",
         )
 
-    episode_data = [(ep, _load_trajectory_summary(ep)) for ep in eps]
+    episode_data = [(ep, load_trajectory_steps(ep, max_steps=_MAX_STEPS_PER_EP)) for ep in eps]
 
     if body.eval_type == "policy":
         result = _run_policy_eval(requirements, episode_data)
@@ -440,17 +365,15 @@ def run_evaluate(
             "summary": result.summary,
         }
     else:
-        effective_methods = body.scoring_methods or _load_scoring_methods(env_name)
+        effective_methods = body.scoring_methods or load_reward_config(env_name).scoring_methods
         result, per_method_scores = _run_reward_eval_multi(requirements, episode_data, effective_methods)
+        original_rewards = {ep.id: ep.total_reward for ep in eps}
         return {
             "eval_type": "reward",
             "scoring_methods": effective_methods,
             "episodes_evaluated": len(eps),
             "reevaluations": [
-                {**r.model_dump(), "original_reward": next(
-                    (ep.total_reward for ep in eps if ep.id[:8] == r.episode_id),
-                    None,
-                )}
+                {**r.model_dump(), "original_reward": original_rewards.get(r.episode_id)}
                 for r in result.reevaluations
             ],
             "per_method_scores": per_method_scores,
