@@ -53,9 +53,20 @@ def test_collector_skips_done_tasks(tmp_path):
     ckpt.mark_done("crm_env", "close_ticket", 1)
 
     collector = DataCollector(cfg, task_provider=_provider_with("crm_env", ["close_ticket"]))
-    runs = list(collector._pending_runs(ckpt))
+    runs = list(collector.pending_runs(ckpt))
     # All seeds for close_ticket are done — nothing to run
     assert not any(
         r["domain"] == "crm_env" and r["task_name"] == "close_ticket"
         for r in runs
     )
+
+
+def test_corrupt_checkpoint_is_reported_not_silently_reset(tmp_path, caplog):
+    import logging
+    from forge.benchmark.data_collector import CollectionCheckpoint
+
+    (tmp_path / "checkpoint.json").write_text("{broken")
+    with caplog.at_level(logging.WARNING):
+        checkpoint = CollectionCheckpoint(output_dir=tmp_path)
+    assert not checkpoint.is_done("d", "t", 0)
+    assert "checkpoint.json" in caplog.text

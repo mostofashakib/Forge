@@ -25,8 +25,10 @@ class CollectionCheckpoint:
             try:
                 data = json.loads(self._path.read_text())
                 self._done = set(data.get("done", []))
-            except Exception:
-                pass
+            except (OSError, json.JSONDecodeError, AttributeError) as exc:
+                logger.warning(
+                    "[collector] unreadable %s, re-running every episode: %s", self._path, exc
+                )
 
     def _key(self, domain: str, task_name: str, seed: int) -> str:
         return f"{domain}::{task_name}::{seed}"
@@ -48,7 +50,7 @@ class DataCollector:
         # (see forge.benchmark.compiled_tasks.CompiledTaskProvider).
         self._provider = task_provider
 
-    def _pending_runs(self, checkpoint: CollectionCheckpoint) -> list[dict]:
+    def pending_runs(self, checkpoint: CollectionCheckpoint) -> list[dict]:
         runs = []
         for domain in self._cfg.domains:
             tasks = self._provider.tasks_for(domain=domain, depth=self._cfg.depth)
@@ -74,7 +76,7 @@ class DataCollector:
         output_dir = self._cfg.output_dir
         output_dir.mkdir(parents=True, exist_ok=True)
         checkpoint = CollectionCheckpoint(output_dir=output_dir)
-        pending = self._pending_runs(checkpoint)
+        pending = self.pending_runs(checkpoint)
         logger.info("[collector] %d episodes pending", len(pending))
 
         for run in pending:

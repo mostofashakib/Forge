@@ -731,3 +731,69 @@ def test_cross_run_episode_export_merges_trajectories(client, tmp_path):
     assert len(all_steps) == 2
     run_tags = {s["run_tag"] for s in all_steps}
     assert run_tags == {"run0", "run1"}
+
+
+def _add_run(run_id: str, env_name: str, num_episodes: int = 1) -> None:
+    from backend.app import database
+    with database.get_session_factory()() as db:
+        db.add(AgentRun(
+            id=run_id, env_name=env_name, agent_id="random", objective="o",
+            num_episodes=num_episodes, status="running", episodes_completed=0,
+            created_at=datetime.now(timezone.utc),
+        ))
+        db.commit()
+
+
+def test_episode_for_a_lost_container_still_counts_toward_the_run(client):
+    from backend.app import database
+    from backend.app.worker.tasks import run_container_episode_task
+
+    _add_running_general_sandbox(client, "lost_env")
+    with database.get_session_factory()() as db:
+        db.get(SandboxEnvironment, "lost_env").container_id = None
+        db.commit()
+    _add_run("run_lost", "lost_env")
+
+    run_container_episode_task("run_lost", 0, 0)
+
+    with database.get_session_factory()() as db:
+        run = db.get(AgentRun, "run_lost")
+        assert run.episodes_completed == 1
+        assert run.status == "completed"
+        episodes = db.query(AgentEpisode).filter_by(run_id="run_lost").all()
+        assert [ep.status for ep in episodes] == ["failed"]
+        assert "no running container" in episodes[0].termination_reason
+
+
+def test_agent_run_dispatch_failure_marks_run_failed(client):
+    _add_running_general_sandbox(client, "dispatch_env")
+    with patch(
+        "backend.app.worker.tasks.run_container_run_task.delay",
+        side_effect=RuntimeError("broker down"),
+    ):
+        resp = client.post(
+            "/api/sandbox/dispatch_env/agent-runs",
+            json={"objective": "anything", "num_episodes": 1},
+        )
+
+    assert resp.status_code == 503
+    runs = client.get("/api/sandbox/dispatch_env/agent-runs").json()
+    assert [(r["status"], r["error"]) for r in runs] == [("failed", "Could not queue the run: broker down")]
+
+
+def test_browser_episode_closes_its_docker_client(client):
+    from backend.app import database
+    from backend.app.worker.tasks import run_container_episode_task
+
+    _add_running_general_sandbox(client, "browser_env")
+    with database.get_session_factory()() as db:
+        db.get(SandboxEnvironment, "browser_env").env_type = "browser"
+        db.commit()
+    _add_run("run_browser", "browser_env")
+    docker_client = MagicMock()
+    docker_client.containers.get.return_value.ports = {}
+
+    with patch("docker.from_env", return_value=docker_client):
+        run_container_episode_task("run_browser", 0, 0)
+
+    docker_client.close.assert_called_once()

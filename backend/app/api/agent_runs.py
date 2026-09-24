@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json
+import logging
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -11,6 +12,7 @@ from sqlalchemy.orm import Session
 from backend.app.database import get_db
 from backend.app.models import AgentRun, AgentEpisode, SandboxEnvironment
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/sandbox", tags=["agent-runs"])
 
 
@@ -115,7 +117,15 @@ def create_agent_run(
     db.commit()
 
     from backend.app.worker.tasks import run_container_run_task
-    run_container_run_task.delay(run_id)
+    try:
+        run_container_run_task.delay(run_id)
+    except Exception as exc:
+        logger.exception("[agent-runs] could not queue run %s", run_id)
+        run.status = "failed"
+        run.error = f"Could not queue the run: {exc}"
+        run.completed_at = datetime.now(timezone.utc)
+        db.commit()
+        raise HTTPException(status_code=503, detail="Worker unavailable — could not queue the run") from exc
 
     return {"run_id": run_id, **_run_to_dict(run)}
 

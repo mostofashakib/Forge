@@ -124,6 +124,20 @@ def run_episode_task(self, rollout_job_id: str, episode_index: int, seed: int) -
     return episode_id
 
 
+def _load_manifest(env_dir: Path):
+    """The env's state schema manifest, or None when it has none or it is unreadable."""
+    from forge.schema.state_schema import StateSchemaManifest
+
+    manifest_path = env_dir / "state_schema.json"
+    if not manifest_path.exists():
+        return None
+    try:
+        return StateSchemaManifest.model_validate_json(manifest_path.read_text())
+    except Exception as exc:
+        logger.warning("[manifest] could not load %s: %s", manifest_path, exc)
+        return None
+
+
 def _load_personas(env_dir):
     """The cast configured for this environment, or None if it has none.
 
@@ -547,6 +561,19 @@ def run_container_episode_task(self, run_id: str, episode_index: int, seed: int)
         sb = db.get(SandboxEnvironment, env_name)
         if sb is None or sb.container_id is None:
             logger.error("[container-ep] sandbox %s has no running container", env_name)
+            now = datetime.now(timezone.utc)
+            db.add(AgentEpisode(
+                id=episode_id,
+                run_id=run_id,
+                episode_index=episode_index,
+                seed=seed,
+                status="failed",
+                termination_reason=f"sandbox {env_name} has no running container",
+                started_at=now,
+                completed_at=now,
+            ))
+            db.commit()
+            _count_finished_episode(run_id)
             return episode_id
         env_type = sb.env_type
         container_id = sb.container_id
@@ -590,24 +617,13 @@ def run_container_episode_task(self, run_id: str, episode_index: int, seed: int)
                 dead_end_patience=dead_end_patience,
                 success_threshold=success_threshold,
             )
-            # Load scoring methods from reward_config.json if present.
             import json as _json
-            reward_cfg_path = envs_root / env_name / "reward_config.json"
-            scoring_methods = ["llm"]
-            reward_preset = "full_layered_partial"
-            if reward_cfg_path.exists():
-                try:
-                    data = _json.loads(reward_cfg_path.read_text())
-                    if "scoring_methods" in data:
-                        scoring_methods = data["scoring_methods"] or ["llm"]
-                    elif "scoring_method" in data:
-                        scoring_methods = [data["scoring_method"]]
-                    reward_preset = data.get("reward_preset", reward_preset)
-                except Exception:
-                    pass
+            from backend.app.services.reward_config import load_reward_config
+            reward_cfg = load_reward_config(env_name)
             reward_engine = TieredRewardEngine(
                 config=TieredRewardConfig.from_preset(
-                    reward_preset, partial_credit_methods=scoring_methods
+                    reward_cfg.reward_preset,
+                    partial_credit_methods=reward_cfg.scoring_methods,
                 )
             )
             replay_path = envs_root / env_name / "synthetic_replay.json"
@@ -632,9 +648,12 @@ def run_container_episode_task(self, run_id: str, episode_index: int, seed: int)
         elif env_type == "browser":
             import docker as _docker
             dc = _docker.from_env()
-            c = dc.containers.get(container_id)
-            c.reload()
-            cdp_mapping = c.ports.get("9222/tcp")
+            try:
+                c = dc.containers.get(container_id)
+                c.reload()
+                cdp_mapping = c.ports.get("9222/tcp")
+            finally:
+                dc.close()
             if not cdp_mapping:
                 raise RuntimeError(
                     "CDP port 9222 is not mapped on the browser container. "
@@ -672,15 +691,8 @@ def run_container_episode_task(self, run_id: str, episode_index: int, seed: int)
                 success_threshold=success_threshold,
                 personas=_load_personas(envs_root / env_name),
             )
-            # Load manifest from disk if available — enables HashNormalizer + StateDiffFloor
-            manifest = None
-            manifest_path = envs_root / env_name / "state_schema.json"
-            if manifest_path.exists():
-                try:
-                    from forge.schema.state_schema import StateSchemaManifest
-                    manifest = StateSchemaManifest.model_validate_json(manifest_path.read_text())
-                except Exception as exc:
-                    logger.warning("[container-ep] could not load manifest for %s: %s", env_name, exc)
+            # The manifest enables HashNormalizer + StateDiffFloor when present.
+            manifest = _load_manifest(envs_root / env_name)
             agent = make_container_agent(agent_id, seed=experiment_seed(seed))
             with ContainerEpisodeRunner(cfg, manifest=manifest) as runner:
                 result = runner.run_episode(agent, episode_id=episode_id, jsonl_path=jsonl_path)
@@ -706,21 +718,26 @@ def run_container_episode_task(self, run_id: str, episode_index: int, seed: int)
                 ep.completed_at = datetime.now(timezone.utc)
                 db.commit()
 
-    # Atomically increment run counter; mark run completed when all done
-    with SessionLocal() as db:
+    _count_finished_episode(run_id)
+    return episode_id
+
+
+def _count_finished_episode(run_id: str) -> None:
+    """Atomically increment the run counter; mark the run completed when all are done."""
+    from backend.app.database import get_session_factory
+
+    with get_session_factory()() as db:
         db.execute(
             update(AgentRun)
             .where(AgentRun.id == run_id)
             .values(episodes_completed=AgentRun.episodes_completed + 1)
         )
         db.commit()
-        run2 = db.get(AgentRun, run_id)
-        if run2 and run2.episodes_completed >= run2.num_episodes:
-            run2.status = "completed"
-            run2.completed_at = datetime.now(timezone.utc)
+        run = db.get(AgentRun, run_id)
+        if run and run.episodes_completed >= run.num_episodes:
+            run.status = "completed"
+            run.completed_at = datetime.now(timezone.utc)
             db.commit()
-
-    return episode_id
 
 
 @celery.task(bind=True)
@@ -815,8 +832,8 @@ def run_benchmark_task(
     """
     import json as _json
     import redis as _redis
+    from functools import cache
     from pathlib import Path as _Path
-    from forge.schema.state_schema import StateSchemaManifest as _StateSchemaManifest
 
     redis_connection_url = redis_url()
     channel = f"forge:benchmark:{run_id}"
@@ -858,12 +875,16 @@ def run_benchmark_task(
         collector = DataCollector(cfg, task_provider=task_provider)
         envs_root = generated_envs_root()
 
+        @cache
+        def manifest_for(domain: str):
+            return _load_manifest(envs_root / domain)
+
         for domain in domains:
             if not task_provider.tasks_for(domain=domain, depth=depth):
                 publish({"log": f"  [skip] '{domain}' has no tasks at depth {depth} — compile/select an environment with tasks"})
 
         checkpoint = CollectionCheckpoint(output_dir=output_path / "data")
-        pending = collector._pending_runs(checkpoint)
+        pending = collector.pending_runs(checkpoint)
         total = len(pending)
         publish({"total": total})
         publish({"log": f"[benchmark] {total} episodes pending"})
@@ -876,14 +897,8 @@ def run_benchmark_task(
             from forge.envgen.agents.container_agent import make_container_agent
             from forge.settings import experiment_seed
 
-            manifest = None
-            manifest_path = envs_root / task.domain / "state_schema.json"
-            if manifest_path.exists():
-                try:
-                    manifest = _StateSchemaManifest.model_validate_json(manifest_path.read_text())
-                except Exception:
-                    pass
-
+            manifest = manifest_for(task.domain)
+            # Read per episode: a restarted environment comes back on a new port.
             port_file = envs_root / task.domain / "port"
             if not port_file.exists():
                 publish({"log": f"  [skip] no port file for domain '{task.domain}' — start that environment first"})
@@ -903,13 +918,7 @@ def run_benchmark_task(
 
         metrics = []
         for domain in domains:
-            manifest = None
-            manifest_path = envs_root / domain / "state_schema.json"
-            if manifest_path.exists():
-                try:
-                    manifest = _StateSchemaManifest.model_validate_json(manifest_path.read_text())
-                except Exception:
-                    pass
+            manifest = manifest_for(domain)
             if manifest:
                 m = compute_env_quality(episode_dir=output_path / "data" / domain, manifest=manifest)
                 metrics.append(m)
