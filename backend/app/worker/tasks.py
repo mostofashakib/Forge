@@ -1,4 +1,6 @@
 from __future__ import annotations
+import asyncio
+import json
 import logging
 import secrets
 from datetime import datetime, timezone
@@ -204,6 +206,130 @@ def pipeline_flags(plan) -> dict[str, bool]:
     }
 
 
+_ARTIFACT_LABELS = {
+    "generation_plan":   "Prompt Planner",
+    "backend_research":  "User Research (backend context)",
+    "ui_research":       "User Research (UI context)",
+    "rl_research":       "User Research (RL context)",
+    "reviewer_research": "User Research (review context)",
+    "backend_code":      "Backend Builder",
+    "ui_code":           "UI Builder",
+    "app_code":          "App Assembly",
+    "instrumented_code": "Telemetry Instrumentation",
+    "state_bridge_code": "State Bridge",
+    "policy_dsl":        "Policy Rules",
+    "reward_fn_code":    "Reward Function",
+    "correctness_report": "Correctness Reviewer",
+    "review_report":     "Quality Reviewer",
+}
+
+
+async def _check_correctness(base_url: str, action_names: list[str], publish) -> None:
+    """Prove reset fidelity and snapshot/restore on the live container.
+
+    Raises CorrectnessValidationError when the environment is broken. A gate
+    that cannot reach the container is reported and does not fail the build.
+    """
+    from forge.envgen.correctness_validator import (
+        CorrectnessValidationError, CorrectnessValidator,
+    )
+
+    publish({"log": "[forge] validating reset fidelity and snapshot/restore…"})
+    loop = asyncio.get_running_loop()
+    try:
+        result = await loop.run_in_executor(
+            None, lambda: CorrectnessValidator(base_url=base_url).validate(action_names)
+        )
+    except Exception as exc:  # container not ready / transport error
+        publish({"log": f"[forge] correctness validation could not run: {exc}"})
+        return
+    if not result.passed:
+        for finding in result.findings:
+            publish({"log": f"[forge] correctness FAIL [{finding.category}]: {finding.message}"})
+        raise CorrectnessValidationError(result)
+    publish({"log": "[forge] correctness validation passed ✓"})
+
+
+async def _validate_manifest(
+    *,
+    env_name: str,
+    description: str,
+    compiler_input,
+    base_url: str,
+    env_dir: Path,
+    publish,
+    max_attempts: int = 3,
+) -> None:
+    """Check the state manifest against the live app, re-running the state
+    bridge with the missing fields as feedback until it passes or gives up.
+    """
+    from forge.envgen.agents.state_bridge import StateBridgeAgent
+    from forge.envgen.artifact_bus import ArtifactBus
+    from forge.envgen.context import EnvGenContext
+    from forge.envgen.post_generation_validator import PostGenerationValidator
+
+    manifest = _load_manifest(env_dir)
+    if manifest is None:
+        return
+    manifest_path = env_dir / "state_schema.json"
+    app_dir = env_dir / "app"
+    loop = asyncio.get_running_loop()
+
+    for attempt in range(max_attempts):
+        publish({"log": f"[forge] validating manifest (attempt {attempt + 1}/{max_attempts})…"})
+        try:
+            result = await loop.run_in_executor(
+                None,
+                lambda m=manifest: PostGenerationValidator(base_url=base_url).validate(m),
+            )
+        except Exception as exc:
+            publish({"log": f"[forge] manifest validation error (container not ready?): {exc}"})
+            return
+        if result.passed:
+            publish({"log": f"[forge] manifest validation passed (coverage={result.coverage_score:.2f}) ✓"})
+            _update_sandbox(env_name, state_schema=manifest.model_dump_json())
+            return
+        publish({"log": f"[forge] manifest validation failed — missing fields: {result.missing_fields}"})
+        if attempt == max_attempts - 1:
+            _update_sandbox(env_name, validation_missing_fields=json.dumps(result.missing_fields))
+            publish({
+                "log": f"[forge] WARNING: manifest validation gave up after "
+                       f"{max_attempts} attempts. Missing: {result.missing_fields}"
+            })
+            return
+
+        publish({"log": "[forge] re-running state bridge agent with missing field feedback…"})
+        ctx = EnvGenContext(env_name=env_name, description=description, compiler_input=compiler_input)
+        retry_bus = ArtifactBus()
+        # The state bridge reads the instrumented app, so load it back from disk.
+        instrumented = (
+            {str(p.relative_to(app_dir)): p.read_text() for p in app_dir.rglob("*.py")}
+            if app_dir.exists() else {}
+        )
+        await retry_bus.publish("instrumented_code", instrumented)
+        await StateBridgeAgent(missing_fields_feedback=result.missing_fields).run(ctx, retry_bus)
+        new_manifest = retry_bus.get("state_schema_manifest")
+        if new_manifest is not None:
+            manifest = new_manifest
+            manifest_path.write_text(manifest.model_dump_json())
+            publish({"log": "[forge] state bridge agent produced updated manifest ✓"})
+        new_bridge = retry_bus.get("state_bridge_code")
+        if new_bridge:
+            (env_dir / "container_env.py").write_text(new_bridge)
+
+
+def _update_sandbox(env_name: str, **fields) -> None:
+    from backend.app.database import get_session_factory
+    from backend.app.models import SandboxEnvironment
+
+    with get_session_factory()() as db:
+        sandbox = db.get(SandboxEnvironment, env_name)
+        if sandbox:
+            for name, value in fields.items():
+                setattr(sandbox, name, value)
+            db.commit()
+
+
 @celery.task(name="backend.app.worker.tasks.build_sandbox_task", ignore_result=True)
 def build_sandbox_task(
     job_id: str,
@@ -227,11 +353,7 @@ def build_sandbox_task(
       "browser" — pull linuxserver/chromium and start a VNC browser container
       "general" — full LLM orchestration + Docker build (original flow)
     """
-    import asyncio
-    import json
     import redis as _redis
-    from backend.app.database import get_session_factory
-    from backend.app.models import SandboxEnvironment
     from forge.envgen.container import ContainerRuntime
 
     logger.info("[task:build_sandbox] STARTED — env_name=%s env_type=%s job_id=%s", env_name, env_type, job_id)
@@ -243,24 +365,17 @@ def build_sandbox_task(
     def publish(msg: dict) -> None:
         r.publish(channel, json.dumps(msg))
 
-    SessionLocal = get_session_factory()
-
     def _set_status(status: str) -> None:
-        with SessionLocal() as db:
-            sb = db.get(SandboxEnvironment, env_name)
-            if sb:
-                sb.status = status
-                db.commit()
+        _update_sandbox(env_name, status=status)
 
     def _set_running(container_id: str, port: int, image_tag: str) -> None:
-        with SessionLocal() as db:
-            sb = db.get(SandboxEnvironment, env_name)
-            if sb:
-                sb.status = "running"
-                sb.container_id = container_id
-                sb.container_port = port or None
-                sb.image_tag = image_tag
-                db.commit()
+        _update_sandbox(
+            env_name,
+            status="running",
+            container_id=container_id,
+            container_port=port or None,
+            image_tag=image_tag,
+        )
 
     async def _build_premade() -> None:
         template = env_type[len("premade:"):]
@@ -312,22 +427,7 @@ def build_sandbox_task(
         async def on_progress(artifact_name: str, _value) -> None:
             if artifact_name == "generation_plan":
                 publish(pipeline_flags(_value))
-            label = {
-                "generation_plan":   "Prompt Planner",
-                "backend_research":  "User Research (backend context)",
-                "ui_research":       "User Research (UI context)",
-                "rl_research":       "User Research (RL context)",
-                "reviewer_research": "User Research (review context)",
-                "backend_code":      "Backend Builder",
-                "ui_code":           "UI Builder",
-                "app_code":          "App Assembly",
-                "instrumented_code": "Telemetry Instrumentation",
-                "state_bridge_code": "State Bridge",
-                "policy_dsl":        "Policy Rules",
-                "reward_fn_code":    "Reward Function",
-                "correctness_report": "Correctness Reviewer",
-                "review_report":     "Quality Reviewer",
-            }.get(artifact_name, artifact_name)
+            label = _ARTIFACT_LABELS.get(artifact_name, artifact_name)
             publish({"log": f"[agent] {label} — done ✓"})
             publish({"artifact": artifact_name, "status": "done"})
 
@@ -378,108 +478,21 @@ def build_sandbox_task(
         publish({"log": f"[forge] container running on port {port} ✓"})
         _set_running(container_id, port, image_tag)
 
-        # ── CorrectnessValidator (default-on; disabled only for the ablation)
-        from forge.envgen.correctness_validator import (
-            CorrectnessValidator, CorrectnessValidationError,
-        )
-
         from forge.settings import determinism_enabled
+        base_url = f"http://localhost:{port}"
         if determinism_enabled():
-            base_url_c = f"http://localhost:{port}"
-            action_names = [a.name for a in compiler_input.actions]
-            publish({"log": "[forge] validating reset fidelity and snapshot/restore…"})
-            try:
-                c_result = await loop.run_in_executor(
-                    None,
-                    lambda: CorrectnessValidator(base_url=base_url_c).validate(action_names),
-                )
-            except Exception as _ce:  # container not ready / transport error
-                publish({"log": f"[forge] correctness validation could not run: {_ce}"})
-                c_result = None
-            if c_result is not None and not c_result.passed:
-                for finding in c_result.findings:
-                    publish({"log": f"[forge] correctness FAIL [{finding.category}]: {finding.message}"})
-                raise CorrectnessValidationError(c_result)
-            if c_result is not None:
-                publish({"log": "[forge] correctness validation passed ✓"})
+            await _check_correctness(base_url, [a.name for a in compiler_input.actions], publish)
         else:
             publish({"log": "[forge] determinism correctness gate disabled for experiment"})
 
-        # ── PostGenerationValidator ────────────────────────────────────────
-        manifest_path = envs_root / env_name / "state_schema.json"
-        if manifest_path.exists():
-            from forge.schema.state_schema import StateSchemaManifest
-            from forge.envgen.post_generation_validator import PostGenerationValidator
-            from forge.envgen.context import EnvGenContext
-            import json as _json
-
-            base_url = f"http://localhost:{port}"
-            manifest = StateSchemaManifest.model_validate_json(manifest_path.read_text())
-
-            max_validation_attempts = 3
-            for attempt in range(max_validation_attempts):
-                publish({"log": f"[forge] validating manifest (attempt {attempt + 1}/{max_validation_attempts})…"})
-                try:
-                    v_result = await loop.run_in_executor(
-                        None,
-                        lambda m=manifest: PostGenerationValidator(base_url=base_url).validate(m),
-                    )
-                except Exception as _ve:
-                    publish({"log": f"[forge] manifest validation error (container not ready?): {_ve}"})
-                    break
-                if v_result.passed:
-                    publish({"log": f"[forge] manifest validation passed (coverage={v_result.coverage_score:.2f}) ✓"})
-                    with SessionLocal() as db:
-                        sb = db.get(SandboxEnvironment, env_name)
-                        if sb:
-                            sb.state_schema = manifest.model_dump_json()
-                            db.commit()
-                    break
-                else:
-                    publish({
-                        "log": f"[forge] manifest validation failed — missing fields: {v_result.missing_fields}"
-                    })
-                    if attempt == max_validation_attempts - 1:
-                        with SessionLocal() as db:
-                            sb = db.get(SandboxEnvironment, env_name)
-                            if sb:
-                                sb.validation_missing_fields = _json.dumps(v_result.missing_fields)
-                                db.commit()
-                        publish({
-                            "log": f"[forge] WARNING: manifest validation gave up after "
-                                   f"{max_validation_attempts} attempts. Missing: {v_result.missing_fields}"
-                        })
-                        break
-                    # Re-run StateBridgeAgent standalone with feedback
-                    publish({"log": "[forge] re-running state bridge agent with missing field feedback…"})
-                    from forge.envgen.agents.state_bridge import StateBridgeAgent
-                    from forge.envgen.artifact_bus import ArtifactBus
-
-                    ctx = EnvGenContext(
-                        env_name=env_name,
-                        description=description,
-                        compiler_input=compiler_input,
-                    )
-                    retry_bus = ArtifactBus()
-                    # Load instrumented code from disk so StateBridgeAgent has its input
-                    instrumented: dict[str, str] = {}
-                    if app_dir.exists():
-                        for p in app_dir.rglob("*.py"):
-                            rel = str(p.relative_to(app_dir))
-                            instrumented[rel] = p.read_text()
-                    await retry_bus.publish("instrumented_code", instrumented)
-                    retry_agent = StateBridgeAgent(
-                        missing_fields_feedback=v_result.missing_fields
-                    )
-                    await retry_agent.run(ctx, retry_bus)
-                    new_manifest = retry_bus.get("state_schema_manifest")
-                    if new_manifest is not None:
-                        manifest = new_manifest
-                        manifest_path.write_text(manifest.model_dump_json())
-                        publish({"log": "[forge] state bridge agent produced updated manifest ✓"})
-                    new_bridge = retry_bus.get("state_bridge_code")
-                    if new_bridge:
-                        (envs_root / env_name / "container_env.py").write_text(new_bridge)
+        await _validate_manifest(
+            env_name=env_name,
+            description=description,
+            compiler_input=compiler_input,
+            base_url=base_url,
+            env_dir=envs_root / env_name,
+            publish=publish,
+        )
 
     if env_type.startswith("premade:"):
         _build_fn = _build_premade
@@ -496,14 +509,7 @@ def build_sandbox_task(
         # Clear container/image references too — otherwise a leftover tag from
         # a previous successful build stays in the DB, and /start would later
         # try to spin up a container against an image that may no longer exist.
-        with SessionLocal() as db:
-            sb = db.get(SandboxEnvironment, env_name)
-            if sb:
-                sb.status = "error"
-                sb.image_tag = None
-                sb.container_id = None
-                sb.container_port = None
-                db.commit()
+        _update_sandbox(env_name, status="error", image_tag=None, container_id=None, container_port=None)
         publish({"done": True, "error": f"Build failed: {exc}"})
     finally:
         r.close()
