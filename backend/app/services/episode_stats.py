@@ -1,8 +1,9 @@
 from __future__ import annotations
 import json
-from sqlalchemy.orm import Session
+from collections import defaultdict
+from sqlalchemy.orm import Session, defer
 from backend.app.models import Episode, EpisodeStep
-from forge.runtime.replay import ReplayService
+from forge.runtime.replay import EpisodeRecord
 from forge.runtime.clustering import FailureClusterer
 
 
@@ -32,10 +33,14 @@ def get_stats(env_name: str, db: Session) -> dict:
     all_steps = (
         db.query(EpisodeStep)
         .filter(EpisodeStep.episode_id.in_(episode_ids))
+        .options(defer(EpisodeStep.diff))
+        .order_by(EpisodeStep.episode_id, EpisodeStep.step_index)
         .all()
     )
+    steps_by_episode: dict[str, list[EpisodeStep]] = defaultdict(list)
     violation_episode_ids: set[str] = set()
     for step in all_steps:
+        steps_by_episode[step.episode_id].append(step)
         try:
             events = json.loads(step.events)
         except (json.JSONDecodeError, TypeError):
@@ -44,9 +49,11 @@ def get_stats(env_name: str, db: Session) -> dict:
             violation_episode_ids.add(step.episode_id)
     policy_violation_count = len(violation_episode_ids)
 
-    failed_episodes = [ep for ep in episodes if not ep.passed]
-    replay = ReplayService()
-    records = [replay.load_episode(ep.id, db) for ep in failed_episodes]
+    records = [
+        EpisodeRecord(episode=ep, steps=steps_by_episode[ep.id])
+        for ep in episodes
+        if not ep.passed
+    ]
     clusters = FailureClusterer().cluster(records)
 
     return {

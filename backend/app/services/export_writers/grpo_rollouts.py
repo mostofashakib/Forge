@@ -4,7 +4,7 @@ from pathlib import Path
 from sqlalchemy.orm import Session
 import pandas as pd
 from forge.contracts import RolloutRecord
-from ._queries import get_episodes, get_steps
+from ._queries import get_episodes, get_steps_by_episode
 from .common import action_to_command
 
 
@@ -18,9 +18,10 @@ def write(env_name: str, db: Session, out_dir: Path) -> None:
     Compatible with TRL GRPOTrainer and veRL.
     """
     episodes = get_episodes(env_name, db)
+    steps_by_episode = get_steps_by_episode(env_name, db)
     rows = []
     for ep in episodes:
-        steps = get_steps(ep.id, db)
+        steps = steps_by_episode.get(ep.id, [])
         commands = [action_to_command(s.action) for s in steps]
         per_step_rewards = [s.reward for s in steps]
         final_verification = _verification_results(steps[-1]) if steps else []

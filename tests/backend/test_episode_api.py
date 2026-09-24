@@ -113,6 +113,62 @@ def test_get_stats_returns_zero_stats_for_empty_env():
     db.close()
 
 
+
+def _seed_failed_episodes(db, count: int) -> None:
+    from backend.app.models import Episode, EpisodeStep
+    for i in range(count):
+        ep_id = f"ep_fail{i:04d}"
+        db.add(Episode(
+            id=ep_id, env_name="stats_env", task_name="t", seed=i, agent_id="a",
+            status="completed", total_steps=2, total_reward=0.0, passed=False,
+            started_at=datetime.now(timezone.utc),
+        ))
+        # Step 1 fails "late_check" but step 0 fails first: order decides the cluster.
+        for index, check in ((1, "late_check"), (0, "first_check")):
+            db.add(EpisodeStep(
+                episode_id=ep_id, step_index=index, action="{}", reward=0.0,
+                verifier_results=json.dumps([{"checks": [{"name": check, "passed": False}]}]),
+                diff="{}",
+                events=json.dumps([{"type": "policy_violation"}] if i == 0 else []),
+                state_hash_before="a", state_hash_after="b",
+                terminated=index == 1, truncated=False,
+            ))
+    db.commit()
+
+
+def test_get_stats_clusters_by_first_failed_check_in_step_order():
+    from backend.app.services import episode_service
+    db = make_memory_db()
+    _seed_failed_episodes(db, 3)
+    stats = episode_service.get_stats("stats_env", db)
+    assert stats["policy_violation_count"] == 1
+    assert [(c["check_name"], c["count"]) for c in stats["top_failures"]] == [("first_check", 3)]
+    db.close()
+
+
+def test_get_stats_query_count_is_independent_of_failed_episodes():
+    from sqlalchemy import event
+    from backend.app.services import episode_service
+    db = make_memory_db()
+    _seed_failed_episodes(db, 6)
+    db.expunge_all()
+    selects: list[str] = []
+
+    def _record(_conn, _cursor, statement, *_args):
+        if statement.lstrip().upper().startswith("SELECT"):
+            selects.append(statement)
+
+    engine = db.get_bind()
+    event.listen(engine, "before_cursor_execute", _record)
+    try:
+        episode_service.get_stats("stats_env", db)
+    finally:
+        event.remove(engine, "before_cursor_execute", _record)
+    assert len(selects) <= 2, selects
+    assert not any("episode_steps.diff" in s for s in selects)
+    db.close()
+
+
 # --- REST API tests ---
 import pytest
 from fastapi.testclient import TestClient

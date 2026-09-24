@@ -4,7 +4,7 @@ from collections import defaultdict
 from pathlib import Path
 from sqlalchemy.orm import Session
 from backend.app.models import Episode, EpisodeStep
-from ._queries import get_episodes, get_steps
+from ._queries import get_episodes, get_steps_by_episode
 from .common import action_to_command
 
 
@@ -30,6 +30,7 @@ def write(env_name: str, db: Session, out_dir: Path) -> None:
     Compatible with TRL DPOTrainer and LlamaFactory.
     """
     episodes = get_episodes(env_name, db)
+    steps_by_episode = get_steps_by_episode(env_name, db)
     buckets: dict[tuple[str, int], list[Episode]] = defaultdict(list)
     for ep in episodes:
         key = (ep.task_name, ep.seed // 10)
@@ -45,8 +46,8 @@ def write(env_name: str, db: Session, out_dir: Path) -> None:
             if best.total_reward == worst.total_reward:
                 continue
 
-            best_steps = get_steps(best.id, db)
-            worst_steps = get_steps(worst.id, db)
+            best_steps = steps_by_episode.get(best.id, [])
+            worst_steps = steps_by_episode.get(worst.id, [])
 
             record = {
                 "env_name": best.env_name,
