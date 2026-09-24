@@ -1494,13 +1494,11 @@ def move(req: MoveRequest):
 
 @app.post("/bulk_archive")
 def bulk_archive(req: BulkArchiveRequest):
-    archived = []
     with SessionLocal() as db:
-        for eid in req.email_ids:
-            email = db.query(Email).filter(Email.id == eid).first()
-            if email:
-                email.folder = "archive"
-                archived.append(eid)
+        found = {e.id: e for e in db.query(Email).filter(Email.id.in_(req.email_ids)).all()}
+        archived = [eid for eid in req.email_ids if eid in found]
+        for eid in archived:
+            found[eid].folder = "archive"
         _log_action(db, "bulk_archive", None, {"count": len(archived)})
         db.commit()
         state = _get_state_dict(db)

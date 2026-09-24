@@ -26,7 +26,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy import (
-    Boolean, Column, Integer, String, Text, create_engine
+    Boolean, Column, Integer, String, Text, create_engine, func
 )
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
@@ -145,34 +145,45 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _channel_to_dict(c: Channel, db: Session) -> dict:
-    msg_count = db.query(Message).filter(
-        Message.channel_id == c.id,
-        Message.thread_parent_id == None  # noqa: E711
-    ).count()
-    pinned_count = db.query(Message).filter(
-        Message.channel_id == c.id,
-        Message.is_pinned == True  # noqa: E712
-    ).count()
-    rs = db.query(ChannelReadState).filter(ChannelReadState.channel_id == c.id).first()
-    unread = rs.unread_count if rs else 0
-    return {
-        "id": c.id,
-        "name": c.name,
-        "purpose": c.purpose,
-        "is_private": c.is_private,
-        "archived": c.is_archived,
-        "message_count": msg_count,
-        "pinned_count": pinned_count,
-        "unread": unread,
-    }
+def _counts_by_channel(db: Session, *criteria) -> dict[str, int]:
+    return dict(
+        db.query(Message.channel_id, func.count())
+        .filter(*criteria)
+        .group_by(Message.channel_id)
+        .all()
+    )
 
 
-def _message_to_dict(m: Message, db: Session) -> dict:
-    reactions_raw = db.query(Reaction).filter(Reaction.message_id == m.id).all()
-    reactions: dict[str, list[str]] = {}
-    for r in reactions_raw:
-        reactions.setdefault(r.emoji, []).append(r.user_name)
+def _channel_dicts(channels: list[Channel], db: Session) -> list[dict]:
+    """Channel summaries from three grouped queries, however many channels exist."""
+    message_counts = _counts_by_channel(db, Message.thread_parent_id == None)  # noqa: E711
+    pinned_counts = _counts_by_channel(db, Message.is_pinned == True)  # noqa: E712
+    unread = dict(db.query(ChannelReadState.channel_id, ChannelReadState.unread_count).all())
+    return [
+        {
+            "id": c.id,
+            "name": c.name,
+            "purpose": c.purpose,
+            "is_private": c.is_private,
+            "archived": c.is_archived,
+            "message_count": message_counts.get(c.id, 0),
+            "pinned_count": pinned_counts.get(c.id, 0),
+            "unread": unread.get(c.id, 0),
+        }
+        for c in channels
+    ]
+
+
+def _message_dicts(messages: list[Message], db: Session) -> list[dict]:
+    """Messages with their reactions, loaded in one query."""
+    reactions: dict[str, dict[str, list[str]]] = {m.id: {} for m in messages}
+    if messages:
+        for r in db.query(Reaction).filter(Reaction.message_id.in_(list(reactions))).all():
+            reactions[r.message_id].setdefault(r.emoji, []).append(r.user_name)
+    return [_message_to_dict(m, reactions[m.id]) for m in messages]
+
+
+def _message_to_dict(m: Message, reactions: dict[str, list[str]]) -> dict:
     return {
         "id": m.id,
         "channel_id": m.channel_id,
@@ -220,13 +231,11 @@ def _get_state_dict(db: Session) -> dict:
         DirectMessage.to_user == "me",
         DirectMessage.is_read == False  # noqa: E712
     ).count()
-    total_unread = dm_unread + sum(
-        (db.query(ChannelReadState).filter(ChannelReadState.channel_id == c.id).first() or ChannelReadState(unread_count=0)).unread_count
-        for c in channels
-    )
+    channel_dicts = _channel_dicts(channels, db)
+    total_unread = dm_unread + sum(c["unread"] for c in channel_dicts)
     return {
         "workspace_name": "Acme Corp",
-        "channels": [_channel_to_dict(c, db) for c in channels],
+        "channels": channel_dicts,
         "total_unread": total_unread,
         "dm_unread": dm_unread,
         "user_status": user_status,
@@ -1097,7 +1106,9 @@ def search_messages(req: SearchMessagesRequest):
             if channel:
                 query = query.filter(Message.channel_id == channel.id)
         messages = query.all()
-        results = [_message_to_dict(m, db) for m in messages if q in m.text.lower() or q in m.user_name.lower()]
+        results = _message_dicts(
+            [m for m in messages if q in m.text.lower() or q in m.user_name.lower()], db
+        )
         state = _get_state_dict(db)
     return {"results": results, "count": len(results), "state": state}
 
@@ -1121,7 +1132,7 @@ def get_channel_messages(req: GetChannelMessagesRequest = None, channel: str = N
             .limit(lim)
             .all()
         )
-        result = [_message_to_dict(m, db) for m in messages]
+        result = _message_dicts(messages, db)
     return {"channel": chan_ref, "messages": result, "count": len(result)}
 
 

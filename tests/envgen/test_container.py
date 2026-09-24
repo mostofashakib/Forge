@@ -583,6 +583,20 @@ def test_reattach_all_returns_managed_containers():
     assert result == [("my_env", "xyz", 9999)]
 
 
+def test_reattach_all_uses_the_browser_ui_port():
+    mock_c = MagicMock()
+    mock_c.id = "browser-id"
+    mock_c.labels = {"forge.env": "web_env", "forge.type": "browser"}
+    mock_c.ports = {"3000/tcp": [{"HostPort": "4100"}], "9222/tcp": [{"HostPort": "4101"}]}
+    mock_docker = MagicMock()
+    mock_docker.containers.list.return_value = [mock_c]
+
+    with patch("forge.envgen.container.docker.from_env", return_value=mock_docker):
+        result = ContainerRuntime().reattach_all()
+
+    assert result == [("web_env", "browser-id", 4100)]
+
+
 def test_reattach_all_skips_containers_without_port():
     mock_c = MagicMock()
     mock_c.id = "no-port"
@@ -1298,3 +1312,18 @@ def test_hub_mirrors_constant_is_in_priority_order():
     """AWS Public ECR is checked before Google's mirror — both are reliable
     but ECR has historically had better Hub-image freshness."""
     assert _HUB_MIRRORS == ("public.ecr.aws/docker", "mirror.gcr.io")
+
+
+def test_build_gives_up_on_a_hung_docker_build(tmp_path):
+    """A stuck build must free the worker slot instead of hanging forever."""
+    app_dir = tmp_path / "app"
+    app_dir.mkdir()
+    (app_dir / "Dockerfile").write_text("FROM python:3.12-slim\nWORKDIR /app\n")
+
+    with patch("forge.envgen.container.subprocess.run") as mock_run, \
+         patch("forge.envgen.container._image_cached_locally", return_value=True):
+        mock_run.side_effect = subprocess.TimeoutExpired(["docker", "build"], 900)
+        with pytest.raises(RuntimeError, match="docker build timed out after 900s"):
+            ContainerRuntime().build("hung_env", app_dir)
+
+    assert mock_run.call_args.kwargs["timeout"] == 900

@@ -21,3 +21,13 @@ def test_sqlite_engine_uses_wal_and_waits_for_locks(tmp_path, monkeypatch):
     finally:
         engine.dispose()
 
+
+
+def test_in_memory_database_is_not_forced_into_wal(monkeypatch):
+    engine = _fresh_engine(monkeypatch, "sqlite:///:memory:")
+    try:
+        with engine.connect() as conn:
+            assert conn.execute(text("PRAGMA journal_mode")).scalar() != "wal"
+            assert conn.execute(text("SELECT 1")).scalar() == 1
+    finally:
+        engine.dispose()
