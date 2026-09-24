@@ -587,8 +587,6 @@ def run_container_episode_task(self, run_id: str, episode_index: int, seed: int)
         agent_id = run.agent_id
         objective = run.objective
         max_steps = run.max_steps
-        divergence_threshold = run.divergence_threshold
-        consecutive_below_threshold = run.consecutive_below_threshold
         dead_end_patience = run.dead_end_patience
         success_threshold = run.success_threshold
 
@@ -618,8 +616,6 @@ def run_container_episode_task(self, run_id: str, episode_index: int, seed: int)
                 container_id=container_id,
                 objective=objective,
                 max_steps=max_steps,
-                divergence_threshold=divergence_threshold,
-                consecutive_below_threshold=consecutive_below_threshold,
                 dead_end_patience=dead_end_patience,
                 success_threshold=success_threshold,
             )
@@ -672,8 +668,6 @@ def run_container_episode_task(self, run_id: str, episode_index: int, seed: int)
                 cdp_url=f"http://localhost:{cdp_port}",
                 objective=objective,
                 max_steps=max_steps,
-                divergence_threshold=divergence_threshold,
-                consecutive_below_threshold=consecutive_below_threshold,
                 dead_end_patience=dead_end_patience,
                 success_threshold=success_threshold,
             )
@@ -691,8 +685,6 @@ def run_container_episode_task(self, run_id: str, episode_index: int, seed: int)
                 base_url=f"http://localhost:{container_port}",
                 objective=objective,
                 max_steps=max_steps,
-                divergence_threshold=divergence_threshold,
-                consecutive_below_threshold=consecutive_below_threshold,
                 dead_end_patience=dead_end_patience,
                 success_threshold=success_threshold,
                 personas=_load_personas(envs_root / env_name),

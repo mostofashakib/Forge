@@ -195,3 +195,61 @@ def test_generation_models_defaults_follow_the_configured_provider(monkeypatch):
 
     assert models == ("gpt-4o",)
     assert "gemma4:26b" not in models
+
+
+# ---------------------------------------------------------------------------
+# Retries: only failures that can succeed on a second try are retried
+# ---------------------------------------------------------------------------
+
+class _StatusError(Exception):
+    """Shaped like the provider SDKs' HTTP errors, which carry status_code."""
+
+    def __init__(self, status_code: int) -> None:
+        super().__init__(f"HTTP {status_code}")
+        self.status_code = status_code
+
+
+class _AlwaysFailingMessages:
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+        self.calls = 0
+
+    def stream(self, **_kwargs):
+        self.calls += 1
+        raise self.error
+
+
+def _anthropic_failing_with(error: Exception):
+    from types import SimpleNamespace
+    from forge.extraction.llm_client import AnthropicClient
+
+    client = AnthropicClient(max_retries=3)
+    messages = _AlwaysFailingMessages(error)
+    client._client = SimpleNamespace(messages=messages)
+    return client, messages
+
+
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 422])
+def test_client_errors_are_not_retried(status):
+    from pydantic import BaseModel
+
+    class _Out(BaseModel):
+        value: str
+
+    client, messages = _anthropic_failing_with(_StatusError(status))
+    with pytest.raises(RuntimeError, match=f"HTTP {status}"):
+        client.extract(system="s", user="u", schema=_Out)
+    assert messages.calls == 1
+
+
+@pytest.mark.parametrize("error", [_StatusError(429), _StatusError(529), ValueError("bad tool input")])
+def test_transient_and_validation_failures_are_still_retried(error):
+    from pydantic import BaseModel
+
+    class _Out(BaseModel):
+        value: str
+
+    client, messages = _anthropic_failing_with(error)
+    with pytest.raises(RuntimeError):
+        client.extract(system="s", user="u", schema=_Out)
+    assert messages.calls == 3

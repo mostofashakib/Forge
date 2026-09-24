@@ -52,6 +52,17 @@ def _flat_schema(schema_cls: type[BaseModel]) -> dict[str, Any]:
     return flat
 
 
+def _is_permanent_failure(error: Exception) -> bool:
+    """True for HTTP client errors a retry cannot fix (bad key, bad request).
+
+    Timeouts, conflicts, and rate limits (408/409/429) and server errors are
+    transient. The provider SDKs already back off on those, and a malformed or
+    truncated answer is worth another attempt, so all of them stay retryable.
+    """
+    status = getattr(error, "status_code", None)
+    return isinstance(status, int) and 400 <= status < 500 and status not in (408, 409, 429)
+
+
 # ---------------------------------------------------------------------------
 # Anthropic
 # ---------------------------------------------------------------------------
@@ -118,6 +129,8 @@ class AnthropicClient:
                     )
                 return schema.model_validate(tool_block.input)
             except Exception as e:
+                if _is_permanent_failure(e):
+                    raise RuntimeError(f"LLM extraction failed with a non-retryable error: {e}") from e
                 last_error = e
                 attempts_remaining -= 1
                 if attempts_remaining == 0:
@@ -204,6 +217,11 @@ class OllamaClient:
                 data = json.loads(response.message.content)
                 return schema.model_validate(data)
             except Exception as e:
+                if _is_permanent_failure(e):
+                    raise RuntimeError(
+                        f"Ollama extraction failed with a non-retryable error "
+                        f"(model={self._model}): {e}"
+                    ) from e
                 last_error = e
 
         raise RuntimeError(
@@ -263,6 +281,11 @@ class OpenAIClient:
                 )
                 return schema.model_validate_json(response.choices[0].message.content)
             except Exception as e:
+                if _is_permanent_failure(e):
+                    raise RuntimeError(
+                        f"OpenAI extraction failed with a non-retryable error "
+                        f"(model={self._model}): {e}"
+                    ) from e
                 last_error = e
 
         raise RuntimeError(
@@ -315,6 +338,11 @@ class GeminiClient:
                 )
                 return schema.model_validate_json(response.text)
             except Exception as e:
+                if _is_permanent_failure(e):
+                    raise RuntimeError(
+                        f"Gemini extraction failed with a non-retryable error "
+                        f"(model={self._model}): {e}"
+                    ) from e
                 last_error = e
 
         raise RuntimeError(

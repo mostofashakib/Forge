@@ -4,6 +4,7 @@ import json
 from pydantic import BaseModel
 
 from forge.extraction.llm_client import LLMClient, get_judge_client
+from forge.runtime.errors import GradingError
 from forge.envgen.config import envgen_config
 
 
@@ -46,33 +47,33 @@ class ObjectiveScorer:
     ) -> float:
         """Return 0.0–1.0 representing how well state achieves objective.
 
-        Falls back to 0.5 on any LLM/network error.
+        Raises GradingError when the judge returns no verdict. A made-up score
+        would be indistinguishable from a real one in the episode's reward.
         """
+        state_text = json.dumps(state, indent=2)
+        if len(state_text) > 3000:
+            state_text = state_text[:3000] + "\n... (truncated)"
+        user = f"Objective: {objective}\n\nCurrent application state:\n{state_text}"
+        if derived_diff:
+            user += f"\n\nDerived field changes (populated by this action):\n{json.dumps(derived_diff, indent=2)}"
+        if action_taken:
+            user += f"\n\nAction taken: {json.dumps(action_taken)}"
         try:
-            state_text = json.dumps(state, indent=2)
-            if len(state_text) > 3000:
-                state_text = state_text[:3000] + "\n... (truncated)"
-            user = f"Objective: {objective}\n\nCurrent application state:\n{state_text}"
-            if derived_diff:
-                user += f"\n\nDerived field changes (populated by this action):\n{json.dumps(derived_diff, indent=2)}"
-            if action_taken:
-                user += f"\n\nAction taken: {json.dumps(action_taken)}"
             result = self._client.extract(
                 system=ObjectivePrompts.SYSTEM, user=user, schema=_ScoreSchema
             )
-            return max(0.0, min(1.0, float(result.score)))
-        except Exception:
-            return 0.5
+        except Exception as exc:
+            raise GradingError(f"objective judge failed: {exc}", cause=exc) from exc
+        return max(0.0, min(1.0, float(result.score)))
 
     def score_with_image(self, screenshot_b64: str, url: str, objective: str) -> float:
-        """Score a browser state using a screenshot. Falls back to 0.5 on error."""
+        """Score a browser state from a screenshot. Raises GradingError like score()."""
+        user = f"Objective: {objective}\n\nCurrent URL: {url}\n\nSee the screenshot for the current browser state."
         try:
-            client = get_judge_client(max_tokens=envgen_config().cli_llm_tokens)
-            user = f"Objective: {objective}\n\nCurrent URL: {url}\n\nSee the screenshot for the current browser state."
-            result = client.extract_with_image(
+            result = self._client.extract_with_image(
                 system=ObjectivePrompts.SYSTEM, user=user,
                 image_b64=screenshot_b64, schema=_ScoreSchema,
             )
-            return max(0.0, min(1.0, float(result.score)))
-        except Exception:
-            return 0.5
+        except Exception as exc:
+            raise GradingError(f"objective judge failed: {exc}", cause=exc) from exc
+        return max(0.0, min(1.0, float(result.score)))

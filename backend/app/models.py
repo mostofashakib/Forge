@@ -118,6 +118,8 @@ class AgentRun(Base):
     objective: Mapped[str] = mapped_column(Text)
     num_episodes: Mapped[int] = mapped_column(Integer)
     max_steps: Mapped[int] = mapped_column(Integer, default=50)
+    # No runner stops on a score threshold any more. These two columns stay so
+    # existing databases keep loading.
     divergence_threshold: Mapped[float] = mapped_column(Float, default=0.2)
     consecutive_below_threshold: Mapped[int] = mapped_column(Integer, default=3)
     dead_end_patience: Mapped[int] = mapped_column(Integer, default=5)

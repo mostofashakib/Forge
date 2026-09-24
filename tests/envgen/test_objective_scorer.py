@@ -57,3 +57,62 @@ def test_scorer_defaults_to_the_judge_model_not_the_generation_model(monkeypatch
 
     assert scorer._client._model == "llama3.1:8b"
     assert scorer._client._model != "gemma4:26b"
+
+
+# ---------------------------------------------------------------------------
+# A judge that fails must not be recorded as a real verdict
+# ---------------------------------------------------------------------------
+
+class _FailingClient:
+    def extract(self, system, user, schema):
+        raise ConnectionError("judge unreachable")
+
+    def extract_with_image(self, system, user, image_b64, schema):
+        raise ConnectionError("judge unreachable")
+
+
+def test_failed_judge_call_raises_instead_of_inventing_a_score():
+    from forge.runtime.errors import GradingError
+
+    scorer = ObjectiveScorer(client=_FailingClient())
+    with pytest.raises(GradingError, match="judge unreachable"):
+        scorer.score({"inbox_count": 3}, "Read an email")
+
+
+def test_failed_visual_judge_call_raises_instead_of_inventing_a_score():
+    from forge.runtime.errors import GradingError
+
+    scorer = ObjectiveScorer(client=_FailingClient())
+    with pytest.raises(GradingError):
+        scorer.score_with_image("aGk=", "http://app", "Open settings")
+
+
+def test_visual_scoring_uses_the_client_the_scorer_was_given():
+    class _ImageClient:
+        calls = 0
+
+        def extract_with_image(self, system, user, image_b64, schema):
+            _ImageClient.calls += 1
+            return schema(score=0.7, reasoning="ok")
+
+    scorer = ObjectiveScorer(client=_ImageClient())
+    assert scorer.score_with_image("aGk=", "http://app", "Open settings") == 0.7
+    assert _ImageClient.calls == 1
+
+
+def test_container_episode_with_a_failed_judge_is_not_scored():
+    import httpx
+    from forge.envgen.episode_runner import ContainerEpisodeRunner, EpisodeConfig, EpisodeResult
+    from forge.runtime.errors import GradingError
+
+    config = EpisodeConfig(base_url="http://c", objective="do it", max_steps=1)
+    runner = ContainerEpisodeRunner(config, scorer=ObjectiveScorer(client=_FailingClient()))
+    runner._http = httpx.Client(base_url="http://c", transport=httpx.MockTransport(
+        lambda request: httpx.Response(200, json={"n": 1})
+    ))
+    result = EpisodeResult(episode_id="cep_fail", config=config)
+
+    with pytest.raises(GradingError):
+        runner._finalize_result(result, {"n": 1}, {"endpoint": "/act", "payload": {}})
+    assert result.total_reward == 0.0
+    assert result.llm_verdicts == 0

@@ -25,8 +25,6 @@ class CreateAgentRunRequest(BaseModel):
     objective: str = Field(min_length=1, max_length=20_000)
     num_episodes: int = Field(default=5, ge=1, le=1_000)
     max_steps: int = Field(default=50, ge=1, le=10_000)
-    divergence_threshold: float = Field(default=0.2, ge=0.0, le=1.0)
-    consecutive_below_threshold: int = Field(default=3, ge=1, le=1_000)
     dead_end_patience: int = Field(default=5, ge=1, le=10_000)
     success_threshold: float = Field(default=0.9, ge=0.0, le=1.0)
     seed_start: int = Field(default=0, ge=0)
@@ -44,8 +42,6 @@ def _run_to_dict(run: AgentRun) -> dict:
         "objective": run.objective,
         "num_episodes": run.num_episodes,
         "max_steps": run.max_steps,
-        "divergence_threshold": run.divergence_threshold,
-        "consecutive_below_threshold": run.consecutive_below_threshold,
         "dead_end_patience": run.dead_end_patience,
         "success_threshold": run.success_threshold,
         "seed_start": run.seed_start,
@@ -104,8 +100,6 @@ def create_agent_run(
         objective=body.objective,
         num_episodes=body.num_episodes,
         max_steps=body.max_steps,
-        divergence_threshold=body.divergence_threshold,
-        consecutive_below_threshold=body.consecutive_below_threshold,
         dead_end_patience=body.dead_end_patience,
         success_threshold=body.success_threshold,
         seed_start=body.seed_start,
