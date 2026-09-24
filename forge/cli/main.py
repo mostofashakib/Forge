@@ -586,8 +586,8 @@ def diagnose(
             recommendations.append("Remove timestamps, UUIDs, or auto-incrementing IDs from /forge/state output; these make the reward signal noisy across seeds")
 
         if avg_steps < 5:
-            issues.append(f"Episodes terminate very early (avg {avg_steps:.1f} steps) — environment may be too hard or divergence threshold too aggressive")
-            recommendations.append("Consider reducing divergence_threshold (currently 0.2) or increasing max_steps for this environment type")
+            issues.append(f"Episodes terminate very early (avg {avg_steps:.1f} steps) — environment may be too hard or dead-end detection too aggressive")
+            recommendations.append("Consider raising dead_end_patience or max_steps for this environment type")
 
     # ── Analyse gym episodes ──────────────────────────────────────────────
     gym_stats: dict = {}

@@ -819,3 +819,17 @@ def test_delete_run_reports_a_trajectory_file_it_could_not_remove(client, tmp_pa
 
     assert resp.status_code == 204
     assert "locked.jsonl" in caplog.text
+
+
+def test_agent_runs_do_not_advertise_score_thresholds_that_nothing_reads(client):
+    _add_running_general_sandbox(client, "threshold_env")
+    with patch("backend.app.worker.tasks.run_container_run_task.delay"):
+        body = client.post(
+            "/api/sandbox/threshold_env/agent-runs",
+            # Older clients may still send these. They are accepted and ignored.
+            json={"objective": "o", "divergence_threshold": 0.9, "consecutive_below_threshold": 1},
+        ).json()
+
+    assert body["status"] == "pending"
+    assert "divergence_threshold" not in body
+    assert "consecutive_below_threshold" not in body

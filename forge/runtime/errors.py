@@ -158,6 +158,13 @@ class VerifierConfigurationError(ForgeError, RuntimeError):
     origin = "verifier"
 
 
+class GradingError(ForgeError, RuntimeError):
+    """A judge could not return a verdict, so the episode has no grade."""
+
+    default_code = "GRADING_FAILED"
+    origin = "verifier"
+
+
 class AgentError(ForgeError, ValueError):
     """An agent adapter cannot be created or has failed structurally."""
 

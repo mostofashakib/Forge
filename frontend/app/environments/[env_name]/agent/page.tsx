@@ -18,8 +18,6 @@ interface AgentRun {
   objective: string;
   num_episodes: number;
   max_steps: number;
-  divergence_threshold: number;
-  consecutive_below_threshold: number;
   dead_end_patience: number;
   success_threshold: number;
   status: string;
@@ -157,7 +155,6 @@ function NewRunModal({
   const [agentId, setAgentId] = useState("llm");
   const [numEpisodes, setNumEpisodes] = useState(5);
   const [maxSteps, setMaxSteps] = useState(50);
-  const [divergenceThreshold, setDivergenceThreshold] = useState(0.2);
   const [deadEndPatience, setDeadEndPatience] = useState(5);
   const [successThreshold, setSuccessThreshold] = useState(0.9);
   const [submitting, setSubmitting] = useState(false);
@@ -177,7 +174,6 @@ function NewRunModal({
           objective: objective.trim(),
           num_episodes: numEpisodes,
           max_steps: maxSteps,
-          divergence_threshold: divergenceThreshold,
           dead_end_patience: deadEndPatience,
           success_threshold: successThreshold,
         }),
@@ -256,12 +252,12 @@ function NewRunModal({
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Div. threshold</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Dead-end patience</label>
               <input
-                type="number" min={0} max={1} step={0.05}
+                type="number" min={1} max={100}
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                value={divergenceThreshold}
-                onChange={e => setDivergenceThreshold(Number(e.target.value))}
+                value={deadEndPatience}
+                onChange={e => setDeadEndPatience(Number(e.target.value))}
               />
             </div>
             <div>
@@ -312,13 +308,26 @@ function TrajectoryDrawer({
 }) {
   const [steps, setSteps] = useState<TrajectoryStep[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [selected, setSelected] = useState<TrajectoryStep | null>(null);
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/sandbox/${envName}/agent-runs/${runId}/episodes/${episode.id}/trajectory`)
-      .then(r => r.json())
+    // Aborting on change keeps a slow response from overwriting a newer episode.
+    const controller = new AbortController();
+    fetch(`${API_BASE}/api/sandbox/${envName}/agent-runs/${runId}/episodes/${episode.id}/trajectory`, {
+      signal: controller.signal,
+    })
+      .then(r => {
+        if (!r.ok) throw new Error(`Trajectory request failed (${r.status})`);
+        return r.json();
+      })
       .then(data => { setSteps(data.steps ?? []); setLoading(false); })
-      .catch(() => setLoading(false));
+      .catch(cause => {
+        if (controller.signal.aborted) return;
+        setLoadError(cause instanceof Error ? cause.message : "Could not load the trajectory");
+        setLoading(false);
+      });
+    return () => controller.abort();
   }, [envName, runId, episode.id]);
 
   return (
@@ -349,6 +358,8 @@ function TrajectoryDrawer({
           <div className="w-56 border-r overflow-y-auto shrink-0">
             {loading ? (
               <div className="p-4 text-sm text-gray-400">Loading…</div>
+            ) : loadError ? (
+              <div role="alert" className="p-4 text-sm text-red-600">{loadError}</div>
             ) : steps.length === 0 ? (
               <div className="p-4 text-sm text-gray-400">No steps recorded</div>
             ) : steps.map(step => {
@@ -617,10 +628,12 @@ function RunCard({
 
   const loadEpisodes = useCallback(async () => {
     setLoadingEp(true);
-    const res = await fetch(`${API_BASE}/api/sandbox/${envName}/agent-runs/${run.id}/episodes`);
-    const data = await res.json();
-    setEpisodes(data);
-    setLoadingEp(false);
+    try {
+      const res = await fetch(`${API_BASE}/api/sandbox/${envName}/agent-runs/${run.id}/episodes`);
+      if (res.ok) setEpisodes(await res.json());
+    } finally {
+      setLoadingEp(false);
+    }
   }, [envName, run.id]);
 
   useEffect(() => {
@@ -629,12 +642,12 @@ function RunCard({
     return () => window.clearTimeout(timer);
   }, [expanded, loadEpisodes]);
 
-  // Auto-refresh while running
+  // Refresh this card's episodes while it runs. The page refreshes the run list.
   useEffect(() => {
-    if (run.status !== "running" && run.status !== "pending") return;
-    const t = setInterval(() => { onRefresh(); if (expanded) loadEpisodes(); }, 4000);
+    if (!expanded || (run.status !== "running" && run.status !== "pending")) return;
+    const t = setInterval(() => void loadEpisodes(), 4000);
     return () => clearInterval(t);
-  }, [run.status, expanded, onRefresh, loadEpisodes]);
+  }, [run.status, expanded, loadEpisodes]);
 
   const progress = run.num_episodes > 0 ? (run.episodes_completed / run.num_episodes) * 100 : 0;
 
@@ -788,20 +801,23 @@ function DataCollectionPanel({
         episode_count: totalEps,
       }));
 
-      // Fetch trajectories for every selected episode
-      for (const [runId, epIds] of Object.entries(selection)) {
-        for (const epId of epIds) {
-          const res = await fetch(
-            `${API_BASE}/api/sandbox/${envName}/agent-runs/${runId}/episodes/${epId}/trajectory`
-          );
-          if (!res.ok) throw new Error(`Trajectory request failed (${res.status})`);
-          const data = await res.json();
-          for (const step of data.steps ?? []) {
-            lines.push(JSON.stringify({ type: "step", run_id: runId, episode_id: epId, ...step }));
-          }
-          if (data.summary) {
-            lines.push(JSON.stringify({ type: "episode_summary", run_id: runId, episode_id: epId, ...data.summary }));
-          }
+      // Fetch every selected trajectory in parallel, then write them in selection order.
+      const selected = Object.entries(selection).flatMap(([runId, epIds]) =>
+        epIds.map(epId => ({ runId, epId })),
+      );
+      const trajectories = await Promise.all(selected.map(async ({ runId, epId }) => {
+        const res = await fetch(
+          `${API_BASE}/api/sandbox/${envName}/agent-runs/${runId}/episodes/${epId}/trajectory`
+        );
+        if (!res.ok) throw new Error(`Trajectory request failed (${res.status})`);
+        return { runId, epId, data: await res.json() };
+      }));
+      for (const { runId, epId, data } of trajectories) {
+        for (const step of data.steps ?? []) {
+          lines.push(JSON.stringify({ type: "step", run_id: runId, episode_id: epId, ...step }));
+        }
+        if (data.summary) {
+          lines.push(JSON.stringify({ type: "episode_summary", run_id: runId, episode_id: epId, ...data.summary }));
         }
       }
 
@@ -966,7 +982,7 @@ export default function AgentRunsPage() {
         fetch(`${API_BASE}/api/sandbox/${envName}/agent-runs`),
         fetch(`${API_BASE}/api/sandbox/${envName}/synthetic`, { cache: "no-store" }),
       ]);
-      setRuns(await runsRes.json());
+      if (runsRes.ok) setRuns(await runsRes.json());
       if (synthRes.ok) setReplayStatus(await synthRes.json());
     } finally {
       setLoading(false);
@@ -977,6 +993,14 @@ export default function AgentRunsPage() {
     const timer = window.setTimeout(() => void loadRuns(), 0);
     return () => window.clearTimeout(timer);
   }, [loadRuns]);
+
+  // One poll for the whole page while any run is active, however many there are.
+  const anyRunActive = runs.some(r => r.status === "running" || r.status === "pending");
+  useEffect(() => {
+    if (!anyRunActive) return;
+    const t = setInterval(() => void loadRuns(), 4000);
+    return () => clearInterval(t);
+  }, [anyRunActive, loadRuns]);
 
   async function launchReplayRun(seedStart: number, numEpisodes: number) {
     if (!replayStatus?.objective) return;
@@ -991,7 +1015,6 @@ export default function AgentRunsPage() {
           objective: replayStatus.objective,
           num_episodes: numEpisodes,
           max_steps: 50,
-          divergence_threshold: 0.2,
           dead_end_patience: 5,
           success_threshold: 0.9,
           seed_start: seedStart,

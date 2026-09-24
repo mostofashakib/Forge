@@ -61,3 +61,30 @@ def test_episode_the_llm_skipped_gets_no_invented_score(monkeypatch):
     result, _ = evaluate._run_reward_eval_multi("req", [(ep, []) for ep in EPISODES], ["llm"])
 
     assert [r.episode_id for r in result.reevaluations] == [EPISODES[1].id]
+
+
+def _route_llm_clients(monkeypatch):
+    """Judge calls get a working client; any generation-client call fails the test."""
+    from forge.extraction import llm_client
+
+    class _Judge:
+        def extract(self, system, user, schema):
+            return schema(summary="judged")
+
+    def _generation_client(*_args, **_kwargs):
+        raise AssertionError("grading must not use the generation client")
+
+    monkeypatch.setattr(llm_client, "get_judge_client", lambda **_kwargs: _Judge())
+    monkeypatch.setattr(llm_client, "get_client", _generation_client)
+
+
+def test_policy_evaluation_grades_with_the_judge_client(monkeypatch):
+    _route_llm_clients(monkeypatch)
+    result = evaluate._run_policy_eval("no deletes", [(ep, []) for ep in EPISODES])
+    assert result.summary == "judged"
+
+
+def test_reward_evaluation_grades_with_the_judge_client(monkeypatch):
+    _route_llm_clients(monkeypatch)
+    result = evaluate._run_reward_eval("be fast", [(ep, []) for ep in EPISODES])
+    assert result.summary == "judged"

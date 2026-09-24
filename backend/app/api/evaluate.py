@@ -146,7 +146,8 @@ def _run_policy_eval(
     requirements: str,
     episodes: list[tuple[AgentEpisode, list[dict]]],
 ) -> _PolicyEvalResult:
-    from forge.extraction.llm_client import get_client as _get_client
+    # Re-grading episodes is grading, so it uses the judge, not the generator.
+    from forge.extraction.llm_client import get_judge_client as _get_client
     from forge.envgen.config import envgen_config
     client = _get_client(max_tokens=envgen_config().grading_llm_tokens)
     user = (
@@ -168,7 +169,8 @@ def _run_reward_eval(
     requirements: str,
     episodes: list[tuple[AgentEpisode, list[dict]]],
 ) -> _RewardEvalResult:
-    from forge.extraction.llm_client import get_client as _get_client
+    # Re-grading episodes is grading, so it uses the judge, not the generator.
+    from forge.extraction.llm_client import get_judge_client as _get_client
     from forge.envgen.config import envgen_config
     client = _get_client(max_tokens=envgen_config().grading_llm_tokens)
     user = (

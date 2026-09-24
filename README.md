@@ -20,17 +20,8 @@ on environments the policy never trained on → reload the checkpoint and collec
 
 ## Example RL Tasks
 
-Forge includes two deterministic reference tasks in
-[`example_tasks/`](example_tasks/): a Slack incident reconciliation and a
-task-manager handover. Each is a complete, self-contained Harbor task with no
-shared package and no install step — a two-container environment joined by Unix
-sockets, tools served over MCP, a virtual clock, a data-driven scenario engine,
-and a weighted layered verifier that reads the world's own action log rather
-than the agent's trajectory. Both ship a reference solution that scores exactly
-1.0, a suite that runs as the Harbor verifier itself, and a provider-agnostic
-agent that defaults to a local Ollama model — so a task can be run end to end
-with no API key, and switching to a hosted provider is one variable. See the
-[example tasks guide](example_tasks/README.md) for prerequisites and usage.
+Example RL tasks for Forge live in
+[OpenGym](https://github.com/mostofashakib/OpenGym).
 
 ---
 
@@ -87,7 +78,7 @@ or vLLM adapters, so the model-facing context cannot drift from the environment.
 Premade environments ship with realistic seed data that resembles real products. They're ready to evaluate agents immediately — no configuration needed.
 
 ### Gmail
-- **34 emails** across Inbox, Sent, Drafts, Spam, and custom labels (Work, Personal, Finance, Newsletter)
+- **42 emails** across Inbox, Sent, Drafts, Archive, and Trash, tagged with custom labels (Work, Urgent, Personal, Newsletter, Receipts)
 - **19 contacts** with names and addresses
 - **5 labels** with colour coding
 - Send, receive, reply, archive, label, star, delete — all functional
@@ -591,8 +582,7 @@ enter the checkpoint and experiment paths, and start the run to stream worker ou
 and inspect the result metrics in the UI. **Harbor** is available as an optional
 evaluation engine for local Harbor task directories; it remains outside Forge's base
 dependencies. Install it with `uv tool install harbor`, then select the task, agent,
-and model from the Eval page — the tasks in `example_tasks/` need nothing else,
-having no Python dependencies of their own.
+and model from the Eval page.
 
 ```bash
 # 1. Train one declared seed using only train_envs.
@@ -832,6 +822,7 @@ forge/
   customization/       # Per-env overrides: decorator hooks, EnvConfig, loader
   personas/            # Simulated humans: population, scheduler, guardrails, drivers, engine
   schema/              # StateSchemaManifest and related schemas
+  validation/          # Verdict quorum, jury, and statistical trajectory detectors
   settings.py          # Process-wide settings: determinism mode, seeds, paths, URLs
   reward_presets.py    # Canonical reward-ablation presets shared by every reward path
   grading_provenance.py  # Generator/grader independence: model families, enforcement, record
@@ -886,7 +877,7 @@ examples/
   clinical_handoff/    # Simulated-people example: a discharge the agent cannot approve alone
 docker/
   premade/
-    gmail/             # Gmail-like environment (seeded with 34 emails, 19 contacts)
+    gmail/             # Gmail-like environment (seeded with 42 emails, 19 contacts)
     slack/             # Slack-like environment (seeded with 7 channels, 88 thread replies)
 tests/
   runtime/             # Kernel, verifier, policy, RBAC, network isolation, PII tests
@@ -899,6 +890,7 @@ tests/
   personas/            # Cast resolution, cadence, guardrails, drivers, both env families,
   │                    #   the container run path, and the build-flow wiring
   gmail_env/           # Premade Gmail determinism, transition, and verifier tests
+  premade/             # Premade Gmail and Slack app query-count and state tests
   architecture/        # Separation-of-concerns, UI-determinism, and test-diversity gates
 ```
 
@@ -931,7 +923,7 @@ The development runner configures Redis with a TCP backlog of 128 to match the d
 
 **Run tests:**
 ```bash
-uv run pytest                                  # full suite (1,526 tests)
+uv run pytest                                  # full suite (1,870 tests)
 uv run pytest tests/architecture               # boundary, UI-determinism, and diversity gates only
 uv run pytest tests/runtime tests/envgen       # kernel + generation pipeline
 ```
@@ -958,6 +950,9 @@ imports, animated premade UIs, and tests that assert only the happy path.
 | `REDIS_URL` | `redis://localhost:6379/0` | Redis URL for Celery and build/benchmark progress pub/sub; `run.sh` replaces this with a runtime-generated authenticated URL |
 | `FORGE_REDIS_PASSWORD` | generated at startup | Optional local Redis password override used by `run.sh`; must be at least 32 hexadecimal characters and is never logged |
 | `NEXT_PUBLIC_API_URL` | `http://localhost:8000` | Backend URL used by the frontend |
+| `CORS_ORIGINS` | `http://localhost:3000` | Comma-separated origins the backend accepts browser requests from |
+| `CELERY_BROKER_URL` / `CELERY_RESULT_BACKEND` | `REDIS_URL` | Override the Celery broker or result store separately from progress pub/sub |
+| `FORGE_DEBUG` | unset | Set to any value for debug-level backend logs |
 
 ### Container Images & Resource Limits
 
@@ -992,11 +987,12 @@ All LLM calls go through a single `get_client()` factory — swap providers or m
 
 | Variable | Default | Description |
 |---|---|---|
-| `FORGE_LLM_PROVIDER` | `anthropic` | LLM backend. Supported: `anthropic`, `ollama` |
+| `FORGE_LLM_PROVIDER` | `anthropic` | LLM backend: `anthropic`, `ollama`, `openai`, or `gemini`. The last two need their SDKs installed (`openai`, `google-genai`), and they read their API keys from the SDK's usual variable |
 | `FORGE_LLM_MODEL` | `claude-haiku-4-5-20251001` | Standard-tier model (faster, cheaper) |
 | `FORGE_LLM_MODEL_CAPABLE` | `claude-sonnet-4-6` | Capable-tier model (code generation, complex reasoning) |
 | `ANTHROPIC_API_KEY` | — | Required when `FORGE_LLM_PROVIDER=anthropic` |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL |
+| `VLLM_BASE_URL` | `http://localhost:8000/v1` | OpenAI-compatible endpoint for the `vllm:<model>` agent adapter |
 | `FORGE_JUDGE_PROVIDER` | falls back to `FORGE_LLM_PROVIDER` | Provider used for LLM **grading** only |
 | `FORGE_JUDGE_MODEL` | falls back to `FORGE_LLM_MODEL` | Model used for LLM **grading** only. Set this to a model outside the generating family to make LLM-graded runs independent — see [Verification Independence](#verification-independence) |
 

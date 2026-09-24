@@ -359,3 +359,34 @@ def test_benchmark_eval_help():
     result = runner.invoke(app, ["benchmark", "eval", "--help"])
     assert result.exit_code == 0
     assert "--suite" in result.output
+
+
+def test_diagnose_early_termination_advice_names_settings_that_stop_episodes(tmp_path):
+    """Container runs stop on dead ends and the step budget, never on a score threshold."""
+    import datetime
+    import json as _json
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from backend.app.models import Base, AgentRun, AgentEpisode
+
+    db_url = f"sqlite:///{tmp_path / 'test.db'}"
+    engine = create_engine(db_url, connect_args={"check_same_thread": False})
+    Base.metadata.create_all(engine)
+    now = datetime.datetime.now(datetime.timezone.utc)
+    jsonl_path = tmp_path / "cep_short.jsonl"
+    jsonl_path.write_text(_json.dumps({"type": "episode_summary", "total_steps": 2}))
+    with sessionmaker(bind=engine)() as db:
+        db.add(AgentRun(id="run_s", env_name="short_env", agent_id="random",
+                        objective="o", num_episodes=1, created_at=now))
+        db.add(AgentEpisode(id="cep_short", run_id="run_s", episode_index=0, seed=0,
+                            status="completed", total_steps=2, total_reward=0.0,
+                            final_objective_score=0.0, termination_reason="dead_end",
+                            jsonl_path=str(jsonl_path), started_at=now))
+        db.commit()
+
+    result = runner.invoke(app, ["diagnose", "short_env", "--db", db_url, "--json"])
+
+    assert result.exit_code == 0, result.output
+    advice = " ".join(_json.loads(result.output)["recommendations"])
+    assert "dead_end_patience" in advice
+    assert "divergence_threshold" not in advice
