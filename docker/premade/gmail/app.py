@@ -16,8 +16,7 @@ Action endpoints (all POST):
 from __future__ import annotations
 
 import json
-import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException
@@ -45,7 +44,7 @@ class Base(DeclarativeBase):
 class Email(Base):
     __tablename__ = "emails"
 
-    id = Column(String, primary_key=True, default=lambda: f"e{uuid.uuid4().hex[:8]}")
+    id = Column(String, primary_key=True)
     thread_id = Column(String, nullable=True)
     folder = Column(String, default="inbox")
     from_addr = Column(String, nullable=False)
@@ -72,7 +71,7 @@ class Contact(Base):
 class Label(Base):
     __tablename__ = "labels"
 
-    id = Column(String, primary_key=True, default=lambda: f"l{uuid.uuid4().hex[:6]}")
+    id = Column(String, primary_key=True)
     name = Column(String, unique=True, nullable=False)
     color = Column(String, default="#1a73e8")
 
@@ -86,11 +85,18 @@ class SavedState(Base):
 
 class ActionLog(Base):
     __tablename__ = "action_log"
-    id = Column(String, primary_key=True, default=lambda: f"a{uuid.uuid4().hex[:8]}")
+    id = Column(String, primary_key=True)
     action_type = Column(String, nullable=False)
     target_id = Column(String, nullable=True)
     payload = Column(Text, default="{}")
     timestamp = Column(String, nullable=False)
+
+
+class ForgeCounter(Base):
+    """The virtual clock and the id counters, stored with the data they number."""
+    __tablename__ = "forge_counters"
+    name = Column(String, primary_key=True)
+    value = Column(Integer, nullable=False)
 
 
 Base.metadata.create_all(bind=engine)
@@ -113,8 +119,29 @@ app.add_middleware(
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+# Episodes must replay identically, so the app never reads the wall clock or
+# mints random ids. Time is a counter that moves one second per event, and ids
+# count up per prefix. Both live in SQLite, so they reset, snapshot, and
+# survive a restart together with the rows they describe.
+
+def _bump(db: Session, name: str) -> int:
+    counter = db.get(ForgeCounter, name)
+    if counter is None:
+        counter = ForgeCounter(name=name, value=0)
+        db.add(counter)
+        db.flush()  # later lookups in this session must find it
+    counter.value += 1
+    return counter.value
+
+
+def _now(db: Session) -> str:
+    moment = _CLOCK_EPOCH + timedelta(seconds=_bump(db, "clock"))
+    return moment.strftime(_TIMESTAMP_FORMAT)
+
+
+def _next_id(db: Session, prefix: str) -> str:
+    # The underscore keeps minted ids apart from seed ids like "e001".
+    return f"{prefix}_{_bump(db, f'id:{prefix}'):04d}"
 
 
 def _snippet(body: str) -> str:
@@ -150,11 +177,11 @@ def _label_to_dict(lb: Label) -> dict:
 
 def _log_action(db: Session, action_type: str, target_id: str = None, payload: dict = None) -> None:
     db.add(ActionLog(
-        id=f"a{uuid.uuid4().hex[:8]}",
+        id=_next_id(db, "a"),
         action_type=action_type,
         target_id=target_id,
         payload=json.dumps(payload or {}),
-        timestamp=_now(),
+        timestamp=_now(db),
     ))
 
 
@@ -194,6 +221,9 @@ def _dump_full_db(db: Session) -> dict:
              "payload": a.payload, "timestamp": a.timestamp}
             for a in db.query(ActionLog).order_by(ActionLog.timestamp).all()
         ],
+        "forge_counters": {
+            c.name: c.value for c in db.query(ForgeCounter).order_by(ForgeCounter.name).all()
+        },
     }
 
 
@@ -202,6 +232,13 @@ def _restore_from_dict(db: Session, data: dict) -> None:
     db.query(Contact).delete()
     db.query(Label).delete()
     db.query(ActionLog).delete()
+    # A snapshot carries the clock and counters, so restoring it rewinds them
+    # too. State JSON without them leaves them running, which keeps new ids
+    # clear of the rows already there.
+    if "forge_counters" in data:
+        db.query(ForgeCounter).delete()
+        for name, value in data["forge_counters"].items():
+            db.add(ForgeCounter(name=name, value=value))
     for e in data.get("emails", []):
         db.add(Email(
             id=e["id"],
@@ -216,7 +253,7 @@ def _restore_from_dict(db: Session, data: dict) -> None:
             is_read=e.get("is_read", False),
             is_starred=e.get("is_starred", False),
             labels=json.dumps(e.get("labels", [])),
-            timestamp=e.get("timestamp", _now()),
+            timestamp=e["timestamp"] if "timestamp" in e else _now(db),
             has_attachment=e.get("has_attachment", False),
         ))
     for c in data.get("contacts", []):
@@ -1029,6 +1066,13 @@ _AUTO_REPLY_MAP = {
     },
 }
 
+_TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+# Virtual time starts a minute after the newest seed email, so anything created
+# during an episode sorts as the newest mail.
+_CLOCK_EPOCH = max(
+    datetime.strptime(e["timestamp"], _TIMESTAMP_FORMAT) for e in _SEED_EMAILS
+) + timedelta(minutes=1)
+
 
 def _seed_if_empty() -> None:
     with SessionLocal() as db:
@@ -1090,6 +1134,7 @@ def forge_reset():
         db.query(Label).delete()
         db.query(ActionLog).delete()
         db.query(SavedState).delete()
+        db.query(ForgeCounter).delete()
         db.commit()
     _seed_if_empty()
     with SessionLocal() as db:
@@ -1228,7 +1273,7 @@ class ReceiveRequest(BaseModel):
 def receive(req: ReceiveRequest):
     """Inject an incoming email into the inbox. Used by evaluators to simulate responses."""
     with SessionLocal() as db:
-        email_id = f"i{uuid.uuid4().hex[:8]}"
+        email_id = _next_id(db, "i")
         db.add(Email(
             id=email_id,
             thread_id=req.thread_id,
@@ -1242,7 +1287,7 @@ def receive(req: ReceiveRequest):
             is_read=False,
             is_starred=False,
             labels=json.dumps(req.labels or []),
-            timestamp=_now(),
+            timestamp=_now(db),
             has_attachment=False,
         ))
         _log_action(db, "receive", email_id, {"from": req.from_addr, "subject": req.subject})
@@ -1253,9 +1298,9 @@ def receive(req: ReceiveRequest):
 
 @app.post("/compose")
 def compose(req: ComposeRequest):
-    draft_id = f"d{uuid.uuid4().hex[:8]}"
-    ts = _now()
     with SessionLocal() as db:
+        draft_id = _next_id(db, "d")
+        ts = _now(db)
         db.add(Email(
             id=draft_id,
             thread_id=None,
@@ -1286,7 +1331,7 @@ def send(req: SendRequest):
             return {"status": "error", "message": f"Draft '{req.draft_id}' not found", "state": _get_state_dict(db)}
         to_addr = email.to_addr
         email.folder = "sent"
-        email.timestamp = _now()
+        email.timestamp = _now(db)
         _log_action(db, "send", req.draft_id, {"to": to_addr})
         db.commit()
         state = _get_state_dict(db)
@@ -1299,7 +1344,7 @@ def reply(req: ReplyRequest):
         original = db.query(Email).filter(Email.id == req.email_id).first()
         if not original:
             return {"status": "error", "message": f"Email '{req.email_id}' not found", "state": _get_state_dict(db)}
-        reply_id = f"r{uuid.uuid4().hex[:8]}"
+        reply_id = _next_id(db, "r")
         orig_labels = original.labels or "[]"
         db.add(Email(
             id=reply_id,
@@ -1314,7 +1359,7 @@ def reply(req: ReplyRequest):
             is_read=True,
             is_starred=False,
             labels=orig_labels,
-            timestamp=_now(),
+            timestamp=_now(db),
             has_attachment=False,
         ))
         original.is_read = True
@@ -1330,14 +1375,14 @@ def reply(req: ReplyRequest):
             ).first()
             if not already:
                 r = _AUTO_REPLY_MAP[thread]
-                resp_id = f"ar{uuid.uuid4().hex[:8]}"
+                resp_id = _next_id(db, "ar")
                 db.add(Email(
                     id=resp_id, thread_id=thread, folder="inbox",
                     from_addr=r["from_addr"], to_addr="me@company.com", cc="",
                     subject=r["subject"], body=r["body"],
                     snippet=_snippet(r["body"]),
                     is_read=False, is_starred=False, labels='["work"]',
-                    timestamp=_now(), has_attachment=False,
+                    timestamp=_now(db), has_attachment=False,
                 ))
                 _log_action(db, "auto_reply", thread, {"from": r["from_addr"]})
                 db.commit()
@@ -1351,7 +1396,7 @@ def forward(req: ForwardRequest):
         original = db.query(Email).filter(Email.id == req.email_id).first()
         if not original:
             return {"status": "error", "message": f"Email '{req.email_id}' not found", "state": _get_state_dict(db)}
-        fwd_id = f"f{uuid.uuid4().hex[:8]}"
+        fwd_id = _next_id(db, "f")
         note_text = f"{req.note}\n\n" if req.note else ""
         fwd_body = (
             f"{note_text}"
@@ -1373,7 +1418,7 @@ def forward(req: ForwardRequest):
             is_read=True,
             is_starred=False,
             labels="[]",
-            timestamp=_now(),
+            timestamp=_now(db),
             has_attachment=original.has_attachment,
         ))
         _log_action(db, "forward", fwd_id, {"to": req.to})
@@ -1447,7 +1492,7 @@ def label(req: LabelRequest):
             if req.label not in current:
                 current.append(req.label)
             if not db.query(Label).filter(Label.name == req.label).first():
-                db.add(Label(id=f"l{uuid.uuid4().hex[:6]}", name=req.label, color="#1a73e8"))
+                db.add(Label(id=_next_id(db, "l"), name=req.label, color="#1a73e8"))
         else:
             current = [l for l in current if l != req.label]
         email.labels = json.dumps(current)
@@ -1511,7 +1556,7 @@ def create_label(req: CreateLabelRequest):
         existing = db.query(Label).filter(Label.name == req.name).first()
         if existing:
             return {"status": "error", "message": f"Label '{req.name}' already exists", "state": _get_state_dict(db)}
-        lb_id = f"l{uuid.uuid4().hex[:6]}"
+        lb_id = _next_id(db, "l")
         db.add(Label(id=lb_id, name=req.name, color=req.color))
         _log_action(db, "create_label", None, {"name": req.name})
         db.commit()

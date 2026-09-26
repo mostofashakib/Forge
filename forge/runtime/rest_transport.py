@@ -7,14 +7,24 @@ import json
 import httpx
 
 from forge.contracts import Transport, TransportRequest, TransportResponse
+from forge.contracts.transport import DEFAULT_TIMEOUT_S
 
 
 class RestTransport(Transport):
     def __init__(self, base_url: str, client: httpx.Client | None = None) -> None:
         self._base_url = base_url.rstrip("/")
-        self._client = client or httpx.Client(timeout=15.0)
+        self._client = client or httpx.Client(timeout=DEFAULT_TIMEOUT_S)
 
     def call(self, request: TransportRequest) -> TransportResponse:
+        # The target is joined onto the base URL by string, and the agent picks
+        # it. Anything but an origin-relative path can rewrite the host (e.g.
+        # "@example.com/x" makes example.com the host), so it never leaves.
+        if not request.target.startswith("/"):
+            return TransportResponse(
+                status=0,
+                body={},
+                error=f"target {request.target!r} is not a path on the environment",
+            )
         # `None` is not "use the client default" to httpx — it means no
         # timeout at all. `USE_CLIENT_DEFAULT` is the actual sentinel for
         # that, so an unset `TransportRequest.timeout` must map to it rather

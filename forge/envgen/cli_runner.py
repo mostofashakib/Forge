@@ -44,7 +44,8 @@ __all__ = [
 @dataclass(kw_only=True)
 class CliEpisodeConfig(BaseEpisodeConfig):
     container_id: str
-    command_timeout: float = 30.0
+    # Fixed and generous: a slow host must not turn a command into a timeout.
+    command_timeout: float = 120.0
     # Loop-detector knobs (Tier 2 of the tiered reward).
     loop_repeat_threshold: int = 3
     loop_consecutive_failures: int = 5

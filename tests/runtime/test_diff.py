@@ -52,3 +52,32 @@ def test_unchanged_fields_not_in_changed():
     diff = compute_diff(before, after)
     assert "emails.e_0.id" not in diff["changed"]
     assert "emails.e_0.labels" not in diff["changed"]
+
+
+def _diff_json_under_hash_seed(hash_seed: str) -> str:
+    """Run compute_diff in a fresh interpreter with a fixed string-hash salt."""
+    import os
+    import subprocess
+    import sys
+
+    script = (
+        "import json\n"
+        "from forge.runtime.diff import compute_diff\n"
+        "names = [f'entity_{i}' for i in range(40)]\n"
+        "before = {'tickets': {n: {'status': 'open', 'owner': 'a'} for n in names[:20]},\n"
+        "          'notes': {n: {'text': 'x'} for n in names[:10]}}\n"
+        "after = {'tickets': {n: {'status': 'closed', 'owner': 'b'} for n in names[10:30]},\n"
+        "         'labels': {n: {'name': n} for n in names[:10]}}\n"
+        "print(json.dumps(compute_diff(before, after)))\n"
+    )
+    env = {**os.environ, "PYTHONHASHSEED": hash_seed}
+    return subprocess.run(
+        [sys.executable, "-c", script], env=env, capture_output=True, text=True, check=True,
+    ).stdout
+
+
+def test_diff_key_order_does_not_depend_on_string_hash_salt():
+    # Trajectories and exports serialize the diff as-is, so its key order must
+    # be identical across processes, not just within one.
+    outputs = {_diff_json_under_hash_seed(seed) for seed in ("1", "2", "3", "4")}
+    assert len(outputs) == 1

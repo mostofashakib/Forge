@@ -24,6 +24,7 @@ from forge.contracts import (
 )
 from forge.envgen.agents.container_agent import ContainerAgentBase
 from forge.contracts.persona import PersonaPopulation
+from forge.contracts.transport import DEFAULT_TIMEOUT_S
 from forge.envgen.container_env_base import ContainerEnvBase
 from forge.personas.engine import PersonaEngine
 from forge.envgen.episode_base import (
@@ -63,7 +64,7 @@ class EpisodeConfig(BaseEpisodeConfig):
     max_steps: int = 50
     consecutive_below_threshold: int = 8
     # httpx timeout per request (seconds)
-    http_timeout: float = 15.0
+    http_timeout: float = DEFAULT_TIMEOUT_S
     diff_floor: float = 0.1
     # Simulated humans who act alongside the agent. Loaded from the
     # environment's custom/config.yaml; `None` means the environment runs
@@ -167,7 +168,7 @@ class ContainerEpisodeRunner(EpisodeController):
     # Startup health check
     # ------------------------------------------------------------------
 
-    def wait_for_health(self, max_retries: int = 15, delay: float = 3.0) -> bool:
+    def wait_for_health(self, max_retries: int = 40, delay: float = 3.0) -> bool:
         """Poll /forge/health until the app responds or retries are exhausted.
 
         The FastAPI container may take several seconds to start uvicorn after

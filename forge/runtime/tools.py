@@ -19,6 +19,7 @@ from collections.abc import Iterable, Sequence
 import httpx
 
 from forge.contracts import ToolParam, ToolProvider, ToolSpec
+from forge.contracts.transport import DEFAULT_TIMEOUT_S
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +83,7 @@ class OpenAPIToolProvider(ToolProvider):
     empty manifest, never an exception out of the episode.
     """
 
-    def __init__(self, client: httpx.Client, *, timeout: float = 10.0) -> None:
+    def __init__(self, client: httpx.Client, *, timeout: float = DEFAULT_TIMEOUT_S) -> None:
         self._client = client
         self._timeout = timeout
         self._manifest: list[dict] | None = None
