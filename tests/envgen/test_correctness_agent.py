@@ -1,6 +1,10 @@
 import pytest
 
-from forge.envgen.agents.correctness import audit_determinism, EnvironmentCorrectnessAgent
+from forge.envgen.agents.correctness import (
+    EnvironmentCorrectnessAgent,
+    audit_dependencies,
+    audit_determinism,
+)
 from forge.envgen.agents.reviewer import ReviewSeverity
 from forge.envgen.artifact_bus import ArtifactBus
 from forge.envgen.context import EnvGenContext
@@ -167,3 +171,53 @@ async def test_agent_rejects_app_with_a_string_returning_endpoint():
     report = bus.get("correctness_report")
     assert report.approved is False
     assert "untyped_return" in {i.category for i in report.issues}
+
+
+# ---------------------------------------------------------------------------
+# Dependencies: the container installs only the runtime lock
+# ---------------------------------------------------------------------------
+
+def test_importing_a_package_outside_the_lock_is_rejected():
+    src = "import bs4\nfrom passlib.hash import bcrypt\n"
+
+    issues = audit_dependencies({"main.py": src})
+
+    assert [i.category for i in issues] == ["unlocked_dependency", "unlocked_dependency"]
+    assert {i.severity for i in issues} == {ReviewSeverity.ERROR}
+    assert "bs4" in issues[0].message and "passlib" in issues[1].message
+
+
+def test_stdlib_locked_and_local_imports_are_not_flagged():
+    # False-positive guard: everything a normal generated app imports.
+    main = (
+        "import json, os, typing\n"
+        "from datetime import timezone\n"
+        "import redis.asyncio\n"
+        "from fastapi import FastAPI\n"
+        "from fastapi.responses import FileResponse\n"
+        "from starlette.middleware.cors import CORSMiddleware\n"
+        "from pydantic import BaseModel\n"
+        "from sqlalchemy.orm import Session\n"
+        "import uvicorn\n"
+        "from models import Todo\n"
+        "from . import database\n"
+    )
+
+    assert audit_dependencies({"main.py": main, "models.py": "X = 1\n"}) == []
+
+
+@pytest.mark.asyncio
+async def test_agent_rejects_an_app_that_imports_an_unlocked_package():
+    bad = "import bs4\n" + _COMPLIANT_MAIN
+    bus = ArtifactBus()
+    await bus.publish("app_code", {"main.py": bad, "ui.html": "<html></html>"})
+    await bus.publish("instrumented_code", {"main.py": bad})
+    # False-positive guard: host-side code imports forge, which is fine.
+    await bus.publish("state_bridge_code", "from forge.envgen.container_env_base import ContainerEnvBase\n")
+    await bus.publish("reward_fn_code", "import forge\ndef compute_reward(*a):\n    return 0.0\n")
+    await EnvironmentCorrectnessAgent().run(_ctx(), bus)
+    report = bus.get("correctness_report")
+
+    assert report.approved is False
+    flagged = [i for i in report.issues if i.category == "unlocked_dependency"]
+    assert {i.artifact for i in flagged} == {"main.py", "instrumented:main.py"}

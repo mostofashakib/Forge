@@ -202,3 +202,17 @@ async def test_backend_builder_keeps_the_ui_route_when_a_ui_is_requested():
 
     main_prompt = next(p for p in client.system_prompts if "STATE-MANAGEMENT CLASS" in p)
     assert "FileResponse('ui.html'" in main_prompt
+
+
+def test_prompts_tell_the_model_the_dependency_set_is_fixed():
+    # The build installs only the pinned lock, so the model must not reach
+    # for anything else, and the Dockerfile must install the lock by hash.
+    backend = AppGeneratorPrompts.BACKEND
+    assert "import only the standard library" in backend
+    for package in ("fastapi", "starlette", "pydantic", "sqlalchemy", "uvicorn", "redis"):
+        assert package in backend
+
+    dockerfile = AppGeneratorPrompts.DOCKERFILE
+    assert "--require-hashes" in dockerfile
+    # Negative: system package installs are no longer invited.
+    assert "apt-get install" not in dockerfile

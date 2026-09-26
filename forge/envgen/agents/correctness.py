@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import ast
+import sys
+from pathlib import Path
 
 from forge.envgen.agents.base import EnvGenAgent
 from forge.envgen.agents.reviewer import GenerationReview, ReviewIssue, ReviewSeverity
 from forge.envgen.artifact_bus import ArtifactBus
 from forge.envgen.context import EnvGenContext
+from forge.envgen.runtime_lock import locked_import_names
 
 # Calls whose dotted path ends with one of these are wall-clock reads.
 _WALL_CLOCK_SUFFIXES = (
@@ -134,6 +137,50 @@ def audit_determinism(files: dict[str, str]) -> list[ReviewIssue]:
             message="/forge/reset must reset _FORGE_CLOCK and _ID_COUNTERS before re-seeding",
             artifact="main.py",
         ))
+    return issues
+
+
+def _top_level_imports(tree: ast.AST) -> list[str]:
+    """Absolute imports in source order, reduced to their top-level package."""
+    names: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names.extend(alias.name.split(".", 1)[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            names.append(node.module.split(".", 1)[0])
+    return list(dict.fromkeys(names))
+
+
+def audit_dependencies(files: dict[str, str]) -> list[ReviewIssue]:
+    """Reject imports the container cannot satisfy.
+
+    The build installs only the pinned runtime lock, never the LLM's own
+    requirements list, so a third-party import outside the lock would crash
+    the container at boot. Catching it here sends it back for repair.
+    """
+    local_modules: set[str] = set()
+    for label in files:
+        path = Path(label.split(":", 1)[-1])
+        local_modules.update({path.stem, path.parts[0]})
+    allowed = set(sys.stdlib_module_names) | locked_import_names() | local_modules
+
+    issues: list[ReviewIssue] = []
+    for label, source in files.items():
+        try:
+            tree = ast.parse(source or "")
+        except SyntaxError:
+            continue  # syntax is the reviewer's job, not ours
+        for name in _top_level_imports(tree):
+            if name not in allowed:
+                issues.append(ReviewIssue(
+                    severity=ReviewSeverity.ERROR, category="unlocked_dependency",
+                    message=(
+                        f"Imports {name!r}, which the container does not install. Use "
+                        "only the standard library, fastapi, starlette, pydantic, "
+                        "sqlalchemy, uvicorn, and redis"
+                    ),
+                    artifact=label,
+                ))
     return issues
 
 
@@ -270,7 +317,17 @@ class EnvironmentCorrectnessAgent(EnvGenAgent):
         files["state_bridge_code"] = state_bridge
         files["reward_fn_code"] = reward_fn
 
-        issues = audit_determinism(files) + audit_authoring_contract(files)
+        # State bridge and reward code run on the Forge host, not in the
+        # container, so only container code is held to the runtime lock.
+        container_files = {
+            path: content for path, content in files.items()
+            if path not in ("state_bridge_code", "reward_fn_code")
+        }
+        issues = (
+            audit_determinism(files)
+            + audit_authoring_contract(files)
+            + audit_dependencies(container_files)
+        )
         report = GenerationReview(
             approved=not any(i.severity == ReviewSeverity.ERROR for i in issues),
             requirements_checked=[
@@ -280,6 +337,7 @@ class EnvironmentCorrectnessAgent(EnvGenAgent):
                 "Determinism contract present and reset re-initializes it",
                 "State centralized in a class with reset_state()/seed_state(seed)",
                 "Route handlers return typed dicts, never bare strings",
+                "Container code imports only the standard library and the runtime lock",
             ],
             issues=issues,
         )
