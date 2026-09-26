@@ -32,10 +32,12 @@ from forge.contracts import (
     TransportResponse,
 )
 from forge.contracts.termination import MaxStepsTerminationPolicy
+from forge.contracts.transport import DEFAULT_TIMEOUT_S
 from forge.contracts.types import Action, ActionResult, StepOutcome
 from forge.runtime.http_state import HttpStateManager
 from forge.runtime.observation_filter import ObservationFilter
 from forge.runtime.rest_transport import RestTransport
+from forge.runtime.tools import RESERVED_PATHS, RESERVED_PREFIX
 from forge.contracts.persona import PersonaPopulation
 from forge.personas.engine import PersonaEngine
 from forge.runtime.task_source import StaticTaskSource
@@ -178,6 +180,12 @@ class _ContainerHookRubric(Rubric):
         raise RuntimeError("container hook rubrics require the action response")
 
 
+def _is_control_plane(endpoint: str) -> bool:
+    """Whether an action targets Forge's control endpoints rather than the domain."""
+    path = "/" + endpoint.lstrip("/")
+    return path.startswith(RESERVED_PREFIX) or path.rstrip("/") == "/forge" or path in RESERVED_PATHS
+
+
 class _HttpExecutionBackend(ExecutionBackend):
     """Executes a container env's actions over HTTP: POST to the endpoint
     ``endpoint_for`` resolves for the action (bound to the env's own
@@ -218,6 +226,17 @@ class _HttpExecutionBackend(ExecutionBackend):
         # action dict. Supporting both here keeps wire encoding inside the
         # execution backend rather than in either controller.
         payload = action_dict.get("__payload__", action_dict)
+        if _is_control_plane(endpoint):
+            # Reset, snapshot, and restore decide what the grader reads, so an
+            # agent or persona action never reaches them. Refused like any
+            # other rejected action: scored, not raised.
+            state_response = _call(self._transport, "GET", "/forge/state")
+            return _HttpActionResult(
+                state=state_response.body,
+                response=_ActionResponse(403, {
+                    "ok": False, "error": f"{endpoint!r} is not an action",
+                }),
+            )
         response = self._transport.call(
             TransportRequest(method="POST", target=endpoint, payload=payload)
         )
@@ -265,7 +284,7 @@ class ContainerEnvBase(gymnasium.Env, Environment):
         self,
         base_url: str,
         client: httpx.Client | None = None,
-        timeout: float = 15.0,
+        timeout: float = DEFAULT_TIMEOUT_S,
         max_steps: int = 50,
         task_source: TaskSource | None = None,
         prompt_template: PromptTemplate | None = None,

@@ -12,12 +12,13 @@ import json
 import httpx
 
 from forge.contracts import StateManager
+from forge.contracts.transport import DEFAULT_TIMEOUT_S
 
 
 class HttpStateManager(StateManager):
     def __init__(self, base_url: str, client: httpx.Client | None = None) -> None:
         self._base_url = base_url.rstrip("/")
-        self._client = client or httpx.Client(timeout=15.0)
+        self._client = client or httpx.Client(timeout=DEFAULT_TIMEOUT_S)
 
     def get(self) -> dict:
         response = self._client.get(f"{self._base_url}/forge/state")

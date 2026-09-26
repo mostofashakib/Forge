@@ -5,6 +5,11 @@ from abc import ABC, abstractmethod
 
 from pydantic import BaseModel, Field
 
+# Per-request budget for talking to an environment. A busy host must slow an
+# episode down, never turn a normal request into a failed step, so this sits
+# far above any healthy response time.
+DEFAULT_TIMEOUT_S = 60.0
+
 
 class TransportRequest(BaseModel):
     method: str = "POST"

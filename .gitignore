@@ -47,6 +47,8 @@ TASKS.md
 __pycache__/
 *.py[cod]
 .venv/
+.pytest_cache/
+.ruff_cache/
 
 # git worktrees
 .worktrees/
@@ -70,6 +72,8 @@ superpowers/
 benchmark_results/
 policy_checkpoint*
 forge.db
+forge.db-shm
+forge.db-wal
 dump.rdb
 
 # IDE

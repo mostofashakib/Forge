@@ -817,7 +817,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=1.26.0" },
     { name = "ollama", specifier = ">=0.3.0" },
     { name = "pandas", specifier = ">=2.0.0" },
-    { name = "playwright", specifier = ">=1.40.0" },
+    { name = "playwright", specifier = ">=1.45.0" },
     { name = "pyarrow", specifier = ">=15.0.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.4.0" },

@@ -1,14 +1,19 @@
 from __future__ import annotations
+import hashlib
 import os
 import re
 import subprocess
 import time
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Iterator
 import docker
 import docker.errors
 
 from forge.logging_utils import redact_sensitive_text
 
+from forge.envgen.runtime_lock import RUNTIME_LOCK
+from forge.runtime.context import SimClock
 from forge.runtime.network_isolation import check_generated_env
 from forge.settings import redis_url
 
@@ -18,10 +23,49 @@ from forge.settings import redis_url
 # on exactly one image. We pre-warm it at worker startup, which means the
 # user-triggered build path always finds it cached and never contacts
 # Docker Hub — making the system immune to transient Hub EOF outages.
-FORGE_PYTHON_BASE = os.environ.get("FORGE_PYTHON_BASE_IMAGE", "python:3.12-slim")
-FORGE_CLI_IMAGE = os.environ.get("FORGE_CLI_IMAGE", "ubuntu:22.04")
+#
+# Every image is pinned by digest. A tag moves when upstream republishes it,
+# so the same environment would otherwise build on different bytes each week.
+FORGE_PYTHON_BASE = os.environ.get(
+    "FORGE_PYTHON_BASE_IMAGE",
+    "python:3.12-slim@sha256:f77ac9e44ae96ef2c90b8053ea08c31f8be030f824196b0ae4db6d462c84e51f",
+)
+FORGE_CLI_IMAGE = os.environ.get(
+    "FORGE_CLI_IMAGE",
+    "ubuntu:22.04@sha256:b8b6ee6aa931ecd9d0d952abc34dc0e5f7c6a30c6bb71b079fe399fde0329c02",
+)
 FORGE_BROWSER_IMAGE = os.environ.get(
-    "FORGE_BROWSER_IMAGE", "lscr.io/linuxserver/chromium:latest"
+    "FORGE_BROWSER_IMAGE",
+    "lscr.io/linuxserver/chromium:latest"
+    "@sha256:cf6200ccdcb224feaf5d3bde4ce45b3783c926a7496c98059cae1e0db78e5b2f",
+)
+
+# App and browser containers each sit on their own `internal` network, which
+# has no route out, so nothing inside can reach the internet or another
+# environment. Docker cannot publish a port from an internal network, so each
+# environment gets a gateway: a pinned socat container that publishes the
+# loopback ports and forwards only to its own environment.
+def sandbox_network_name(env_name: str) -> str:
+    return "forge-sandbox-" + re.sub(r"[^a-zA-Z0-9_.-]", "-", env_name)
+
+
+FORGE_GATEWAY_IMAGE = os.environ.get(
+    "FORGE_GATEWAY_IMAGE",
+    "alpine/socat:1.8.0.3@sha256:beb4a68d9e4fe6b0f21ea774a0fde6c31f580dde6368939ed70100c5385b015e",
+)
+_GATEWAY_MEMORY_LIMIT = "64m"
+
+# CLI grading uses only this toolbox: a static BusyBox from a pinned image,
+# copied into a volume and mounted read-only into the grader. Static binaries
+# ignore LD_PRELOAD and /etc/ld.so.preload, so nothing the agent wrote in its
+# container can change what an assertion's `grep` or `test` reports.
+FORGE_GRADER_TOOLBOX_IMAGE = os.environ.get(
+    "FORGE_GRADER_TOOLBOX_IMAGE",
+    "busybox:1.37.0-musl@sha256:5cec3fc171c87218698e85a52af7087de727372aae264a787b8112901a5b0092",
+)
+_GRADER_TOOLBOX_DIR = "/opt/forge-grader"
+_GRADER_PATH = (
+    f"{_GRADER_TOOLBOX_DIR}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 )
 
 # Standard base images Forge needs locally. Pre-warmed at Celery worker
@@ -30,13 +74,46 @@ STANDARD_BASE_IMAGES: tuple[str, ...] = (
     FORGE_PYTHON_BASE,
     FORGE_CLI_IMAGE,
     FORGE_BROWSER_IMAGE,
+    FORGE_GATEWAY_IMAGE,
+    FORGE_GRADER_TOOLBOX_IMAGE,
 )
+
+# The CLI environment runs a prebuilt image: the pinned Ubuntu base plus
+# libfaketime. Its tag is derived from the Dockerfile, so editing the file
+# builds a new image instead of reusing a stale one.
+CLI_DOCKERFILE = Path(__file__).with_name("cli_image") / "Dockerfile"
+
+
+def _cli_image_tag(dockerfile_text: str) -> str:
+    digest = hashlib.sha256(f"{FORGE_CLI_IMAGE}\n{dockerfile_text}".encode()).hexdigest()
+    return f"forge-cli:{digest[:16]}"
+
+
+CLI_RUNTIME_IMAGE = _cli_image_tag(CLI_DOCKERFILE.read_text())
+
+def cli_snapshot_tag(env_name: str, run_id: str) -> str:
+    """The image a run's CLI episodes fork from: the environment, frozen at run start."""
+    repo = re.sub(r"[^a-z0-9._-]", "-", env_name.lower())
+    tag = re.sub(r"[^A-Za-z0-9_.-]", "-", run_id)[:128]
+    return f"forge-cli-snapshot-{repo}:{tag}"
+
+
+# Every process in the CLI container starts its clock at the SimClock epoch.
+_CLI_FAKETIME_ENV = {
+    "LD_PRELOAD": "/usr/local/lib/libfaketime.so.1",
+    "FAKETIME": SimClock().now().strftime("@%Y-%m-%d %H:%M:%S"),
+}
+
+# The only install step a Forge Dockerfile may contain. `--require-hashes`
+# makes pip refuse anything the lock does not pin to an exact artifact.
+_LOCKED_INSTALL = "RUN pip install --no-cache-dir --require-hashes -r requirements.txt"
 
 _DOCKERFILE = f"""\
 FROM {FORGE_PYTHON_BASE}
 WORKDIR /app
+COPY requirements.txt .
+{_LOCKED_INSTALL}
 COPY . .
-RUN pip install --no-cache-dir fastapi uvicorn sqlalchemy redis httpx
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
 """
 
@@ -53,6 +130,12 @@ _PYTHON_FROM_RE = re.compile(
 # must listen on the same port — otherwise the host-port binding routes
 # to nothing and the iframe shows "Container not running".
 FORGE_APP_PORT = 8000
+# The browser image serves its KasmVNC UI and Chromium's DevTools here.
+# Chromium binds DevTools to its own loopback whatever flags it gets, so a
+# relay inside the browser's network namespace re-serves it on the relay port.
+_BROWSER_UI_PORT = 3000
+_BROWSER_CDP_PORT = 9222
+_BROWSER_CDP_RELAY_PORT = 9223
 
 # Runtime limits are intentionally conservative defaults for generated code.
 # They can be overridden for larger local experiments without changing code.
@@ -63,62 +146,76 @@ _CPU_LIMIT = int(os.environ.get("FORGE_CONTAINER_NANO_CPUS", "1000000000"))
 _PID_LIMIT = int(os.environ.get("FORGE_CONTAINER_PIDS", "256"))
 
 
+# Python salts str hashes per process, so set iteration order changes on every
+# container start. A fixed seed makes it depend only on what was inserted.
+_PYTHON_HASH_SEED = "0"
+
+
 def _loopback_port() -> tuple[str, None]:
     """Ask Docker for a random host port bound only to loopback."""
     return ("127.0.0.1", None)
 
-# Every Forge-generated FastAPI app needs these at runtime. The LLM that
-# writes requirements.txt is a different model (Haiku) than the one that
-# writes main.py (Sonnet), and they drift — Sonnet routinely emits
-# `import redis` while Haiku forgets to list it. The container then
-# crashes on boot with ModuleNotFoundError. Inject this baseline at build
-# time so the runtime imports always resolve, regardless of what the LLM
-# happened to put in requirements.txt.
-_BASELINE_REQUIREMENTS: tuple[str, ...] = (
-    "fastapi",
-    "uvicorn[standard]",
-    "sqlalchemy",
-    "redis",
-    "httpx",
-    "python-multipart",
-    "pydantic",
-)
+def _write_locked_requirements(app_dir: Path) -> bool:
+    """Make requirements.txt the runtime lock, whatever the LLM listed.
 
-
-def _existing_packages(req_text: str) -> set[str]:
-    """Lower-cased set of package names already declared (extras/version stripped)."""
-    out: set[str] = set()
-    for line in req_text.splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or line.startswith("-"):
-            continue
-        # Strip extras "[standard]" and version specifiers "==1.2", ">=1.0", etc.
-        name = line.split("[", 1)[0]
-        for sep in ("==", ">=", "<=", "~=", "!=", ">", "<"):
-            name = name.split(sep, 1)[0]
-        out.add(name.strip().lower())
-    return out
-
-
-def _normalise_requirements(app_dir: Path) -> bool:
-    """Ensure the FastAPI + Forge baseline deps are present in requirements.txt.
-
-    Returns True if the file was created or amended.
+    An unpinned requirements file resolves against whatever PyPI serves on
+    build day. The correctness gate rejects generated code that imports a
+    package the lock lacks, so replacing the file never drops a real need.
+    Returns True if the file was created or changed.
     """
+    lock = RUNTIME_LOCK.read_text()
     req_file = app_dir / "requirements.txt"
-    if not req_file.exists():
-        req_file.write_text("\n".join(_BASELINE_REQUIREMENTS) + "\n")
-        return True
-
-    existing = req_file.read_text()
-    declared = _existing_packages(existing)
-    missing = [
-        dep for dep in _BASELINE_REQUIREMENTS
-        if dep.split("[", 1)[0].lower() not in declared
-    ]
-    if not missing:
+    if req_file.exists() and req_file.read_text() == lock:
         return False
-    req_file.write_text(existing.rstrip() + "\n" + "\n".join(missing) + "\n")
+    req_file.write_text(lock)
+    return True
+
+
+# `pip install` in any spelling (pip, pip3, python -m pip).
+_PIP_INSTALL_RE = re.compile(r"\bpip3?\s+install\b")
+# System package managers resolve against live distro mirrors.
+_SYSTEM_INSTALL_RE = re.compile(r"\b(apt-get|apt|apk)\s+(update|install|add)\b")
+
+
+def _dockerfile_instructions(text: str) -> list[str]:
+    """Split a Dockerfile into instructions, keeping `\\` continuations whole."""
+    instructions: list[str] = []
+    current: list[str] = []
+    for line in text.splitlines():
+        current.append(line)
+        if not line.rstrip().endswith("\\"):
+            instructions.append("\n".join(current))
+            current = []
+    if current:
+        instructions.append("\n".join(current))
+    return instructions
+
+
+def _normalise_dockerfile_install(dockerfile: Path) -> bool:
+    """Reduce every install step to the single hashed install of the lock.
+
+    The first RUN that calls pip becomes `_LOCKED_INSTALL`. Later pip RUNs
+    and every system package install are dropped: the lock is the whole
+    dependency set, and nothing in it needs a system package.
+    Returns True if the file was modified.
+    """
+    original = dockerfile.read_text()
+    kept: list[str] = []
+    installed = False
+    for instruction in _dockerfile_instructions(original):
+        is_run = instruction.lstrip().upper().startswith("RUN ")
+        if is_run and _PIP_INSTALL_RE.search(instruction):
+            if not installed:
+                kept.append(_LOCKED_INSTALL)
+                installed = True
+            continue
+        if is_run and _SYSTEM_INSTALL_RE.search(instruction):
+            continue
+        kept.append(instruction)
+    text = "\n".join(kept) + "\n"
+    if text == original:
+        return False
+    dockerfile.write_text(text)
     return True
 
 # Match a whole EXPOSE line (case-insensitive). Uses `[ \t]` instead of `\s`
@@ -412,12 +509,23 @@ def pull_image(image: str) -> None:
         mirror_ref = _mirror_ref_for(image, mirror)
         try:
             _pull_with_retry(mirror_ref)
-            _docker_tag(mirror_ref, image)
+            # `docker tag` refuses a digest target. The name alone is enough:
+            # the digest ref then resolves to this content-addressed image.
+            _docker_tag(mirror_ref, image.split("@", 1)[0])
             log.info("[pull] %s served by %s", image, mirror)
             return
         except (RuntimeError, subprocess.CalledProcessError) as exc:
             errors.append(f"{mirror} → {redact_sensitive_text(exc)}")
             log.info("[pull] %s unavailable for %s", mirror, image)
+
+    # The HTTPS loader rebuilds the manifest locally, so its digest can never
+    # match a pinned one. Serving it would silently unpin the build.
+    if "@" in image:
+        raise RuntimeError(
+            f"Failed to pull {image} from docker.io or any mirror. Direct HTTPS "
+            "is skipped because it cannot preserve a pinned digest:\n"
+            + "\n".join(f"  - {e}" for e in errors)
+        )
 
     # 3) Direct HTTPS via httpx — independent transport, independent of
     #    whatever's wrong with the Docker daemon's HTTP/2 client.
@@ -442,8 +550,8 @@ def pull_image(image: str) -> None:
 
 
 class ContainerRuntime:
-    def __init__(self) -> None:
-        self._docker_client: docker.DockerClient | None = None
+    def __init__(self, docker_client: docker.DockerClient | None = None) -> None:
+        self._docker_client = docker_client
         self._redis_url = redis_url()
 
     @staticmethod
@@ -451,6 +559,14 @@ class ContainerRuntime:
         """Return a Docker-safe container name for an environment."""
         safe = re.sub(r"[^a-zA-Z0-9_.-]", "-", env_name)
         return f"forge-{safe}"
+
+    @classmethod
+    def _gateway_name(cls, env_name: str) -> str:
+        return f"{cls._container_name(env_name)}-gw"
+
+    @classmethod
+    def _relay_name(cls, env_name: str) -> str:
+        return f"{cls._container_name(env_name)}-cdp"
 
     @property
     def _docker(self) -> docker.DockerClient:
@@ -471,13 +587,14 @@ class ContainerRuntime:
             # listener and the host-side port mapping never disagree, no
             # matter what port the LLM picked.
             _normalise_dockerfile_port(dockerfile)
+            # Only the hashed lock may be installed, so nothing is resolved
+            # at build time.
+            _normalise_dockerfile_install(dockerfile)
 
-        # Inject the baseline runtime deps. The LLM that writes main.py
-        # (Sonnet) and the one that writes requirements.txt (Haiku) are
-        # separate models and drift — main.py routinely imports `redis`,
-        # `httpx`, etc. while requirements.txt forgets them, which crashes
-        # the container at boot with ModuleNotFoundError.
-        _normalise_requirements(app_dir)
+        # The lock replaces whatever the LLM listed. It also covers the
+        # runtime deps generated code needs, which the LLM that writes
+        # requirements.txt routinely forgets.
+        _write_locked_requirements(app_dir)
 
         violations = check_generated_env(app_dir)
         if violations:
@@ -519,41 +636,214 @@ class ContainerRuntime:
         return tag
 
     def _remove_existing(self, env_name: str) -> None:
-        """Remove an existing container with the forge-<env_name> name if present."""
+        """Remove every container that belongs to an environment, if present."""
+        base = self._container_name(env_name)
+        for name in (
+            self._relay_name(env_name), base, self._gateway_name(env_name),
+            f"{base}-warm", f"{base}-episode",
+        ):
+            try:
+                self._docker.containers.get(name).remove(force=True)
+            except docker.errors.NotFound:
+                pass
+
+    def _sandbox_network(self, env_name: str):
+        """The environment's internal network, created on first use."""
+        name = sandbox_network_name(env_name)
         try:
-            old = self._docker.containers.get(self._container_name(env_name))
-            old.remove(force=True)
+            return self._docker.networks.get(name)
         except docker.errors.NotFound:
             pass
+        try:
+            return self._docker.networks.create(
+                name, driver="bridge", internal=True,
+                labels={"forge.managed": "true", "forge.env": env_name},
+            )
+        except docker.errors.APIError:
+            # Another worker created it between our lookup and create.
+            return self._docker.networks.get(name)
+
+    def _start_gateway(self, env_name: str, forwards: dict[int, int], network):
+        """Publish each port on loopback, forwarding it to a port on the environment only."""
+        target = self._container_name(env_name)
+        ports = tuple(forwards)
+        script = " & ".join(
+            f"socat TCP-LISTEN:{port},fork,reuseaddr TCP:{target}:{target_port}"
+            for port, target_port in forwards.items()
+        ) + " & wait"
+        gateway = self._docker.containers.run(
+            image=FORGE_GATEWAY_IMAGE,
+            name=self._gateway_name(env_name),
+            entrypoint=["/bin/sh", "-c"],
+            command=[script],
+            detach=True,
+            ports={f"{port}/tcp": _loopback_port() for port in ports},
+            labels={"forge.env": env_name, "forge.managed": "true", "forge.role": "gateway"},
+            restart_policy={"Name": "unless-stopped"},
+            mem_limit=_GATEWAY_MEMORY_LIMIT,
+            nano_cpus=_CPU_LIMIT,
+            pids_limit=_PID_LIMIT,
+            cap_drop=["ALL"],
+            security_opt=["no-new-privileges:true"],
+        )
+        network.connect(gateway)
+        return gateway
+
+    def _remove_network(self, env_name: str) -> None:
+        try:
+            self._docker.networks.get(sandbox_network_name(env_name)).remove()
+        except docker.errors.NotFound:
+            pass
+        except docker.errors.APIError as exc:
+            # Something is still attached. The next run of this env reuses it.
+            import logging
+            logging.getLogger(__name__).warning(
+                "[container] could not remove network for %s: %s", env_name, exc
+            )
+
+    def _gateway_for(self, container):
+        """The gateway of an app or browser container, or None if it has none."""
+        env_name = container.labels.get("forge.env", "")
+        try:
+            return self._docker.containers.get(self._gateway_name(env_name))
+        except docker.errors.NotFound:
+            return None
+
+    def _sidecars_for(self, container) -> list:
+        """The environment's helper containers that exist: relay, then gateway."""
+        env_name = container.labels.get("forge.env", "")
+        found = []
+        for name in (self._relay_name(env_name), self._gateway_name(env_name)):
+            try:
+                found.append(self._docker.containers.get(name))
+            except docker.errors.NotFound:
+                pass
+        return found
+
+    def host_port(self, container, container_port: int | None = None) -> int | None:
+        """The loopback port Forge reaches `container_port` of this environment on.
+
+        App and browser containers publish nothing themselves, so the port
+        is their gateway's. It defaults to the app port, or the UI port for a
+        browser. CLI containers have no port.
+        """
+        kind = container.labels.get("forge.type")
+        if kind == "cli":
+            return None
+        if container_port is None:
+            container_port = _BROWSER_UI_PORT if kind == "browser" else FORGE_APP_PORT
+        gateway = self._gateway_for(container)
+        if gateway is None:
+            return None
+        bindings = (gateway.ports or {}).get(f"{container_port}/tcp") or []
+        host_port = bindings[0].get("HostPort") if bindings else None
+        return int(host_port) if host_port else None
 
     def run_cli(self, env_name: str) -> tuple[str, int]:
         """Spin up an Ubuntu 22.04 shell container (no HTTP port)."""
-        pull_image(FORGE_CLI_IMAGE)
+        image = ensure_cli_image()
         self._remove_existing(env_name)
-        container = self._docker.containers.run(
-            image=FORGE_CLI_IMAGE,
-            name=self._container_name(env_name),
+        container = self._run_cli_container(env_name, self._container_name(env_name), image)
+        return container.id, 0
+
+    def _run_cli_container(self, env_name: str, name: str, image: str, **labels: str):
+        """Start one CLI shell. The environment, its warm spare, and every
+        episode fork share exactly this isolation."""
+        return self._docker.containers.run(
+            image=image,
+            name=name,
             command=["tail", "-f", "/dev/null"],
             detach=True,
-            labels={"forge.env": env_name, "forge.managed": "true", "forge.type": "cli"},
+            labels={"forge.env": env_name, "forge.managed": "true", "forge.type": "cli", **labels},
             restart_policy={"Name": "unless-stopped"},
             mem_limit=_CLI_MEMORY_LIMIT,
             nano_cpus=_CPU_LIMIT,
             pids_limit=_PID_LIMIT,
             init=True,
-            environment={"FORGE_DETERMINISM": os.environ.get("FORGE_DETERMINISM", "on")},
+            # The agent reaches the shell through `docker exec`, so the
+            # container needs no network. Without one, commands see a fixed
+            # world instead of whatever the internet serves today.
+            network_mode="none",
+            environment={
+                "TZ": "UTC",
+                "PYTHONHASHSEED": _PYTHON_HASH_SEED,
+                **_CLI_FAKETIME_ENV,
+                "FORGE_DETERMINISM": os.environ.get("FORGE_DETERMINISM", "on"),
+            },
         )
-        return container.id, 0
+
+    def snapshot_cli(self, env_name: str, container_id: str, run_id: str) -> str:
+        """Freeze the environment's shell, including any terminal setup, for a run."""
+        tag = cli_snapshot_tag(env_name, run_id)
+        _docker_cli("commit", container_id, tag)
+        return tag
+
+    @staticmethod
+    def discard_cli_snapshot(snapshot: str) -> None:
+        """Drop a finished run's snapshot image. A missing image is fine."""
+        subprocess.run(["docker", "rmi", "-f", snapshot], capture_output=True, check=False)
+
+    def warm_cli(self, env_name: str, snapshot: str) -> str:
+        """Start the spare the next episode takes, so it never waits for a boot."""
+        name = f"{self._container_name(env_name)}-warm"
+        try:
+            self._docker.containers.get(name).remove(force=True)
+        except docker.errors.NotFound:
+            pass
+        container = self._run_cli_container(
+            env_name, name, snapshot, **{"forge.role": "warm", "forge.snapshot": snapshot}
+        )
+        return container.id
+
+    @contextmanager
+    def cli_episode(self, env_name: str, snapshot: str, *, refill: bool) -> Iterator[str]:
+        """Yield a fresh shell forked from the run's snapshot, then discard it.
+
+        The warm spare is taken when it was forked from this snapshot. After
+        the episode, `refill` starts the next spare off the critical path.
+        """
+        base = self._container_name(env_name)
+        episode_name = f"{base}-episode"
+        try:
+            self._docker.containers.get(episode_name).remove(force=True)
+        except docker.errors.NotFound:
+            pass
+        container = None
+        try:
+            warm = self._docker.containers.get(f"{base}-warm")
+        except docker.errors.NotFound:
+            warm = None
+        if warm is not None:
+            if warm.labels.get("forge.snapshot") == snapshot and warm.status == "running":
+                warm.rename(episode_name)
+                container = warm
+            else:
+                warm.remove(force=True)
+        if container is None:
+            container = self._run_cli_container(
+                env_name, episode_name, snapshot, **{"forge.role": "episode"}
+            )
+        try:
+            yield container.id
+        finally:
+            container.remove(force=True)
+            if refill:
+                self.warm_cli(env_name, snapshot)
 
     def run_browser(self, env_name: str) -> tuple[str, int]:
-        """Spin up a Chromium+KasmVNC container, exposing the web UI on a random port."""
+        """Spin up a Chromium+KasmVNC container with no route out.
+
+        Its gateway publishes the web UI and the DevTools port on loopback.
+        """
         pull_image(FORGE_BROWSER_IMAGE)
+        pull_image(FORGE_GATEWAY_IMAGE)
         self._remove_existing(env_name)
+        network = self._sandbox_network(env_name)
         container = self._docker.containers.run(
             image=FORGE_BROWSER_IMAGE,
             name=self._container_name(env_name),
             detach=True,
-            ports={"3000/tcp": _loopback_port(), "9222/tcp": _loopback_port()},
+            network=network.name,
             environment={
                 "PUID": "1000",
                 "PGID": "1000",
@@ -568,18 +858,49 @@ class ContainerRuntime:
             mem_limit=_BROWSER_MEMORY_LIMIT,
             nano_cpus=_CPU_LIMIT,
             pids_limit=_PID_LIMIT,
-            init=True,
+            # No Docker init: the image boots through s6-overlay, which must
+            # be PID 1 and reaps zombies itself.
         )
-        port = _wait_for_port_binding(container, "3000/tcp", attempts=10, interval=0.3)
+        self._docker.containers.run(
+            image=FORGE_GATEWAY_IMAGE,
+            name=self._relay_name(env_name),
+            entrypoint=["/bin/sh", "-c"],
+            command=[
+                f"socat TCP-LISTEN:{_BROWSER_CDP_RELAY_PORT},fork,reuseaddr "
+                f"TCP:127.0.0.1:{_BROWSER_CDP_PORT}"
+            ],
+            detach=True,
+            # Inside the browser's namespace: it reaches Chromium's loopback
+            # and, like the browser, has no route out.
+            network_mode=f"container:{container.id}",
+            labels={"forge.env": env_name, "forge.managed": "true", "forge.role": "cdp-relay"},
+            restart_policy={"Name": "unless-stopped"},
+            mem_limit=_GATEWAY_MEMORY_LIMIT,
+            nano_cpus=_CPU_LIMIT,
+            pids_limit=_PID_LIMIT,
+            cap_drop=["ALL"],
+            security_opt=["no-new-privileges:true"],
+        )
+        gateway = self._start_gateway(
+            env_name,
+            {_BROWSER_UI_PORT: _BROWSER_UI_PORT, _BROWSER_CDP_PORT: _BROWSER_CDP_RELAY_PORT},
+            network,
+        )
+        port = _wait_for_port_binding(gateway, f"{_BROWSER_UI_PORT}/tcp", attempts=10, interval=0.3)
         return container.id, port
 
     def run(self, env_name: str, image_tag: str) -> tuple[str, int]:
+        pull_image(FORGE_GATEWAY_IMAGE)
+        network = self._sandbox_network(env_name)
         container = self._docker.containers.run(
             image=image_tag,
             name=self._container_name(env_name),
             detach=True,
-            ports={"8000/tcp": _loopback_port()},
+            # No published port and no route out: only the gateway reaches it.
+            network=network.name,
             environment={
+                "TZ": "UTC",
+                "PYTHONHASHSEED": _PYTHON_HASH_SEED,
                 "REDIS_URL": self._redis_url,
                 "FORGE_ENV_NAME": env_name,
                 "FORGE_DETERMINISM": os.environ.get("FORGE_DETERMINISM", "on"),
@@ -599,18 +920,21 @@ class ContainerRuntime:
             security_opt=["no-new-privileges:true"],
             init=True,
         )
+        gateway = self._start_gateway(env_name, {FORGE_APP_PORT: FORGE_APP_PORT}, network)
         # The port binding is applied asynchronously by the daemon — usually
         # it's there immediately after reload(), but on a busy macOS Docker
         # Desktop it can take a few hundred ms. Poll briefly.
-        port = _wait_for_port_binding(container, "8000/tcp", attempts=10, interval=0.3)
+        port = _wait_for_port_binding(gateway, f"{FORGE_APP_PORT}/tcp", attempts=10, interval=0.3)
         return container.id, port
 
     def stop(self, container_id: str) -> None:
         try:
             container = self._docker.containers.get(container_id)
-            container.stop(timeout=10)
         except docker.errors.NotFound:
-            pass
+            return
+        container.stop(timeout=10)
+        for sidecar in self._sidecars_for(container):
+            sidecar.stop(timeout=10)
 
     def start(self, env_name: str, container_id: str, image_tag: str) -> tuple[str, int]:
         """Restart a stopped container, or run a fresh one if it was removed.
@@ -646,11 +970,15 @@ class ContainerRuntime:
             else:
                 if image_tag == "builtin:cli":
                     return existing.id, 0
-                port_key = "3000/tcp" if image_tag == "builtin:browser" else "8000/tcp"
-                bindings = existing.ports.get(port_key) or []
-                if bindings:
-                    return existing.id, int(bindings[0]["HostPort"])
-                # Port disappeared (rare but happens after host reboots) — run fresh.
+                # Relay after the browser, since it joins the browser's namespace.
+                for sidecar in self._sidecars_for(existing):
+                    sidecar.start()
+                    sidecar.reload()
+                port = self.host_port(existing)
+                if port:
+                    return existing.id, port
+                # Port or gateway disappeared (host reboots, or an app started
+                # before gateways existed), so run fresh.
                 try:
                     existing.remove(force=True)
                 except docker.errors.APIError:
@@ -685,9 +1013,14 @@ class ContainerRuntime:
         self.stop(container_id)
         try:
             container = self._docker.containers.get(container_id)
-            container.remove()
         except docker.errors.NotFound:
-            pass
+            container = None
+        if container is not None:
+            sidecars = self._sidecars_for(container)
+            container.remove()
+            for sidecar in sidecars:
+                sidecar.remove(force=True)
+            self._remove_network(container.labels.get("forge.env", ""))
         # Only remove custom-built images; never touch shared builtin images
         if image_tag and not image_tag.startswith("builtin:"):
             try:
@@ -702,12 +1035,119 @@ class ContainerRuntime:
         result = []
         for c in containers:
             env_name = c.labels.get("forge.env", "")
+            # Gateways, relays, warm spares, and episode forks are helpers,
+            # never the environment itself.
+            if not env_name or c.labels.get("forge.role"):
+                continue
             # list() already inspects each container, so no reload is needed.
-            port_key = "3000/tcp" if c.labels.get("forge.type") == "browser" else "8000/tcp"
-            ports = c.ports.get(port_key)
-            if env_name and ports:
-                result.append((env_name, c.id, int(ports[0]["HostPort"])))
+            port = self.host_port(c)
+            if port:
+                result.append((env_name, c.id, port))
         return result
+
+
+def ensure_cli_image() -> str:
+    """Return the CLI image tag, building it from the pinned base if missing."""
+    if _image_cached_locally(CLI_RUNTIME_IMAGE):
+        return CLI_RUNTIME_IMAGE
+    pull_image(FORGE_CLI_IMAGE)
+    try:
+        subprocess.run(
+            [
+                "docker", "build", "--rm",
+                "--build-arg", f"BASE_IMAGE={FORGE_CLI_IMAGE}",
+                "-t", CLI_RUNTIME_IMAGE,
+                str(CLI_DOCKERFILE.parent),
+            ],
+            check=True, capture_output=True, text=True, timeout=_BUILD_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"CLI image build timed out after {_BUILD_TIMEOUT_S}s") from exc
+    except subprocess.CalledProcessError as exc:
+        output = (exc.stderr or exc.stdout or "(no output)").strip()
+        raise RuntimeError(f"CLI image build failed (exit {exc.returncode}):\n{output}") from exc
+    return CLI_RUNTIME_IMAGE
+
+
+def _docker_cli(*args: str, timeout: float = _BUILD_TIMEOUT_S) -> None:
+    """Run one docker CLI command, raising RuntimeError with Docker's output."""
+    try:
+        subprocess.run(["docker", *args], check=True, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"docker {args[0]} timed out after {timeout}s") from exc
+    except subprocess.CalledProcessError as exc:
+        output = (exc.stderr or exc.stdout or "(no output)").strip()
+        raise RuntimeError(f"docker {args[0]} failed (exit {exc.returncode}):\n{output}") from exc
+
+
+def _grader_toolbox_volume() -> str:
+    digest = hashlib.sha256(FORGE_GRADER_TOOLBOX_IMAGE.encode()).hexdigest()[:12]
+    return f"forge-grader-tools-{digest}"
+
+
+def ensure_grader_toolbox() -> str:
+    """Return the read-only grader toolbox volume, populating it on first use.
+
+    The volume only exists once it is fully populated, so its existence is
+    the readiness signal.
+    """
+    volume = _grader_toolbox_volume()
+    inspect = subprocess.run(
+        ["docker", "volume", "inspect", volume], capture_output=True, text=True, check=False,
+    )
+    if inspect.returncode == 0:
+        return volume
+    pull_image(FORGE_GRADER_TOOLBOX_IMAGE)
+    _docker_cli("volume", "create", "--label", "forge.managed=true", volume)
+    try:
+        # Installed at the path the grader mounts it on, so the applet
+        # symlinks stay valid there.
+        _docker_cli(
+            "run", "--rm", "--network", "none",
+            "-v", f"{volume}:{_GRADER_TOOLBOX_DIR}",
+            FORGE_GRADER_TOOLBOX_IMAGE, "sh", "-c",
+            f"mkdir -p {_GRADER_TOOLBOX_DIR}/bin"
+            f" && cp /bin/busybox {_GRADER_TOOLBOX_DIR}/bin/busybox"
+            f" && {_GRADER_TOOLBOX_DIR}/bin/busybox --install -s {_GRADER_TOOLBOX_DIR}/bin",
+        )
+    except RuntimeError as exc:
+        subprocess.run(["docker", "volume", "rm", "-f", volume], capture_output=True, check=False)
+        raise RuntimeError(f"Could not prepare the grader toolbox: {exc}") from exc
+    return volume
+
+
+@contextmanager
+def grading_sandbox(container_id: str) -> Iterator[list[str]]:
+    """Yield the command prefix that runs one shell assertion out of the agent's reach.
+
+    The agent's container is committed to an image and a fresh grader starts
+    from it: same files, none of the agent's processes, no network. Each
+    assertion runs through the read-only toolbox's static shell with a clean
+    environment. Append the assertion string to the yielded list.
+    """
+    toolbox = ensure_grader_toolbox()
+    name = f"forge-grade-{container_id[:12]}"
+    image = f"{name}:snapshot"
+    _docker_cli("commit", container_id, image)
+    try:
+        _docker_cli(
+            "run", "-d", "--name", name, "--network", "none",
+            "--label", "forge.role=grader",
+            "-v", f"{toolbox}:{_GRADER_TOOLBOX_DIR}:ro",
+            "--entrypoint", f"{_GRADER_TOOLBOX_DIR}/bin/sleep",
+            image, "infinity",
+        )
+        try:
+            yield [
+                "docker", "exec", name,
+                f"{_GRADER_TOOLBOX_DIR}/bin/env", "-i",
+                f"PATH={_GRADER_PATH}", "HOME=/root", "TZ=UTC",
+                f"{_GRADER_TOOLBOX_DIR}/bin/sh", "-c",
+            ]
+        finally:
+            subprocess.run(["docker", "rm", "-f", name], capture_output=True, check=False)
+    finally:
+        subprocess.run(["docker", "rmi", "-f", image], capture_output=True, check=False)
 
 
 def prewarm_standard_base_images(

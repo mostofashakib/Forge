@@ -67,10 +67,11 @@ def _prewarm_base_images_on_boot(**_kwargs) -> None:
 
     def _run():
         try:
-            from forge.envgen.container import prewarm_standard_base_images
+            from forge.envgen.container import ensure_cli_image, prewarm_standard_base_images
             log.info("[prewarm] starting base-image pre-warm")
             results = prewarm_standard_base_images()
             log.info("[prewarm] complete: %s", results)
+            log.info("[prewarm] CLI image ready: %s", ensure_cli_image())
         except Exception as exc:  # noqa: BLE001 — never crash the worker on prewarm
             log.warning("[prewarm] aborted: %s", exc)
 

@@ -26,12 +26,23 @@ from forge.envgen.episode_base import (
     TrajectoryWriter,
 )
 from forge.envgen.objective import ObjectiveScorer
+from forge.runtime.context import SimClock
 from forge.runtime.interaction import BrowserUse, BrowserUseSchema
 from forge.runtime.control import is_submit_action
 
 logger = logging.getLogger(__name__)
 
+# What `Date.now()` returns on every page: the same fixed epoch the in-process
+# SimClock starts from, so no page renders the host's real date.
+BROWSER_FIXED_TIME = SimClock().now()
+
+# One generous fixed budget for a page to finish loading after an action or a
+# navigation. A busy host slows pages down, but it must not change what the
+# agent sees, so the runner waits for the page rather than for a set time.
+_SETTLE_TIMEOUT_MS = 60_000.0
+
 __all__ = [
+    "BROWSER_FIXED_TIME",
     "BrowserEpisodeConfig",
     "BrowserEpisodeResult",
     "BrowserEpisodeRunner",
@@ -43,7 +54,7 @@ __all__ = [
 class BrowserEpisodeConfig(BaseEpisodeConfig):
     cdp_url: str       # e.g. "http://localhost:9222"
     max_steps: int = 20
-    action_settle_s: float = 1.0   # seconds to wait after each action
+    settle_timeout_ms: float = _SETTLE_TIMEOUT_MS
 
 
 @dataclass(kw_only=True)
@@ -56,7 +67,7 @@ class BrowserEpisodeRunner(EpisodeController):
         self._cfg = config
         self._scorer = scorer or ObjectiveScorer()
 
-    def _wait_for_cdp(self, max_retries: int = 20, delay: float = 3.0) -> bool:
+    def _wait_for_cdp(self, max_retries: int = 40, delay: float = 3.0) -> bool:
         import requests
         for attempt in range(max_retries):
             try:
@@ -104,15 +115,20 @@ class BrowserEpisodeRunner(EpisodeController):
         return base64.b64encode(page.screenshot(type="png")).decode()
 
     @staticmethod
-    def browser_use_for(page, schema: BrowserUseSchema | None = None) -> BrowserUse:
+    def browser_use_for(
+        page,
+        schema: BrowserUseSchema | None = None,
+        *,
+        timeout_ms: float = _SETTLE_TIMEOUT_MS,
+    ) -> BrowserUse:
         """The BrowserUse contract a browser environment grants the agent."""
         return BrowserUse(
             schema=schema or BrowserUseSchema(),
-            executor=partial(BrowserEpisodeRunner._apply_action, page),
+            executor=partial(BrowserEpisodeRunner._apply_action, page, timeout_ms=timeout_ms),
         )
 
     @staticmethod
-    def _apply_action(page, action: dict) -> None:
+    def _apply_action(page, action: dict, *, timeout_ms: float) -> None:
         atype = action.get("action_type", "noop")
         if atype == "click":
             page.mouse.click(action.get("x", 0), action.get("y", 0))
@@ -123,7 +139,7 @@ class BrowserEpisodeRunner(EpisodeController):
         elif atype == "navigate":
             url = action.get("url", "")
             if url:
-                page.goto(url, wait_until="domcontentloaded", timeout=15_000)
+                page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
         elif atype == "scroll":
             page.mouse.wheel(action.get("delta_x", 0), action.get("delta_y", 0))
 
@@ -159,92 +175,103 @@ class BrowserEpisodeRunner(EpisodeController):
         try:
             with sync_playwright() as pw:
                 browser = pw.chromium.connect_over_cdp(self._cfg.cdp_url)
-                ctx = browser.contexts[0] if browser.contexts else browser.new_context()
-                page = ctx.pages[0] if ctx.pages else ctx.new_page()
-                self._disable_motion(ctx, page)
-                browser_use = self.browser_use_for(page)
+                # A fresh context per episode: the warm browser process is
+                # reused, but no cookies, storage, or tabs carry over from
+                # the last episode.
+                ctx = browser.new_context()
+                try:
+                    ctx.clock.set_fixed_time(BROWSER_FIXED_TIME)
+                    page = ctx.new_page()
+                    self._disable_motion(ctx, page)
+                    browser_use = self.browser_use_for(
+                        page, timeout_ms=self._cfg.settle_timeout_ms
+                    )
 
-                for step_idx in range(self._cfg.max_steps):
-                    ss_before = self._screenshot(page)
-                    current_url = page.url
+                    for step_idx in range(self._cfg.max_steps):
+                        ss_before = self._screenshot(page)
+                        current_url = page.url
 
-                    try:
-                        action = agent.act(
-                            screenshot_b64=ss_before,
-                            objective=self._cfg.objective,
-                            action_history=[s["action"] for s in result.steps[-5:]],
-                        )
-                    except Exception as exc:
-                        logger.warning("[browser-ep] step %d: agent.act failed: %s", step_idx, exc)
-                        action = {"action_type": "noop", "reasoning": f"agent error: {exc}"}
+                        try:
+                            action = agent.act(
+                                screenshot_b64=ss_before,
+                                objective=self._cfg.objective,
+                                action_history=[s["action"] for s in result.steps[-5:]],
+                            )
+                        except Exception as exc:
+                            logger.warning("[browser-ep] step %d: agent.act failed: %s", step_idx, exc)
+                            action = {"action_type": "noop", "reasoning": f"agent error: {exc}"}
 
-                    if is_submit_action(action):
-                        result.termination_reason = "submitted"
-                        score = self._finalize_result(result, ss_before, page.url)
+                        if is_submit_action(action):
+                            result.termination_reason = "submitted"
+                            score = self._finalize_result(result, ss_before, page.url)
+                            step_record = {
+                                "step_index": step_idx,
+                                "action": action,
+                                "screenshot_before": ss_before,
+                                "screenshot_after": ss_before,
+                                "url_before": current_url,
+                                "url_after": current_url,
+                                "objective_score": score,
+                                "reward": result.total_reward,
+                                "terminated": True,
+                                "truncated": False,
+                                "termination_reason": "submitted",
+                            }
+                            result.steps.append(step_record)
+                            if writer is not None:
+                                writer.record(step_record)
+                            break
+
+                        try:
+                            browser_use.execute(action)
+                            page.wait_for_load_state(
+                                "networkidle", timeout=self._cfg.settle_timeout_ms
+                            )
+                        except Exception as exc:
+                            logger.debug("[browser-ep] step %d: action failed: %s", step_idx, exc)
+
+                        ss_after = self._screenshot(page)
                         step_record = {
                             "step_index": step_idx,
                             "action": action,
                             "screenshot_before": ss_before,
-                            "screenshot_after": ss_before,
+                            "screenshot_after": ss_after,
                             "url_before": current_url,
-                            "url_after": current_url,
-                            "objective_score": score,
-                            "reward": result.total_reward,
-                            "terminated": True,
-                            "truncated": False,
-                            "termination_reason": "submitted",
+                            "url_after": page.url,
+                            "objective_score": 0.0,
+                            "reward": 0.0,
                         }
                         result.steps.append(step_record)
+                        logger.info(
+                            "[browser-ep] step %02d/%d  action=%s  url=%s",
+                            step_idx + 1, self._cfg.max_steps,
+                            action.get("action_type"), page.url[:60],
+                        )
+
+                        outcome = StepOutcome(
+                            step_index=step_idx,
+                            state_hash=hashlib.sha256(ss_after.encode()).hexdigest(),
+                        )
+                        decision = dead_end.check(outcome) or max_steps.check(outcome)
+                        if decision is not None:
+                            result.termination_reason = decision.reason
+                            score = self._finalize_result(result, ss_after, page.url)
+                            step_record.update({
+                                "objective_score": score,
+                                "reward": result.total_reward,
+                                "terminated": not decision.truncated,
+                                "truncated": decision.truncated,
+                                "termination_reason": decision.reason,
+                            })
+                            if writer is not None:
+                                writer.record(step_record)
+                            break
                         if writer is not None:
                             writer.record(step_record)
-                        break
-
-                    try:
-                        browser_use.execute(action)
-                        time.sleep(self._cfg.action_settle_s)
-                    except Exception as exc:
-                        logger.debug("[browser-ep] step %d: action failed: %s", step_idx, exc)
-
-                    ss_after = self._screenshot(page)
-                    step_record = {
-                        "step_index": step_idx,
-                        "action": action,
-                        "screenshot_before": ss_before,
-                        "screenshot_after": ss_after,
-                        "url_before": current_url,
-                        "url_after": page.url,
-                        "objective_score": 0.0,
-                        "reward": 0.0,
-                    }
-                    result.steps.append(step_record)
-                    logger.info(
-                        "[browser-ep] step %02d/%d  action=%s  url=%s",
-                        step_idx + 1, self._cfg.max_steps,
-                        action.get("action_type"), page.url[:60],
-                    )
-
-                    outcome = StepOutcome(
-                        step_index=step_idx,
-                        state_hash=hashlib.sha256(ss_after.encode()).hexdigest(),
-                    )
-                    decision = dead_end.check(outcome) or max_steps.check(outcome)
-                    if decision is not None:
-                        result.termination_reason = decision.reason
-                        score = self._finalize_result(result, ss_after, page.url)
-                        step_record.update({
-                            "objective_score": score,
-                            "reward": result.total_reward,
-                            "terminated": not decision.truncated,
-                            "truncated": decision.truncated,
-                            "termination_reason": decision.reason,
-                        })
-                        if writer is not None:
-                            writer.record(step_record)
-                        break
-                    if writer is not None:
-                        writer.record(step_record)
-                else:
-                    result.termination_reason = "max_steps"
+                    else:
+                        result.termination_reason = "max_steps"
+                finally:
+                    ctx.close()
 
         except Exception as exc:
             logger.exception("[browser-ep] runner crashed: %s", exc)

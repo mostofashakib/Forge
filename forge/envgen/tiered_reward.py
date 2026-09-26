@@ -30,7 +30,8 @@ The reward for a CLI episode is composed in three tiers:
 
 This module owns the LLM calls and the assertion-running logic. The
 `CliEpisodeRunner` calls into it but remains responsible for the actual
-`docker exec` loop.
+`docker exec` loop. Assertions never run in the agent's container: they run
+in `grading_sandbox`, a fresh snapshot with a read-only trusted toolbox.
 """
 from __future__ import annotations
 
@@ -43,6 +44,7 @@ from typing import Sequence
 
 from pydantic import BaseModel, Field
 
+from forge.envgen.container import grading_sandbox
 from forge.extraction.llm_client import LLMClient, get_judge_client
 from forge.envgen.config import envgen_config
 from forge.reward_presets import RewardPreset, reward_preset_spec
@@ -58,8 +60,9 @@ class _SpecAssertion(BaseModel):
     description: str = Field(description="What this assertion checks (one short sentence).")
     command: str = Field(
         description=(
-            "A bash one-liner that exits 0 iff the assertion holds, non-zero otherwise. "
-            "Run via `docker exec <id> bash -c '<command>'`. No interactive prompts. "
+            "A shell one-liner that exits 0 iff the assertion holds, non-zero otherwise. "
+            "Run by a trusted BusyBox `sh -c '<command>'` in a snapshot of the finished "
+            "container. No interactive prompts. "
             "Use `[[ … ]]` / `test` / `grep -q` / `diff -q` style checks."
         ),
     )
@@ -211,10 +214,12 @@ _PLANNER_SYSTEM = (
     "machine-checkable end-state spec consisting of:\n"
     "  - a one-sentence summary of what 'done' looks like\n"
     "  - an integer estimate of the optimal number of shell commands needed\n"
-    "  - 3-8 independent bash assertions that exit 0 iff the assertion holds\n"
+    "  - 3-8 independent shell assertions that exit 0 iff the assertion holds\n"
     "\n"
-    "Each assertion is run as `docker exec <id> bash -c '<command>'`. Treat\n"
-    "non-zero exit codes as failure. Examples of good assertions:\n"
+    "Each assertion runs as `sh -c '<command>'` in a snapshot of the finished\n"
+    "container, through a trusted BusyBox toolbox (test, grep, wc, cat, find,\n"
+    "stat, diff, and the rest), so prefer those over tools the agent could have\n"
+    "replaced. Treat non-zero exit codes as failure. Examples of good assertions:\n"
     "  - `[[ -f /tmp/foo.txt ]]`                                   — file exists\n"
     "  - `grep -q 'expected line' /etc/hosts`                      — content match\n"
     "  - `[[ \"$(wc -l < /tmp/log)\" -ge 10 ]]`                    — count check\n"
@@ -265,8 +270,9 @@ class TieredRewardConfig:
     # through to the grader instead of being scored from pass-rate alone.
     # (i.e. only invoke the grader when `pass_rate == 0`.)
     llm_grade_when_zero_pass: bool = True
-    # Per-assertion exec timeout, seconds.
-    assertion_timeout: float = 15.0
+    # Per-assertion exec timeout, seconds. Fixed and generous, like the CLI
+    # command timeout, so a slow host cannot fail an assertion.
+    assertion_timeout: float = 120.0
     # Scoring methods for partial credit when no assertions pass.
     # Multiple methods are averaged together.
     # "llm"        — LLM-as-judge (Claude Haiku, default)
@@ -470,41 +476,46 @@ class TieredRewardEngine:
     def _run_assertions(
         self, assertions: list[dict], container_id: str
     ) -> list[AssertionResult]:
-        results: list[AssertionResult] = []
-        for a in assertions:
-            command = a.get("command", "")
-            description = a.get("description", "")
-            try:
-                proc = subprocess.run(
-                    ["docker", "exec", container_id, "bash", "-c", command],
-                    capture_output=True,
-                    text=True,
-                    timeout=self._cfg.assertion_timeout,
-                )
-                results.append(AssertionResult(
-                    description=description,
-                    command=command,
-                    passed=proc.returncode == 0,
-                    exit_code=proc.returncode,
-                    stderr=proc.stderr,
-                ))
-            except subprocess.TimeoutExpired:
-                results.append(AssertionResult(
-                    description=description,
-                    command=command,
-                    passed=False,
-                    exit_code=-1,
-                    stderr=f"timed out after {self._cfg.assertion_timeout}s",
-                ))
-            except Exception as exc:
-                results.append(AssertionResult(
-                    description=description,
-                    command=command,
-                    passed=False,
-                    exit_code=-1,
-                    stderr=str(exc)[:500],
-                ))
-        return results
+        if not assertions:
+            return []
+        # A sandbox that cannot start is an infrastructure failure, not a
+        # score, so it raises and the episode is marked failed.
+        with grading_sandbox(container_id) as exec_argv:
+            return [self._run_assertion(a, exec_argv) for a in assertions]
+
+    def _run_assertion(self, a: dict, exec_argv: list[str]) -> AssertionResult:
+        command = a.get("command", "")
+        description = a.get("description", "")
+        try:
+            proc = subprocess.run(
+                [*exec_argv, command],
+                capture_output=True,
+                text=True,
+                timeout=self._cfg.assertion_timeout,
+            )
+            return AssertionResult(
+                description=description,
+                command=command,
+                passed=proc.returncode == 0,
+                exit_code=proc.returncode,
+                stderr=proc.stderr,
+            )
+        except subprocess.TimeoutExpired:
+            return AssertionResult(
+                description=description,
+                command=command,
+                passed=False,
+                exit_code=-1,
+                stderr=f"timed out after {self._cfg.assertion_timeout}s",
+            )
+        except Exception as exc:
+            return AssertionResult(
+                description=description,
+                command=command,
+                passed=False,
+                exit_code=-1,
+                stderr=str(exc)[:500],
+            )
 
     def _trajectory_to_text(self, history: Sequence[dict]) -> str:
         """Compact text representation of a trajectory for ML scoring."""

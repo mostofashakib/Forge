@@ -3,9 +3,11 @@ def compute_diff(before: dict, after: dict) -> dict:
     changed: dict = {}
     removed: dict = {}
 
+    # Every set below is iterated in sorted order: set order follows the
+    # per-process string-hash salt, and the diff is serialized as-is.
     all_collections = set(before.keys()) | set(after.keys())
 
-    for collection in all_collections:
+    for collection in sorted(all_collections):
         before_col = before.get(collection, {})
         after_col = after.get(collection, {})
 
@@ -18,17 +20,17 @@ def compute_diff(before: dict, after: dict) -> dict:
         before_ids = set(before_col.keys())
         after_ids = set(after_col.keys())
 
-        for entity_id in after_ids - before_ids:
+        for entity_id in sorted(after_ids - before_ids):
             added[f"{collection}.{entity_id}"] = after_col[entity_id]
 
-        for entity_id in before_ids - after_ids:
+        for entity_id in sorted(before_ids - after_ids):
             removed[f"{collection}.{entity_id}"] = before_col[entity_id]
 
-        for entity_id in before_ids & after_ids:
+        for entity_id in sorted(before_ids & after_ids):
             b_entity = before_col[entity_id]
             a_entity = after_col[entity_id]
             all_fields = set(b_entity.keys()) | set(a_entity.keys())
-            for field in all_fields:
+            for field in sorted(all_fields):
                 b_val = b_entity.get(field)
                 a_val = a_entity.get(field)
                 if b_val != a_val:

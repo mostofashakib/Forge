@@ -1,0 +1,12 @@
+# Python packages installed in every environment container (generated and
+# premade). Regenerate the lock after editing this file:
+#   uv pip compile forge/envgen/runtime_requirements.in --universal \
+#     --python-version 3.12 --generate-hashes \
+#     -o forge/envgen/runtime_requirements.lock
+fastapi
+uvicorn[standard]
+sqlalchemy
+redis
+httpx
+python-multipart
+pydantic

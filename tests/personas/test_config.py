@@ -188,3 +188,17 @@ def test_env_config_without_a_personas_block_stays_disabled(tmp_path):
     custom.mkdir()
     (custom / "config.yaml").write_text(yaml.safe_dump({"reward": {"base_success": 1.0}}))
     assert load_config(tmp_path).personas.enabled is False
+
+
+def test_the_generated_config_stub_parses():
+    """The `personas:` block new environments ship with must stay loadable."""
+    from forge.compiler.package_builder import _CUSTOM_STUBS
+
+    raw = yaml.safe_load(_CUSTOM_STUBS["config.yaml"])
+    assert load_population(raw["personas"]).enabled is False
+
+
+def test_the_generated_config_stub_documents_the_action_guardrail():
+    from forge.compiler.package_builder import _CUSTOM_STUBS
+
+    assert "allowed_actions" in _CUSTOM_STUBS["config.yaml"]

@@ -6,11 +6,12 @@ import secrets
 from datetime import datetime, timezone
 from pathlib import Path
 
-from celery import group
+from celery import chain, group
 from sqlalchemy import update
 
 from backend.app.worker.celery_app import celery
-from backend.app.models import RolloutJob, Episode, AgentRun, AgentEpisode
+from backend.app.worker.env_lock import exclusive_environment
+from backend.app.models import RolloutJob, Episode, AgentRun, AgentEpisode, SandboxEnvironment
 from backend.app.utils.env_loader import load_forge_env
 from forge.settings import generated_envs_root, redis_url
 
@@ -587,6 +588,7 @@ def run_container_episode_task(self, run_id: str, episode_index: int, seed: int)
         agent_id = run.agent_id
         objective = run.objective
         max_steps = run.max_steps
+        num_episodes = run.num_episodes
         dead_end_patience = run.dead_end_patience
         success_threshold = run.success_threshold
 
@@ -607,104 +609,123 @@ def run_container_episode_task(self, run_id: str, episode_index: int, seed: int)
         ))
         db.commit()
 
+    import redis as _redis
+
     try:
-        if env_type == "cli":
-            from forge.envgen.cli_runner import CliEpisodeRunner, CliEpisodeConfig
-            from forge.envgen.agents.cli_agent import make_cli_agent, ReplayCliAgent
-            from forge.envgen.tiered_reward import TieredRewardEngine, TieredRewardConfig
-            cfg = CliEpisodeConfig(
-                container_id=container_id,
-                objective=objective,
-                max_steps=max_steps,
-                dead_end_patience=dead_end_patience,
-                success_threshold=success_threshold,
-            )
-            import json as _json
-            from backend.app.services.reward_config import load_reward_config
-            reward_cfg = load_reward_config(env_name)
-            reward_engine = TieredRewardEngine(
-                config=TieredRewardConfig.from_preset(
-                    reward_cfg.reward_preset,
-                    partial_credit_methods=reward_cfg.scoring_methods,
-                )
-            )
-            replay_path = envs_root / env_name / "synthetic_replay.json"
-            if replay_path.exists():
-                manifest = _json.loads(replay_path.read_text(encoding="utf-8"))
-                trajectory_episodes = manifest.get("episodes", [])
-                if trajectory_episodes:
-                    ep_commands = trajectory_episodes[seed % len(trajectory_episodes)]
-                    agent = ReplayCliAgent(ep_commands)
-                    logger.info(
-                        "[container-ep] using replay agent seed=%d → trajectory %d (%d commands)",
-                        seed, seed % len(trajectory_episodes), len(ep_commands),
+        # Separate runs on this environment are separate chains. The lock
+        # keeps their episodes from interleaving on the shared container.
+        with exclusive_environment(_redis.from_url(redis_url()), env_name):
+            if env_type == "cli":
+                from forge.envgen.cli_runner import CliEpisodeRunner, CliEpisodeConfig
+                from forge.envgen.agents.cli_agent import make_cli_agent, ReplayCliAgent
+                from forge.envgen.tiered_reward import TieredRewardEngine, TieredRewardConfig
+                from forge.envgen.container import ContainerRuntime, cli_snapshot_tag
+                import json as _json
+                from backend.app.services.reward_config import load_reward_config
+                reward_cfg = load_reward_config(env_name)
+                reward_engine = TieredRewardEngine(
+                    config=TieredRewardConfig.from_preset(
+                        reward_cfg.reward_preset,
+                        partial_credit_methods=reward_cfg.scoring_methods,
                     )
+                )
+                replay_path = envs_root / env_name / "synthetic_replay.json"
+                if replay_path.exists():
+                    manifest = _json.loads(replay_path.read_text(encoding="utf-8"))
+                    trajectory_episodes = manifest.get("episodes", [])
+                    if trajectory_episodes:
+                        ep_commands = trajectory_episodes[seed % len(trajectory_episodes)]
+                        agent = ReplayCliAgent(ep_commands)
+                        logger.info(
+                            "[container-ep] using replay agent seed=%d → trajectory %d (%d commands)",
+                            seed, seed % len(trajectory_episodes), len(ep_commands),
+                        )
+                    else:
+                        agent = make_cli_agent(agent_id, seed=experiment_seed(seed))
                 else:
                     agent = make_cli_agent(agent_id, seed=experiment_seed(seed))
-            else:
-                agent = make_cli_agent(agent_id, seed=experiment_seed(seed))
-            result = CliEpisodeRunner(cfg, reward_engine=reward_engine).run_episode(
-                agent, episode_id=episode_id, jsonl_path=jsonl_path
-            )
+                # Each episode forks a fresh shell from the run's snapshot, so
+                # none inherits another's files. The warm spare means no boot
+                # on the hot path, and the last episode leaves no spare behind.
+                runtime = ContainerRuntime()
+                snapshot = cli_snapshot_tag(env_name, run_id)
+                last_episode = episode_index + 1 >= num_episodes
+                with runtime.cli_episode(
+                    env_name, snapshot, refill=not last_episode,
+                ) as episode_container:
+                    cfg = CliEpisodeConfig(
+                        container_id=episode_container,
+                        objective=objective,
+                        max_steps=max_steps,
+                        dead_end_patience=dead_end_patience,
+                        success_threshold=success_threshold,
+                    )
+                    result = CliEpisodeRunner(cfg, reward_engine=reward_engine).run_episode(
+                        agent, episode_id=episode_id, jsonl_path=jsonl_path
+                    )
+                if last_episode:
+                    runtime.discard_cli_snapshot(snapshot)
 
-        elif env_type == "browser":
-            import docker as _docker
-            dc = _docker.from_env()
-            try:
-                c = dc.containers.get(container_id)
-                c.reload()
-                cdp_mapping = c.ports.get("9222/tcp")
-            finally:
-                dc.close()
-            if not cdp_mapping:
-                raise RuntimeError(
-                    "CDP port 9222 is not mapped on the browser container. "
-                    "Recreate the environment to pick up the new CDP configuration."
+            elif env_type == "browser":
+                import docker as _docker
+                from forge.envgen.container import ContainerRuntime
+                dc = _docker.from_env()
+                try:
+                    c = dc.containers.get(container_id)
+                    c.reload()
+                    # The browser has no route out and publishes nothing. Its
+                    # gateway publishes DevTools on loopback.
+                    cdp_port = ContainerRuntime(dc).host_port(c, 9222)
+                finally:
+                    dc.close()
+                if not cdp_port:
+                    raise RuntimeError(
+                        "The browser's DevTools port is not published through its gateway. "
+                        "Restart the environment to recreate it behind the gateway."
+                    )
+                from forge.envgen.browser_runner import BrowserEpisodeRunner, BrowserEpisodeConfig
+                from forge.envgen.agents.browser_agent import make_browser_agent
+                cfg = BrowserEpisodeConfig(
+                    cdp_url=f"http://localhost:{cdp_port}",
+                    objective=objective,
+                    max_steps=max_steps,
+                    dead_end_patience=dead_end_patience,
+                    success_threshold=success_threshold,
                 )
-            cdp_port = int(cdp_mapping[0]["HostPort"])
-            from forge.envgen.browser_runner import BrowserEpisodeRunner, BrowserEpisodeConfig
-            from forge.envgen.agents.browser_agent import make_browser_agent
-            cfg = BrowserEpisodeConfig(
-                cdp_url=f"http://localhost:{cdp_port}",
-                objective=objective,
-                max_steps=max_steps,
-                dead_end_patience=dead_end_patience,
-                success_threshold=success_threshold,
-            )
-            agent = make_browser_agent(agent_id, seed=experiment_seed(seed))
-            result = BrowserEpisodeRunner(cfg).run_episode(
-                agent, episode_id=episode_id, jsonl_path=jsonl_path
-            )
+                agent = make_browser_agent(agent_id, seed=experiment_seed(seed))
+                result = BrowserEpisodeRunner(cfg).run_episode(
+                    agent, episode_id=episode_id, jsonl_path=jsonl_path
+                )
 
-        else:  # general / premade (both run FastAPI over HTTP)
-            from forge.envgen.episode_runner import ContainerEpisodeRunner, EpisodeConfig
-            from forge.envgen.agents.container_agent import make_container_agent
-            if container_port is None:
-                raise RuntimeError(f"General sandbox {env_name} has no container_port")
-            cfg = EpisodeConfig(
-                base_url=f"http://localhost:{container_port}",
-                objective=objective,
-                max_steps=max_steps,
-                dead_end_patience=dead_end_patience,
-                success_threshold=success_threshold,
-                personas=_load_personas(envs_root / env_name),
-            )
-            # The manifest enables HashNormalizer + StateDiffFloor when present.
-            manifest = _load_manifest(envs_root / env_name)
-            agent = make_container_agent(agent_id, seed=experiment_seed(seed))
-            with ContainerEpisodeRunner(cfg, manifest=manifest) as runner:
-                result = runner.run_episode(agent, episode_id=episode_id, jsonl_path=jsonl_path)
+            else:  # general / premade (both run FastAPI over HTTP)
+                from forge.envgen.episode_runner import ContainerEpisodeRunner, EpisodeConfig
+                from forge.envgen.agents.container_agent import make_container_agent
+                if container_port is None:
+                    raise RuntimeError(f"General sandbox {env_name} has no container_port")
+                cfg = EpisodeConfig(
+                    base_url=f"http://localhost:{container_port}",
+                    objective=objective,
+                    max_steps=max_steps,
+                    dead_end_patience=dead_end_patience,
+                    success_threshold=success_threshold,
+                    personas=_load_personas(envs_root / env_name),
+                )
+                # The manifest enables HashNormalizer + StateDiffFloor when present.
+                manifest = _load_manifest(envs_root / env_name)
+                agent = make_container_agent(agent_id, seed=experiment_seed(seed))
+                with ContainerEpisodeRunner(cfg, manifest=manifest) as runner:
+                    result = runner.run_episode(agent, episode_id=episode_id, jsonl_path=jsonl_path)
 
-        with SessionLocal() as db:
-            ep = db.get(AgentEpisode, episode_id)
-            if ep is not None:
-                ep.status = "completed"
-                ep.total_steps = len(result.steps)
-                ep.total_reward = result.total_reward
-                ep.final_objective_score = result.final_objective_score
-                ep.termination_reason = result.termination_reason
-                ep.completed_at = datetime.now(timezone.utc)
-                db.commit()
+            with SessionLocal() as db:
+                ep = db.get(AgentEpisode, episode_id)
+                if ep is not None:
+                    ep.status = "completed"
+                    ep.total_steps = len(result.steps)
+                    ep.total_reward = result.total_reward
+                    ep.final_objective_score = result.final_objective_score
+                    ep.termination_reason = result.termination_reason
+                    ep.completed_at = datetime.now(timezone.utc)
+                    db.commit()
 
     except Exception as exc:
         logger.exception("[container-ep] episode %s failed: %s", episode_id, exc)
@@ -754,12 +775,26 @@ def run_container_run_task(self, run_id: str) -> None:
         run.status = "running"
         num_episodes = run.num_episodes
         seed_start = run.seed_start
+        env_name = run.env_name
+        sandbox = db.get(SandboxEnvironment, env_name)
+        cli_container = (
+            sandbox.container_id if sandbox is not None and sandbox.env_type == "cli" else None
+        )
         db.commit()
 
     try:
-        subtasks = group(
-            run_container_episode_task.s(run_id, i, seed_start + i)
-            for i in range(num_episodes)
+        if cli_container:
+            from forge.envgen.container import ContainerRuntime
+            # Freeze the shell (terminal setup included) once for the run, and
+            # start the first episode's container now so it begins warm.
+            runtime = ContainerRuntime()
+            runtime.warm_cli(env_name, runtime.snapshot_cli(env_name, cli_container, run_id))
+        # Every episode drives the environment's one container, so they run in
+        # order. Immutable signatures keep each episode's return value out of
+        # the next one's arguments.
+        subtasks = chain(
+            *(run_container_episode_task.si(run_id, i, seed_start + i)
+              for i in range(num_episodes))
         )
         subtasks.apply_async()
     except Exception as exc:
@@ -905,7 +940,9 @@ def run_benchmark_task(
             port = int(port_file.read_text().strip())
             cfg_ep = EpisodeConfig(base_url=f"http://localhost:{port}", objective=task.objective)
             agent = make_container_agent("random", seed=experiment_seed(seed))
-            with ContainerEpisodeRunner(cfg_ep, manifest=manifest) as runner:
+            # Agent runs may be driving this same container.
+            with exclusive_environment(r, task.domain), \
+                    ContainerEpisodeRunner(cfg_ep, manifest=manifest) as runner:
                 result = runner.run_episode(agent, jsonl_path=jsonl_path, seed=seed)
 
             completed += 1
