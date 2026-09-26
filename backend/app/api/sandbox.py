@@ -291,7 +291,7 @@ def get_sandbox(env_name: str, db: Session = Depends(get_db)):
         client = None
         try:
             client = docker.from_env()
-            _sync_with_container(sandbox, client.containers.get(sandbox.container_id), db)
+            _sync_with_container(sandbox, client.containers.get(sandbox.container_id), db, client)
         except docker.errors.NotFound:
             sandbox.status = "stopped"
             db.commit()
@@ -315,7 +315,7 @@ def get_sandbox(env_name: str, db: Session = Depends(get_db)):
     return sandbox
 
 
-def _sync_with_container(sandbox: SandboxEnvironment, container, db: Session) -> None:
+def _sync_with_container(sandbox: SandboxEnvironment, container, db: Session, client) -> None:
     """Heal the persisted status and port from what Docker reports right now."""
     container.reload()
     # A container that's been respawned by Docker's restart policy is
@@ -335,15 +335,9 @@ def _sync_with_container(sandbox: SandboxEnvironment, container, db: Session) ->
         # a host reboot, a half-failed /start, or worker reattach.
         # CLI envs intentionally have no HTTP port, so leave them alone.
         if sandbox.image_tag != "builtin:cli":
-            port_key = "3000/tcp" if sandbox.image_tag == "builtin:browser" else "8000/tcp"
-            bindings = container.ports.get(port_key) or []
-            live_port = 0
-            if bindings and isinstance(bindings, list):
-                host_port = bindings[0].get("HostPort") if isinstance(bindings[0], dict) else None
-                try:
-                    live_port = int(host_port) if host_port else 0
-                except (TypeError, ValueError):
-                    live_port = 0
+            from forge.envgen.container import ContainerRuntime
+            # App containers publish nothing. Their port is their gateway's.
+            live_port = ContainerRuntime(client).host_port(container) or 0
             if live_port > 0:
                 if sandbox.container_port != live_port:
                     sandbox.container_port = live_port
@@ -354,9 +348,9 @@ def _sync_with_container(sandbox: SandboxEnvironment, container, db: Session) ->
                 # "stopped" so the UI shows a Start button — /start
                 # will run a fresh container with a real port binding.
                 logger.warning(
-                    "[sandbox:get] %s container running but no %s binding "
+                    "[sandbox:get] %s container running but no host port "
                     "(container.ports=%s) — demoting to stopped so user can restart",
-                    sandbox.id, port_key, container.ports,
+                    sandbox.id, container.ports,
                 )
                 sandbox.status = "stopped"
                 db.commit()

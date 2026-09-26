@@ -10,13 +10,14 @@ import logging
 import docker.errors
 import pytest
 from datetime import datetime, timezone, timedelta
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from backend.app.database import Base
 from backend.app.models import SandboxEnvironment
+from tests.envgen.fake_docker import FakeDocker
 
 
 # ---------------------------------------------------------------------------
@@ -346,19 +347,26 @@ def test_get_sandbox_resyncs_container_port_from_live_container(client):
     finally:
         db.close()
 
-    mock_container = MagicMock()
-    mock_container.status = "running"
-    mock_container.attrs = {"RestartCount": 0, "State": {"Status": "running"}}
-    mock_container.ports = {"8000/tcp": [{"HostPort": "32777"}]}
-    mock_docker_client = MagicMock()
-    mock_docker_client.containers.get.return_value = mock_container
+    # App containers publish nothing. The live port is their gateway's.
+    daemon = FakeDocker()
+    app = daemon.containers.run(name="forge-drifted_env", image="forge-env-drifted:latest",
+                                labels={"forge.env": "drifted_env", "forge.managed": "true"})
+    gateway = daemon.containers.run(name="forge-drifted_env-gw", image="socat",
+                                    labels={"forge.env": "drifted_env", "forge.role": "gateway"},
+                                    ports={"8000/tcp": ("127.0.0.1", None)})
+    db = database.get_session_factory()()
+    try:
+        db.get(SandboxEnvironment, "drifted_env").container_id = app.id
+        db.commit()
+    finally:
+        db.close()
 
-    with patch("docker.from_env", return_value=mock_docker_client):
+    with patch("docker.from_env", return_value=daemon):
         info = client.get("/api/sandbox/drifted_env").json()
 
     # GET healed the row from the live container's port bindings
     assert info["status"] == "running"
-    assert info["container_port"] == 32777
+    assert info["container_port"] == int(gateway.ports["8000/tcp"][0]["HostPort"])
 
 
 def test_get_sandbox_marks_crashing_container_as_error(client):
@@ -556,9 +564,8 @@ def test_logs_endpoint_returns_410_when_container_pruned(client):
 
 
 def test_get_sandbox_demotes_to_stopped_when_running_but_no_port_binding(client):
-    """Container is genuinely 'running' in Docker but has no 8000/tcp binding
-    (e.g. daemon failed to allocate, or a stale container from before our
-    binding fix). DB has container_port=None. Demote to 'stopped' so the
+    """Container is genuinely 'running' in Docker but Forge has no port to reach
+    it on (no gateway, e.g. a container started before gateways existed). DB has container_port=None. Demote to 'stopped' so the
     UI shows a Start button — clicking it will run a fresh container with
     a real port binding."""
     _add_sandbox(client, "no_binding", status="running")
@@ -574,14 +581,19 @@ def test_get_sandbox_demotes_to_stopped_when_running_but_no_port_binding(client)
     finally:
         db.close()
 
-    mock_container = MagicMock()
-    mock_container.status = "running"
-    mock_container.attrs = {"RestartCount": 0, "State": {"Status": "running"}}
-    mock_container.ports = {}  # no 8000/tcp binding at all
-    mock_docker_client = MagicMock()
-    mock_docker_client.containers.get.return_value = mock_container
+    # An app with no gateway (e.g. started before gateways existed) has no
+    # reachable port at all.
+    daemon = FakeDocker()
+    app = daemon.containers.run(name="forge-no_binding", image="forge-env-no-binding:latest",
+                                labels={"forge.env": "no_binding", "forge.managed": "true"})
+    db = database.get_session_factory()()
+    try:
+        db.get(SandboxEnvironment, "no_binding").container_id = app.id
+        db.commit()
+    finally:
+        db.close()
 
-    with patch("docker.from_env", return_value=mock_docker_client):
+    with patch("docker.from_env", return_value=daemon):
         info = client.get("/api/sandbox/no_binding").json()
 
     # Demoted so the UI shows Start (not Stop)
@@ -1020,7 +1032,8 @@ def test_browser_sandbox_start_restarts_container(client):
 def test_build_cli_task_pulls_image_and_creates_container(client):
     """
     build_sandbox_task with env_type=cli:
-    - pulls ubuntu:22.04 via subprocess (not the SDK, which hangs on credential helpers)
+    - pulls the pinned Ubuntu base via subprocess (not the SDK, which hangs on credential helpers)
+      and builds the prebuilt CLI image
     - creates the container via Docker SDK
     - publishes progress messages and a final done:true signal to Redis
     - updates DB status to running with image_tag=builtin:cli
@@ -1064,19 +1077,23 @@ def test_build_cli_task_pulls_image_and_creates_container(client):
             env_type="cli",
         )
 
-    # subprocess called to pull ubuntu:22.04 (not the SDK), with per-attempt timeout
-    mock_subproc.assert_called_once_with(
-        ["docker", "pull", "ubuntu:22.04"],
+    # subprocess pulls the pinned base (not the SDK), with per-attempt timeout,
+    # then builds the prebuilt CLI image on top of it
+    from forge.envgen.container import CLI_RUNTIME_IMAGE, FORGE_CLI_IMAGE
+    assert mock_subproc.call_args_list[0] == call(
+        ["docker", "pull", FORGE_CLI_IMAGE],
         check=True,
         capture_output=True,
         text=True,
         timeout=120,
     )
+    build_cmd = mock_subproc.call_args_list[1].args[0]
+    assert build_cmd[:2] == ["docker", "build"] and CLI_RUNTIME_IMAGE in build_cmd
 
     # Docker SDK used to run the container
     mock_docker_client.containers.run.assert_called_once()
     run_kwargs = mock_docker_client.containers.run.call_args.kwargs
-    assert run_kwargs["image"] == "ubuntu:22.04"
+    assert run_kwargs["image"] == CLI_RUNTIME_IMAGE
     assert run_kwargs["detach"] is True
     assert run_kwargs["command"] == ["tail", "-f", "/dev/null"]
 

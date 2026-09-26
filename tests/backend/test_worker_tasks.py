@@ -112,3 +112,55 @@ def test_benchmark_survives_and_logs_a_failing_progress_publish(benchmark_db, ca
     with database.get_session_factory()() as db:
         assert db.get(BenchmarkRun, "bm_1").status == "done"
     assert "progress publish failed" in caplog.text
+
+
+def test_benchmark_episodes_hold_their_environment_lock(benchmark_db):
+    # A benchmark drives the same container an agent run might be using, so
+    # it takes the same per-environment lock around every episode.
+    from contextlib import contextmanager
+
+    task = SimpleNamespace(domain="mail", name="triage", objective="o")
+    held: list[str] = []
+    seen_while_running: list[list[str]] = []
+
+    @contextmanager
+    def fake_lock(_redis_client, env_name):
+        held.append(env_name)
+        try:
+            yield
+        finally:
+            held.remove(env_name)
+
+    class _Collector:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def pending_runs(self, _checkpoint):
+            return [{"task": task, "seed": 0}]
+
+        def collect(self, run_episode):
+            run_episode(task, 0, benchmark_db / "ep0.jsonl")
+
+    runner = MagicMock()
+    runner.__enter__.return_value.run_episode.side_effect = (
+        lambda *a, **k: seen_while_running.append(list(held))
+        or SimpleNamespace(total_reward=0.0, termination_reason="done")
+    )
+    quality = SimpleNamespace(
+        env_name="mail", state_coverage_score=1.0, reward_density=0.0,
+        dead_end_rate=0.0, action_diversity=0.0, num_episodes=1, num_steps=1,
+    )
+    with patch.object(tasks, "exclusive_environment", fake_lock), \
+         patch("redis.from_url"), \
+         patch("forge.benchmark.data_collector.DataCollector", _Collector), \
+         patch("forge.benchmark.compiled_tasks.CompiledTaskProvider"), \
+         patch("forge.envgen.episode_runner.ContainerEpisodeRunner", return_value=runner), \
+         patch("forge.envgen.agents.container_agent.make_container_agent"), \
+         patch("forge.benchmark.env_quality.compute_env_quality", return_value=quality), \
+         patch("forge.benchmark.report.BenchmarkReport"):
+        tasks.run_benchmark_task.apply(
+            args=["bm_1", ["mail"], 1, 1, str(benchmark_db / "out")]
+        )
+
+    assert seen_while_running == [["mail"]]
+    assert held == []

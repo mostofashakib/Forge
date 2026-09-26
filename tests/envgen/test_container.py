@@ -1,4 +1,5 @@
 import logging
+import re
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch, call
@@ -6,23 +7,31 @@ from unittest.mock import MagicMock, patch, call
 import docker.errors
 import pytest
 
+from tests.envgen.fake_docker import FakeDocker
+
 from forge.envgen.container import (
     ContainerRuntime,
     FORGE_APP_PORT,
     FORGE_PYTHON_BASE,
     STANDARD_BASE_IMAGES,
-    _BASELINE_REQUIREMENTS,
+    CLI_DOCKERFILE,
+    CLI_RUNTIME_IMAGE,
+    _cli_image_tag,
+    ensure_cli_image,
+    FORGE_BROWSER_IMAGE,
+    FORGE_CLI_IMAGE,
+    RUNTIME_LOCK,
     _HUB_MIRRORS,
-    _existing_packages,
     _image_cached_locally,
     _is_hub_image,
     _mirror_ref_for,
     _normalise_dockerfile_base,
+    _normalise_dockerfile_install,
     _normalise_dockerfile_port,
-    _normalise_requirements,
     _parse_from_image,
     _pull_with_retry,
     _wait_for_port_binding,
+    _write_locked_requirements,
     prewarm_standard_base_images,
     pull_image,
 )
@@ -370,8 +379,8 @@ def test_build_retries_pull_on_eof_then_builds(tmp_path):
         tag = ContainerRuntime().build("retry_env", app_dir)
 
     calls = [c.args[0] for c in mock_run.call_args_list]
-    assert calls[0] == ["docker", "pull", "python:3.12-slim"]   # first pull (fails)
-    assert calls[1] == ["docker", "pull", "python:3.12-slim"]   # retry (succeeds)
+    assert calls[0] == ["docker", "pull", FORGE_PYTHON_BASE]   # first pull (fails)
+    assert calls[1] == ["docker", "pull", FORGE_PYTHON_BASE]   # retry (succeeds)
     assert calls[2][1] == "build"                                # docker build
     assert tag == "forge-env-retry-env:latest"
 
@@ -437,11 +446,12 @@ def test_run_cli_pulls_image_via_subprocess():
 
     with patch("forge.envgen.container._image_cached_locally", return_value=False), \
          patch("forge.envgen.container._pull_with_retry") as mock_pull, \
+         patch("forge.envgen.container.subprocess.run", return_value=MagicMock(returncode=0)), \
          patch("forge.envgen.container.docker.from_env", return_value=mock_docker):
         runtime = ContainerRuntime()
         container_id, port = runtime.run_cli("my_env")
 
-    mock_pull.assert_called_once_with("ubuntu:22.04")
+    mock_pull.assert_called_once_with(FORGE_CLI_IMAGE)
     assert container_id == "cli-abc"
     assert port == 0
 
@@ -473,7 +483,7 @@ def test_run_cli_container_uses_tail_command():
         ContainerRuntime().run_cli("keepalive_env")
 
     kwargs = mock_docker.containers.run.call_args.kwargs
-    assert kwargs["image"] == "ubuntu:22.04"
+    assert kwargs["image"] == CLI_RUNTIME_IMAGE
     assert kwargs["command"] == ["tail", "-f", "/dev/null"]
     assert kwargs["detach"] is True
     assert kwargs["labels"]["forge.type"] == "cli"
@@ -486,21 +496,16 @@ def test_run_cli_container_uses_tail_command():
 # ---------------------------------------------------------------------------
 
 def test_run_browser_pulls_image_via_subprocess():
-    mock_container = MagicMock()
-    mock_container.id = "browser-abc"
-    mock_container.ports = {"3000/tcp": [{"HostPort": "45678"}]}
-    mock_docker = MagicMock()
-    mock_docker.containers.get.side_effect = docker.errors.NotFound("not found")
-    mock_docker.containers.run.return_value = mock_container
-
+    daemon = FakeDocker()
     with patch("forge.envgen.container._image_cached_locally", return_value=False), \
          patch("forge.envgen.container._pull_with_retry") as mock_pull, \
-         patch("forge.envgen.container.docker.from_env", return_value=mock_docker):
+         patch("forge.envgen.container.docker.from_env", return_value=daemon):
         container_id, port = ContainerRuntime().run_browser("my_browser_env")
 
-    mock_pull.assert_called_once_with("lscr.io/linuxserver/chromium:latest")
-    assert container_id == "browser-abc"
-    assert port == 45678
+    pulled = [c.args[0] for c in mock_pull.call_args_list]
+    assert FORGE_BROWSER_IMAGE in pulled
+    assert daemon.containers.get(container_id).name == "forge-my_browser_env"
+    assert port == int(daemon.named("forge-my_browser_env-gw").ports["3000/tcp"][0]["HostPort"])
 
 
 def test_run_browser_skips_pull_when_image_cached():
@@ -524,22 +529,18 @@ def test_run_browser_skips_pull_when_image_cached():
 # ---------------------------------------------------------------------------
 
 def test_run_returns_container_id_and_port():
-    mock_container = MagicMock()
-    mock_container.id = "abc123"
-    mock_container.ports = {"8000/tcp": [{"HostPort": "54321"}]}
-    mock_docker = MagicMock()
-    mock_docker.containers.run.return_value = mock_container
-
-    with patch("forge.envgen.container.docker.from_env", return_value=mock_docker):
+    daemon = FakeDocker()
+    with patch("forge.envgen.container.docker.from_env", return_value=daemon), \
+         patch("forge.envgen.container._image_cached_locally", return_value=True):
         container_id, port = ContainerRuntime().run("test_env", "forge-env-test-env:latest")
 
-    assert container_id == "abc123"
-    assert port == 54321
-    mock_docker.containers.run.assert_called_once()
-    kwargs = mock_docker.containers.run.call_args.kwargs
-    assert kwargs["ports"]["8000/tcp"] == ("127.0.0.1", None)
-    assert kwargs["cap_drop"] == ["ALL"]
-    assert kwargs["security_opt"] == ["no-new-privileges:true"]
+    app = daemon.containers.get(container_id)
+    gateway = daemon.named("forge-test_env-gw")
+    assert app.name == "forge-test_env"
+    assert port == int(gateway.ports["8000/tcp"][0]["HostPort"])
+    for container in (app, gateway):
+        assert container.kwargs["cap_drop"] == ["ALL"]
+        assert container.kwargs["security_opt"] == ["no-new-privileges:true"]
 
 
 # ---------------------------------------------------------------------------
@@ -555,14 +556,13 @@ def test_stop_ignores_not_found():
 
 
 def test_stop_calls_stop_on_container():
-    mock_container = MagicMock()
-    mock_docker = MagicMock()
-    mock_docker.containers.get.return_value = mock_container
+    daemon = FakeDocker()
+    shell = daemon.containers.run(name="forge-shell", image="cli", labels={"forge.env": "shell", "forge.type": "cli"})
 
-    with patch("forge.envgen.container.docker.from_env", return_value=mock_docker):
-        ContainerRuntime().stop("running_container_id")
+    with patch("forge.envgen.container.docker.from_env", return_value=daemon):
+        ContainerRuntime().stop(shell.id)
 
-    mock_container.stop.assert_called_once_with(timeout=10)
+    assert shell.status == "exited"
 
 
 # ---------------------------------------------------------------------------
@@ -570,42 +570,36 @@ def test_stop_calls_stop_on_container():
 # ---------------------------------------------------------------------------
 
 def test_reattach_all_returns_managed_containers():
-    mock_c = MagicMock()
-    mock_c.id = "xyz"
-    mock_c.labels = {"forge.env": "my_env"}
-    mock_c.ports = {"8000/tcp": [{"HostPort": "9999"}]}
-    mock_docker = MagicMock()
-    mock_docker.containers.list.return_value = [mock_c]
+    daemon = FakeDocker()
+    with patch("forge.envgen.container.docker.from_env", return_value=daemon), \
+         patch("forge.envgen.container._image_cached_locally", return_value=True):
+        runtime = ContainerRuntime()
+        app_id, port = runtime.run("my_env", "forge-env-my-env:latest")
+        result = runtime.reattach_all()
 
-    with patch("forge.envgen.container.docker.from_env", return_value=mock_docker):
-        result = ContainerRuntime().reattach_all()
-
-    assert result == [("my_env", "xyz", 9999)]
+    assert result == [("my_env", app_id, port)]
 
 
 def test_reattach_all_uses_the_browser_ui_port():
-    mock_c = MagicMock()
-    mock_c.id = "browser-id"
-    mock_c.labels = {"forge.env": "web_env", "forge.type": "browser"}
-    mock_c.ports = {"3000/tcp": [{"HostPort": "4100"}], "9222/tcp": [{"HostPort": "4101"}]}
-    mock_docker = MagicMock()
-    mock_docker.containers.list.return_value = [mock_c]
+    daemon = FakeDocker()
+    with patch("forge.envgen.container.docker.from_env", return_value=daemon), \
+         patch("forge.envgen.container._image_cached_locally", return_value=True):
+        runtime = ContainerRuntime()
+        browser_id, ui_port = runtime.run_browser("web_env")
+        result = runtime.reattach_all()
 
-    with patch("forge.envgen.container.docker.from_env", return_value=mock_docker):
-        result = ContainerRuntime().reattach_all()
-
-    assert result == [("web_env", "browser-id", 4100)]
+    assert result == [("web_env", browser_id, ui_port)]
 
 
 def test_reattach_all_skips_containers_without_port():
-    mock_c = MagicMock()
-    mock_c.id = "no-port"
-    mock_c.labels = {"forge.env": "portless_env"}
-    mock_c.ports = {}
-    mock_docker = MagicMock()
-    mock_docker.containers.list.return_value = [mock_c]
+    # An app with no gateway, and a CLI shell, have no port to reattach.
+    daemon = FakeDocker()
+    daemon.containers.run(name="forge-portless_env", image="app",
+                          labels={"forge.env": "portless_env", "forge.managed": "true"})
+    daemon.containers.run(name="forge-shell", image="cli",
+                          labels={"forge.env": "shell", "forge.managed": "true", "forge.type": "cli"})
 
-    with patch("forge.envgen.container.docker.from_env", return_value=mock_docker):
+    with patch("forge.envgen.container.docker.from_env", return_value=daemon):
         result = ContainerRuntime().reattach_all()
 
     assert result == []
@@ -761,99 +755,139 @@ def test_normalise_port_handles_multiple_expose_lines(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# _normalise_requirements — guardrail against LLM omitting runtime deps
+# Locked dependencies: every container installs the same hashed lock
 # ---------------------------------------------------------------------------
 
-def test_existing_packages_handles_extras_and_versions():
-    text = (
-        "fastapi==0.115.0\n"
-        "uvicorn[standard]>=0.32.0\n"
-        "# comment line\n"
-        "\n"
-        "-r other.txt\n"
-        "redis~=5.0\n"
+_LOCKED_INSTALL = "RUN pip install --no-cache-dir --require-hashes -r requirements.txt"
+
+
+def _requirement_blocks(lock_text: str) -> list[str]:
+    """Each requirement with its continuation lines, comments dropped."""
+    blocks: list[str] = []
+    for line in lock_text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if line.startswith((" ", "\t")) and blocks:
+            blocks[-1] += " " + stripped
+        else:
+            blocks.append(stripped)
+    return blocks
+
+
+def test_every_locked_requirement_is_pinned_and_hashed():
+    blocks = _requirement_blocks(RUNTIME_LOCK.read_text())
+
+    assert blocks, "the lock must not be empty"
+    for block in blocks:
+        name = block.split()[0]
+        assert "==" in name, f"{name} is not pinned to one version"
+        assert "--hash=sha256:" in block, f"{name} has no hash"
+
+
+def test_the_lock_covers_every_package_the_apps_import():
+    names = {block.split("==")[0].lower() for block in _requirement_blocks(RUNTIME_LOCK.read_text())}
+
+    for package in ("fastapi", "uvicorn", "sqlalchemy", "redis", "httpx", "python-multipart", "pydantic"):
+        assert package in names, f"{package} missing from the lock"
+
+
+def test_build_replaces_llm_requirements_with_the_lock(tmp_path: Path):
+    # Unpinned names resolve to whatever PyPI serves on build day, so the
+    # LLM's list never reaches pip. The correctness gate rejects code that
+    # imports anything the lock lacks.
+    app_dir = tmp_path / "app"
+    app_dir.mkdir()
+    (app_dir / "requirements.txt").write_text("fastapi\nbeautifulsoup4==4.12.0\nrequests\n")
+
+    _write_locked_requirements(app_dir)
+
+    assert (app_dir / "requirements.txt").read_text() == RUNTIME_LOCK.read_text()
+
+
+def test_build_writes_the_lock_when_requirements_are_missing(tmp_path: Path):
+    app_dir = tmp_path / "app"
+    app_dir.mkdir()
+
+    _write_locked_requirements(app_dir)
+
+    assert (app_dir / "requirements.txt").read_text() == RUNTIME_LOCK.read_text()
+
+
+def test_every_pip_install_becomes_the_one_hashed_lock_install(tmp_path: Path):
+    df = tmp_path / "Dockerfile"
+    df.write_text(
+        "FROM python:3.12-slim\n"
+        "WORKDIR /app\n"
+        "COPY requirements.txt .\n"
+        "RUN pip install --upgrade pip && \\\n"
+        "    pip install -r requirements.txt\n"
+        "RUN python -m pip install fastapi uvicorn\n"
+        "COPY . .\n"
     )
-    assert _existing_packages(text) == {"fastapi", "uvicorn", "redis"}
+
+    assert _normalise_dockerfile_install(df) is True
+
+    lines = df.read_text().splitlines()
+    assert lines == [
+        "FROM python:3.12-slim",
+        "WORKDIR /app",
+        "COPY requirements.txt .",
+        _LOCKED_INSTALL,
+        "COPY . .",
+    ]
 
 
-def test_normalise_requirements_adds_missing_redis(tmp_path: Path):
-    """The user's todo_clone bug: main.py imports redis but requirements
-    omits it. This caused boot crashes. Normalise must inject redis."""
+def test_system_package_installs_are_removed(tmp_path: Path):
+    # apt resolves against today's Debian mirrors. Nothing in the lock needs
+    # a system package, so the line has no job except drift.
+    df = tmp_path / "Dockerfile"
+    df.write_text(
+        "FROM python:3.12-slim\n"
+        "RUN apt-get update && apt-get install -y gcc\n"
+        f"{_LOCKED_INSTALL}\n"
+    )
+
+    _normalise_dockerfile_install(df)
+
+    assert "apt-get" not in df.read_text()
+    assert _LOCKED_INSTALL in df.read_text()
+
+
+def test_install_normalisation_ignores_a_dockerfile_without_installs(tmp_path: Path):
+    # False-positive guard: lines that merely mention pip are not installs.
+    df = tmp_path / "Dockerfile"
+    original = "FROM python:3.12-slim\nENV PIP_NO_CACHE_DIR=1\nCOPY . .\n"
+    df.write_text(original)
+
+    assert _normalise_dockerfile_install(df) is False
+    assert df.read_text() == original
+
+
+def test_build_installs_the_lock_even_when_it_writes_the_dockerfile(tmp_path: Path):
     app_dir = tmp_path / "app"
     app_dir.mkdir()
-    req = app_dir / "requirements.txt"
-    req.write_text("fastapi\nuvicorn[standard]\nsqlalchemy\npydantic\npython-multipart\n")
+    (app_dir / "main.py").write_text("# app")
 
-    assert _normalise_requirements(app_dir) is True
+    with patch("forge.envgen.container._image_cached_locally", return_value=True), \
+         patch("forge.envgen.container.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        ContainerRuntime().build("fallback_env", app_dir)
 
-    final = req.read_text()
-    declared = _existing_packages(final)
-    # Every baseline dep is present after normalisation
-    for dep in _BASELINE_REQUIREMENTS:
-        assert dep.split("[", 1)[0].lower() in declared, f"missing {dep}"
-
-
-def test_normalise_requirements_creates_file_when_missing(tmp_path: Path):
-    app_dir = tmp_path / "app"
-    app_dir.mkdir()
-    # No requirements.txt at all
-    assert _normalise_requirements(app_dir) is True
-    declared = _existing_packages((app_dir / "requirements.txt").read_text())
-    for dep in _BASELINE_REQUIREMENTS:
-        assert dep.split("[", 1)[0].lower() in declared
-
-
-def test_normalise_requirements_noop_when_complete(tmp_path: Path):
-    """An LLM that gets it right shouldn't see its file rewritten."""
-    app_dir = tmp_path / "app"
-    app_dir.mkdir()
-    req = app_dir / "requirements.txt"
-    req.write_text("\n".join(_BASELINE_REQUIREMENTS) + "\n")
-    before = req.read_text()
-    assert _normalise_requirements(app_dir) is False
-    assert req.read_text() == before
-
-
-def test_normalise_requirements_preserves_app_specific_deps(tmp_path: Path):
-    """If the LLM adds beautifulsoup4 for a scraping app, keep it — only
-    inject the missing baseline deps, don't replace the file."""
-    app_dir = tmp_path / "app"
-    app_dir.mkdir()
-    req = app_dir / "requirements.txt"
-    req.write_text("fastapi\nbeautifulsoup4==4.12.0\nrequests\n")
-
-    _normalise_requirements(app_dir)
-    declared = _existing_packages(req.read_text())
-
-    assert "beautifulsoup4" in declared
-    assert "requests" in declared
-    assert "redis" in declared       # was missing, now injected
-    assert "sqlalchemy" in declared  # was missing, now injected
-
-
-def test_normalise_requirements_treats_extras_correctly(tmp_path: Path):
-    """`uvicorn[standard]` already present must not be re-added as plain `uvicorn`."""
-    app_dir = tmp_path / "app"
-    app_dir.mkdir()
-    req = app_dir / "requirements.txt"
-    req.write_text("\n".join(_BASELINE_REQUIREMENTS) + "\n")
-
-    _normalise_requirements(app_dir)
-    final = req.read_text()
-    # uvicorn appears exactly once — and with the [standard] extras
-    uvicorn_lines = [l for l in final.splitlines() if l.strip().startswith("uvicorn")]
-    assert len(uvicorn_lines) == 1
-    assert "[standard]" in uvicorn_lines[0]
+    dockerfile = (app_dir / "Dockerfile").read_text()
+    assert _LOCKED_INSTALL in dockerfile
+    assert dockerfile.count("pip install") == 1
+    assert (app_dir / "requirements.txt").read_text() == RUNTIME_LOCK.read_text()
 
 
 def test_build_normalises_requirements_alongside_dockerfile(tmp_path: Path):
-    """The full build path must normalise BOTH Dockerfile and requirements
-    before docker build runs. Otherwise an LLM-emitted requirements file
-    missing redis still produces a crashing container."""
+    """The full build path must lock BOTH the Dockerfile's install and the
+    requirements before docker build runs."""
     app_dir = tmp_path / "app"
     app_dir.mkdir()
     (app_dir / "Dockerfile").write_text(
-        "FROM python:3.12-slim\nWORKDIR /app\nEXPOSE 8000\n"
+        "FROM python:3.12-slim\nWORKDIR /app\nCOPY requirements.txt .\n"
+        "RUN pip install -r requirements.txt\nEXPOSE 8000\n"
         'CMD ["uvicorn", "main:app", "--port", "8000"]\n'
     )
     (app_dir / "requirements.txt").write_text("fastapi\nuvicorn[standard]\n")
@@ -863,10 +897,80 @@ def test_build_normalises_requirements_alongside_dockerfile(tmp_path: Path):
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
         ContainerRuntime().build("baseline_env", app_dir)
 
-    declared = _existing_packages((app_dir / "requirements.txt").read_text())
-    assert "redis" in declared
-    assert "sqlalchemy" in declared
-    assert "httpx" in declared
+    assert (app_dir / "requirements.txt").read_text() == RUNTIME_LOCK.read_text()
+    assert _LOCKED_INSTALL in (app_dir / "Dockerfile").read_text()
+
+
+# ---------------------------------------------------------------------------
+# Base images: pinned by digest, premade images included
+# ---------------------------------------------------------------------------
+
+_DIGEST_RE = re.compile(r"@sha256:[0-9a-f]{64}$")
+
+
+def test_every_standard_base_image_is_pinned_by_digest():
+    for image in STANDARD_BASE_IMAGES:
+        assert _DIGEST_RE.search(image), f"{image} can move under its tag"
+
+
+@pytest.mark.parametrize("template", ["gmail", "slack"])
+def test_premade_images_build_from_the_pinned_base_and_the_lock(template):
+    premade = Path(__file__).resolve().parents[2] / "docker" / "premade" / template
+    dockerfile = (premade / "Dockerfile").read_text()
+
+    assert dockerfile.startswith(f"FROM {FORGE_PYTHON_BASE}\n")
+    assert _LOCKED_INSTALL in dockerfile
+    assert (premade / "requirements.txt").read_text() == RUNTIME_LOCK.read_text()
+
+
+@pytest.mark.parametrize("template", ["gmail", "slack"])
+def test_building_a_premade_image_does_not_rewrite_its_committed_files(template, tmp_path):
+    # Premade images build in place from the repo, so every normaliser must
+    # already be satisfied by the committed files, or each build dirties git.
+    import shutil
+
+    premade = Path(__file__).resolve().parents[2] / "docker" / "premade" / template
+    work = tmp_path / template
+    shutil.copytree(premade, work)
+
+    dockerfile = work / "Dockerfile"
+    assert _normalise_dockerfile_base(dockerfile) is False
+    assert _normalise_dockerfile_port(dockerfile) is False
+    assert _normalise_dockerfile_install(dockerfile) is False
+    assert _write_locked_requirements(work) is False
+
+
+def test_mirror_pull_of_a_digest_ref_tags_the_name_without_the_digest():
+    # `docker tag` refuses a digest target. Tagging the name alone is enough:
+    # the digest ref then resolves to the same content-addressed image.
+    image = "python:3.12-slim@sha256:" + "a" * 64
+
+    def pull_side_effect(ref, **_):
+        if ref.startswith("public.ecr.aws"):
+            return None
+        raise RuntimeError(f"failed: {ref}")
+
+    with patch("forge.envgen.container._image_cached_locally", return_value=False), \
+         patch("forge.envgen.container._pull_with_retry", side_effect=pull_side_effect), \
+         patch("forge.envgen.container._docker_tag") as mock_tag:
+        pull_image(image)
+
+    mock_tag.assert_called_once_with(
+        "public.ecr.aws/docker/library/" + image, "python:3.12-slim"
+    )
+
+
+def test_a_digest_ref_never_falls_back_to_the_rebuilt_http_image():
+    # The HTTPS loader rebuilds the manifest locally, so its digest can never
+    # match the pin. Serving it would silently unpin the build.
+    image = "python:3.12-slim@sha256:" + "b" * 64
+    with patch("forge.envgen.container._image_cached_locally", return_value=False), \
+         patch("forge.envgen.container._pull_with_retry", side_effect=RuntimeError("EOF")), \
+         patch("forge.envgen._image_pull_http.pull_via_http") as mock_http:
+        with pytest.raises(RuntimeError, match="digest"):
+            pull_image(image)
+
+    mock_http.assert_not_called()
 
 
 def test_build_normalises_port_alongside_base(tmp_path: Path):
@@ -1127,114 +1231,85 @@ def test_pull_image_propagates_failure_for_non_hub_image():
 # ContainerRuntime.start — defensive against stale-state envs
 # ---------------------------------------------------------------------------
 
-def test_start_restarts_existing_stopped_container():
-    """Happy path: container exists, port still bound — restart and return."""
-    container = MagicMock()
-    container.id = "abc123"
-    container.ports = {"8000/tcp": [{"HostPort": "32100"}]}
-    mock_docker = MagicMock()
-    mock_docker.containers.get.return_value = container
-
-    with patch("forge.envgen.container.docker.from_env", return_value=mock_docker):
-        cid, port = ContainerRuntime().start("my_env", "abc123", "forge-env-my-env:latest")
-
-    container.start.assert_called_once()
-    assert (cid, port) == ("abc123", 32100)
+@pytest.fixture
+def fake_daemon():
+    daemon = FakeDocker()
+    with patch("forge.envgen.container.docker.from_env", return_value=daemon), \
+         patch("forge.envgen.container._image_cached_locally", return_value=True):
+        yield daemon
 
 
-def test_start_with_empty_container_id_runs_fresh():
-    """Empty container_id (DB has stale/missing reference) → run a fresh container."""
-    fresh_container = MagicMock()
-    fresh_container.id = "newcid"
-    fresh_container.ports = {"8000/tcp": [{"HostPort": "32200"}]}
-    mock_docker = MagicMock()
-    mock_docker.containers.get.side_effect = docker.errors.NotFound("forge-my-env")
-    mock_docker.containers.run.return_value = fresh_container
-
-    with patch("forge.envgen.container.docker.from_env", return_value=mock_docker):
-        cid, port = ContainerRuntime().start("my_env", "", "forge-env-my-env:latest")
-
-    # Never called containers.get with the empty string
-    assert mock_docker.containers.get.call_args_list[0].args[0] != ""
-    mock_docker.containers.run.assert_called_once()
-    assert (cid, port) == ("newcid", 32200)
+def _gateway_port(daemon: FakeDocker, env_name: str) -> int:
+    return int(daemon.named(f"forge-{env_name}-gw").ports["8000/tcp"][0]["HostPort"])
 
 
-def test_start_removes_stale_named_container_before_running_fresh():
-    """If old container_id is gone but a stopped twin with the same name still
-    exists, run() would raise 409 Conflict — start must remove it first."""
-    fresh_container = MagicMock()
-    fresh_container.id = "fresh"
-    fresh_container.ports = {"8000/tcp": [{"HostPort": "32300"}]}
-    stale_container = MagicMock()  # the same-name twin that needs removing
+def test_start_restarts_existing_stopped_container(fake_daemon):
+    """Happy path: the pair exists and the gateway still publishes. Restart it."""
+    runtime = ContainerRuntime()
+    app_id, _ = runtime.run("my_env", "forge-env-my-env:latest")
+    runtime.stop(app_id)
 
-    mock_docker = MagicMock()
-    # First containers.get(stale_id) → NotFound (the original container is gone)
-    # Second containers.get(forge-my-env) → returns the same-name stopped twin
-    mock_docker.containers.get.side_effect = [
-        docker.errors.NotFound("stale-id"),
-        stale_container,
-    ]
-    mock_docker.containers.run.return_value = fresh_container
+    cid, port = runtime.start("my_env", app_id, "forge-env-my-env:latest")
 
-    with patch("forge.envgen.container.docker.from_env", return_value=mock_docker):
-        ContainerRuntime().start("my_env", "stale-id", "forge-env-my-env:latest")
-
-    stale_container.remove.assert_called_once_with(force=True)
-    mock_docker.containers.run.assert_called_once()
+    assert fake_daemon.containers.get(app_id).status == "running"
+    assert (cid, port) == (app_id, _gateway_port(fake_daemon, "my_env"))
 
 
-def test_start_raises_clear_error_when_image_missing():
+def test_start_with_empty_container_id_runs_fresh(fake_daemon):
+    """Empty container_id (DB has stale/missing reference) → run a fresh pair."""
+    cid, port = ContainerRuntime().start("my_env", "", "forge-env-my-env:latest")
+
+    assert fake_daemon.containers.get(cid).name == "forge-my_env"
+    assert port == _gateway_port(fake_daemon, "my_env")
+
+
+def test_start_removes_stale_named_container_before_running_fresh(fake_daemon):
+    """If the old container_id is gone but a same-name twin still exists,
+    run() would raise 409 Conflict. start must remove it first."""
+    fake_daemon.containers.run(name="forge-my_env", image="old", labels={"forge.env": "my_env"})
+    fake_daemon.containers.get("forge-my_env").stop()
+
+    cid, _port = ContainerRuntime().start("my_env", "stale-id", "forge-env-my-env:latest")
+
+    assert "forge-my_env" in fake_daemon.removed
+    assert fake_daemon.containers.get(cid).kwargs["image"] == "forge-env-my-env:latest"
+
+
+def test_start_raises_clear_error_when_image_missing(fake_daemon):
     """If the image was pruned, start() must raise a RuntimeError telling
-    the user to rebuild — not a confusing docker.errors.ImageNotFound."""
-    mock_docker = MagicMock()
-    mock_docker.containers.get.side_effect = docker.errors.NotFound("missing")
-    mock_docker.containers.run.side_effect = docker.errors.ImageNotFound("forge-env-my-env:latest")
+    the user to rebuild, not a confusing docker.errors.ImageNotFound."""
+    fake_daemon.missing_images.add("forge-env-my-env:latest")
 
-    with patch("forge.envgen.container.docker.from_env", return_value=mock_docker):
-        with pytest.raises(RuntimeError, match="must be rebuilt"):
-            ContainerRuntime().start("my_env", "old-id", "forge-env-my-env:latest")
+    with pytest.raises(RuntimeError, match="must be rebuilt"):
+        ContainerRuntime().start("my_env", "old-id", "forge-env-my-env:latest")
 
 
-def test_start_falls_through_when_existing_container_lost_its_port():
-    """Container exists but ports map is empty (rare host-reboot artifact) —
-    drop it and run fresh so the user gets a working port."""
-    bad_container = MagicMock()
-    bad_container.id = "old"
-    bad_container.ports = {}  # no 8000/tcp binding any more
-    fresh_container = MagicMock()
-    fresh_container.id = "new"
-    fresh_container.ports = {"8000/tcp": [{"HostPort": "32400"}]}
+def test_start_falls_through_when_existing_container_lost_its_port(fake_daemon):
+    """An app whose gateway is gone (host reboot, or started before gateways)
+    is dropped and replaced by a fresh pair with a working port."""
+    runtime = ContainerRuntime()
+    old_id, _ = runtime.run("my_env", "forge-env-my-env:latest")
+    fake_daemon.named("forge-my_env-gw").remove(force=True)
 
-    mock_docker = MagicMock()
-    mock_docker.containers.get.side_effect = [bad_container, docker.errors.NotFound("forge-my-env")]
-    mock_docker.containers.run.return_value = fresh_container
+    cid, port = runtime.start("my_env", old_id, "forge-env-my-env:latest")
 
-    with patch("forge.envgen.container.docker.from_env", return_value=mock_docker):
-        cid, port = ContainerRuntime().start("my_env", "old", "forge-env-my-env:latest")
-
-    bad_container.remove.assert_called_once_with(force=True)
-    assert (cid, port) == ("new", 32400)
+    assert cid != old_id
+    assert port == _gateway_port(fake_daemon, "my_env")
 
 
-def test_start_falls_through_when_existing_container_refuses_to_start():
+def test_start_falls_through_when_existing_container_refuses_to_start(fake_daemon):
     """Container exists but .start() raises (image vanished etc.) → remove + fresh."""
-    broken_container = MagicMock()
-    broken_container.id = "broken"
-    broken_container.start.side_effect = docker.errors.APIError("image gone")
-    fresh_container = MagicMock()
-    fresh_container.id = "new"
-    fresh_container.ports = {"8000/tcp": [{"HostPort": "32500"}]}
+    runtime = ContainerRuntime()
+    broken_id, _ = runtime.run("my_env", "forge-env-my-env:latest")
+    fake_daemon.refuse_start.add("forge-my_env")
 
-    mock_docker = MagicMock()
-    mock_docker.containers.get.side_effect = [broken_container, docker.errors.NotFound("forge-my-env")]
-    mock_docker.containers.run.return_value = fresh_container
+    try:
+        cid, _port = runtime.start("my_env", broken_id, "forge-env-my-env:latest")
+    finally:
+        fake_daemon.refuse_start.clear()
 
-    with patch("forge.envgen.container.docker.from_env", return_value=mock_docker):
-        cid, port = ContainerRuntime().start("my_env", "broken", "forge-env-my-env:latest")
-
-    broken_container.remove.assert_called_once_with(force=True)
-    assert cid == "new"
+    assert cid != broken_id
+    assert fake_daemon.containers.get(cid).name == "forge-my_env"
 
 
 # ---------------------------------------------------------------------------
@@ -1327,3 +1402,115 @@ def test_build_gives_up_on_a_hung_docker_build(tmp_path):
             ContainerRuntime().build("hung_env", app_dir)
 
     assert mock_run.call_args.kwargs["timeout"] == 900
+
+
+# ---------------------------------------------------------------------------
+# Launch-time determinism: network and timezone
+# ---------------------------------------------------------------------------
+
+def _launch_kwargs(launch) -> dict:
+    """Run one ContainerRuntime launch on a fake daemon and return the env container's kwargs."""
+    daemon = FakeDocker()
+    with patch("forge.envgen.container._image_cached_locally", return_value=True), \
+         patch("forge.envgen.container.docker.from_env", return_value=daemon):
+        launch(ContainerRuntime())
+    env_containers = [
+        c for c in daemon.containers._by_id.values() if c.labels.get("forge.role") != "gateway"
+    ]
+    return env_containers[0].kwargs
+
+
+def test_cli_container_has_no_network():
+    # The CLI agent drives the shell through `docker exec`, so the container
+    # needs no network at all, and a live one lets `curl`/`apt` see today's
+    # internet instead of a fixed world.
+    kwargs = _launch_kwargs(lambda rt: rt.run_cli("shell_env"))
+
+    assert kwargs["network_mode"] == "none"
+
+
+
+
+@pytest.mark.parametrize("launch", [
+    lambda rt: rt.run("app_env", "forge-env-app-env:latest"),
+    lambda rt: rt.run_cli("shell_env"),
+    lambda rt: rt.run_browser("browser_env"),
+])
+def test_every_container_runs_in_utc(launch):
+    # The host's timezone must not leak into `date`, log lines, or any local
+    # time an app renders, or the same episode differs between machines.
+    kwargs = _launch_kwargs(launch)
+
+    assert kwargs["environment"]["TZ"] == "UTC"
+
+
+@pytest.mark.parametrize("launch", [
+    lambda rt: rt.run("app_env", "forge-env-app-env:latest"),
+    lambda rt: rt.run_cli("shell_env"),
+])
+def test_python_in_a_container_iterates_sets_in_a_fixed_order(launch):
+    # Python salts str hashes per process, so a set of names iterates in a
+    # different order after every container start. Code that builds state
+    # from a set would then differ run to run. A fixed seed removes the salt.
+    kwargs = _launch_kwargs(launch)
+
+    assert kwargs["environment"]["PYTHONHASHSEED"] == "0"
+
+
+# ---------------------------------------------------------------------------
+# CLI clock: a prebuilt image with libfaketime freezes what commands see
+# ---------------------------------------------------------------------------
+
+def test_cli_commands_see_the_fixed_epoch_not_the_host_clock():
+    # Every process in the shell starts at the SimClock epoch, so `date`,
+    # `python -c 'import time'`, and log lines read the same time every run.
+    kwargs = _launch_kwargs(lambda rt: rt.run_cli("shell_env"))
+
+    assert kwargs["image"] == CLI_RUNTIME_IMAGE
+    assert kwargs["environment"]["LD_PRELOAD"] == "/usr/local/lib/libfaketime.so.1"
+    assert kwargs["environment"]["FAKETIME"] == "@2023-11-14 22:13:20"
+
+
+def test_cli_image_is_built_from_the_pinned_base_when_missing():
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **_kwargs):
+        calls.append(cmd)
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    with patch("forge.envgen.container._image_cached_locally", return_value=False), \
+         patch("forge.envgen.container._pull_with_retry"), \
+         patch("forge.envgen.container.subprocess.run", side_effect=fake_run):
+        assert ensure_cli_image() == CLI_RUNTIME_IMAGE
+
+    builds = [c for c in calls if c[:2] == ["docker", "build"]]
+    assert len(builds) == 1
+    assert f"BASE_IMAGE={FORGE_CLI_IMAGE}" in builds[0]
+    assert ["-t", CLI_RUNTIME_IMAGE] == builds[0][builds[0].index("-t"):builds[0].index("-t") + 2]
+
+
+def test_cli_image_is_not_rebuilt_when_already_cached():
+    with patch("forge.envgen.container._image_cached_locally", return_value=True), \
+         patch("forge.envgen.container.subprocess.run") as mock_run:
+        assert ensure_cli_image() == CLI_RUNTIME_IMAGE
+
+    mock_run.assert_not_called()
+
+
+def test_a_failed_cli_image_build_raises_with_dockers_output():
+    def fake_run(cmd, **_kwargs):
+        if cmd[:2] == ["docker", "build"]:
+            raise subprocess.CalledProcessError(1, cmd, stderr="E: Unable to locate package")
+        return MagicMock(returncode=0)
+
+    with patch("forge.envgen.container._image_cached_locally", return_value=False), \
+         patch("forge.envgen.container._pull_with_retry"), \
+         patch("forge.envgen.container.subprocess.run", side_effect=fake_run):
+        with pytest.raises(RuntimeError, match="Unable to locate package"):
+            ensure_cli_image()
+
+
+def test_cli_image_tag_follows_the_dockerfile_content():
+    # Editing the Dockerfile must produce a new tag, or a stale image is reused.
+    assert CLI_RUNTIME_IMAGE.startswith("forge-cli:")
+    assert CLI_RUNTIME_IMAGE != _cli_image_tag(CLI_DOCKERFILE.read_text() + "\n# edit")

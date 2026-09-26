@@ -21,6 +21,24 @@ from forge.envgen.tiered_reward import (
     TieredRewardEngine,
 )
 
+_GRADER_PREFIX = ["docker", "exec", "forge-grade-cid", "/opt/forge-grader/bin/sh", "-c"]
+
+
+@pytest.fixture(autouse=True)
+def grading_sandboxes(monkeypatch):
+    """Stand in for the snapshot grader so no test touches Docker."""
+    from contextlib import contextmanager
+
+    opened: list[str] = []
+
+    @contextmanager
+    def fake_sandbox(container_id):
+        opened.append(container_id)
+        yield list(_GRADER_PREFIX)
+
+    monkeypatch.setattr("forge.envgen.tiered_reward.grading_sandbox", fake_sandbox)
+    return opened
+
 
 # ---------------------------------------------------------------------------
 # LoopDetector — pure-heuristic, no LLM
@@ -341,3 +359,40 @@ def test_tiered_reward_grades_with_the_judge_model_not_the_generation_model(monk
 
     assert engine._client._model == "llama3.1:8b"
     assert engine._client._model != "gemma4:26b"
+
+
+# ---------------------------------------------------------------------------
+# Grader separation: assertions run outside the agent's container
+# ---------------------------------------------------------------------------
+
+def test_assertions_run_in_the_grading_sandbox_not_the_agents_shell(grading_sandboxes):
+    engine = TieredRewardEngine(client=MagicMock(), config=TieredRewardConfig.from_preset("binary_final_state"))
+    spec = EndStateSpec(summary="x", expected_steps=1, assertions=[
+        {"description": "file exists", "command": "test -f /tmp/out"},
+        {"description": "has text", "command": "grep -q ok /tmp/out"},
+    ])
+    with patch(
+        "forge.envgen.tiered_reward.subprocess.run",
+        return_value=MagicMock(returncode=0, stdout="", stderr=""),
+    ) as run:
+        engine.grade("obj", spec, [{"command": "x"}], container_id="agent-cid")
+
+    assert grading_sandboxes == ["agent-cid"]
+    argvs = [c.args[0] for c in run.call_args_list]
+    assert argvs == [
+        [*_GRADER_PREFIX, "test -f /tmp/out"],
+        [*_GRADER_PREFIX, "grep -q ok /tmp/out"],
+    ]
+    assert not any("agent-cid" in argv for argv in argvs)
+
+
+def test_a_spec_without_assertions_never_snapshots_the_container(grading_sandboxes):
+    client = MagicMock()
+    from forge.envgen.tiered_reward import _PartialCreditLLM
+    client.extract.return_value = _PartialCreditLLM(score=0.0, reasoning="none")
+    engine = TieredRewardEngine(client=client)
+    spec = EndStateSpec(summary="x", expected_steps=1, assertions=[])
+
+    engine.grade("obj", spec, [{"command": "x"}], container_id="agent-cid")
+
+    assert grading_sandboxes == []
