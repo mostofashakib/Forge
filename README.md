@@ -31,8 +31,8 @@ Example RL tasks for Forge live in
 |---|---|---|
 | **Premade** | Pre-built Gmail or Slack replica | Ready-to-use evaluation; seeded with realistic emails, threads, and DMs |
 | **Custom** | LLM-generated FastAPI app | Simulate any business app from a plain-English description |
-| **CLI** | Ubuntu 22.04 shell | Shell scripting, sysadmin, package management tasks |
-| **Browser** | Chromium + KasmVNC | Web automation, form filling, navigation |
+| **CLI** | Ubuntu 22.04 shell, no network, frozen clock | Shell scripting, sysadmin, and file tasks |
+| **Browser** | Chromium + KasmVNC, no internet | Automating pages the environment serves, form filling, navigation |
 
 ### Environment Contracts
 
@@ -114,9 +114,9 @@ Premade environments ship with realistic seed data that resembles real products.
 
 ### Container Build & Resilience
 
-- **LLM drift guardrails** — every generated file is post-processed before `docker build`: base image normalised, port forced to 8000, required packages injected
-- **Registry fallback** — four-tier fallback when Docker Hub flakes: canonical pull → AWS ECR → GCR → direct HTTPS via `httpx`
-- **Worker pre-warm** — Celery pulls base images on boot so user builds always hit cache
+- **LLM drift guardrails** — every generated file is post-processed before `docker build`: base image normalised, port forced to 8000, install step reduced to the hashed runtime lock
+- **Registry fallback** — four-tier fallback when Docker Hub flakes: canonical pull → AWS ECR → GCR → direct HTTPS via `httpx`. Digest-pinned images skip the HTTPS tier, since it rebuilds the manifest and cannot keep the pinned digest
+- **Worker pre-warm** — Celery pulls base images and builds the CLI image on boot so user builds and CLI runs always hit cache
 - **Crash-loop detection** — `restart_policy=on-failure` with 3-attempt cap; status flips to `error` automatically
 
 ### Custom Generation Pipeline
@@ -340,6 +340,12 @@ Environments are deterministic by default — same seed and same trajectory prod
 - **Seed control** — the seed threads end to end (`reset(seed)` → `POST /forge/reset {"seed": …}` → `STATE.seed_state(seed)`), so the same seed reproduces the same starting universe and a different seed produces a different-but-reproducible one; an unseeded reset restores the fixed baseline
 - **Generated-app determinism contract** — custom LLM-generated apps must use a counter-based virtual clock (`forge_now()`) and sequential IDs (`_next_id()`) in place of wall-clock timestamps and random UUIDs, and build the universe from a `random.Random(seed)`; a static correctness specialist audits this before artifacts are written, and a post-boot `CorrectnessValidator` proves `/forge/reset` restores a byte-identical initial universe (rows, IDs, counters, DB included), that snapshot/restore round-trips, and that the same seed reproduces identical state while distinct seeds diverge — hard-failing the build on any violation
 - **Replayable episodes** — every step records the tool call, emitted events, state diff, hashes, and reward; `replay_episode(env, seed, steps)` re-executes any recording and verifies every state hash and reward against it. Container/CLI/browser trajectories are written incrementally (each step flushed as it happens), so a run that crashes mid-episode still leaves a durable, replayable partial trace
+- **Pinned builds**: every base image is pinned by digest, and every container installs one hashed lock (`forge/envgen/runtime_requirements.lock`) with `pip --require-hashes`. The LLM's requirements list never reaches pip, and the correctness gate rejects imports outside the lock
+- **Fixed clocks, zones, and hash order**: premade Gmail and Slack stamp time from a SQLite-backed virtual clock and mint sequential IDs, so reset, snapshot, and restart all carry them. Containers run with `TZ=UTC` and `PYTHONHASHSEED=0`, browser pages see a fixed `Date.now()`, and the CLI image preloads libfaketime so every command starts at the same fixed epoch (file mtimes still come from the kernel clock, and statically linked binaries ignore the preload)
+- **One episode per container at a time**: a run's episodes execute in order, and a per-environment Redis lock keeps separate runs and benchmarks from driving the same container at once
+- **Fast, clean starts**: app containers stay warm and reset in place. A CLI run snapshots its environment once (terminal setup included), each episode forks a fresh container from that snapshot, and a pre-started spare means the next episode starts in about 10 ms. Browser episodes each get a fresh context in the already-running Chromium, so no cookies, storage, or tabs carry over
+- **Grader separation**: agent and persona actions can never reach `/forge/*` control endpoints, so an agent cannot write the state its grader reads. CLI assertions never run in the agent's shell: the finished container is committed, a fresh copy starts with no network and none of the agent's processes, and each assertion runs through a static BusyBox toolbox mounted read-only from a pinned image
+- **Generous fixed timeouts**: 60 s per environment request, 120 s per shell command or assertion, and 120 s for a container to come up. The browser waits for the page to settle instead of sleeping a fixed second
 - **Flake-free UI** — premade UIs ship a CSS no-motion override and browser sessions force `prefers-reduced-motion` + injected no-animation styles
 - **SQLite as source of truth** — premade and generated apps persist state in SQLite; verification reads `/forge/state` (DB-backed), never the UI
 - **Enforced separation of concerns** — architecture tests keep environment, agents, verifiers, and training code from importing across boundaries
@@ -356,7 +362,7 @@ flag. Omitting the variable (or setting it to `on`) preserves the default behavi
 ### Security & Policy
 
 - **PolicyEngine DSL** — policy and verifier expressions use a restricted AST evaluator instead of `eval`; violations block transitions and return 0.0 reward
-- **Network and process isolation** — AST-based scanning blocks network modules, subprocess access, shell execution, and dynamic imports in generated envs (bypass with `FORGE_DEV_NETWORK=true`)
+- **Network and process isolation** — AST-based scanning blocks network modules, subprocess access, shell execution, and dynamic imports in generated envs (bypass with `FORGE_DEV_NETWORK=true`). CLI containers run with no network. App and browser containers each sit on their own internal Docker network with no route out, and a pinned socat gateway per environment publishes the loopback ports and forwards only to that environment. A relay inside the browser's network namespace re-serves DevTools, which Chromium binds to its own loopback. Compiled in-process packages are scanned for network imports before the worker loads them. An agent's action target must be a path on its environment, so it cannot point a request at another host
 - **Generated-code validation** — compiler checks run in an isolated subprocess with time and output limits; generated paths are confined to the configured environment root
 - **Credential-safe logging** — bearer values and URL query strings are redacted before HTTP, Docker pull, or worker errors reach logs; signed CDN URLs are never emitted intact
 - **Local-only default** — `run.sh` binds the backend to `127.0.0.1` unless `FORGE_HOST` is explicitly changed
@@ -457,8 +463,7 @@ unbound persona can never act.
 `ContainerEnvBase(personas=...)` into a containerized one; both reject at build
 time a persona bound to an action the environment does not implement. CLI and
 browser environments take no cast — there is no coherent notion of a colleague
-inside a shell session. A working example is in
-`examples/clinical_handoff/env.py`.
+inside a shell session.
 
 **In the product, the cast is written before the environment exists and bound
 after it does.** Step 05 of the custom builder (`/environments/new/custom`) is
@@ -874,7 +879,6 @@ frontend/
         graph/         # Visual entity/action relationship map
 examples/
   gmail_env/           # Reference in-process environment built on the contracts
-  clinical_handoff/    # Simulated-people example: a discharge the agent cannot approve alone
 docker/
   premade/
     gmail/             # Gmail-like environment (seeded with 42 emails, 19 contacts)
@@ -946,7 +950,7 @@ imports, animated premade UIs, and tests that assert only the happy path.
 | `FORGE_HOST` | `127.0.0.1` | Backend bind host used by `run.sh` |
 | `FORGE_DETERMINISM` | `on` | Set to `off` only for the determinism ablation; disables virtual time, runtime/training seeding, and determinism gates |
 | `FORGE_DEV_NETWORK` | `false` | Set to `true` to bypass network isolation in generated envs |
-| `FORGE_DISABLE_PREWARM` | unset | Set to `1` to skip base-image pre-warm on worker boot |
+| `FORGE_DISABLE_PREWARM` | unset | Set to `1` to skip base-image and CLI-image pre-warm on worker boot |
 | `REDIS_URL` | `redis://localhost:6379/0` | Redis URL for Celery and build/benchmark progress pub/sub; `run.sh` replaces this with a runtime-generated authenticated URL |
 | `FORGE_REDIS_PASSWORD` | generated at startup | Optional local Redis password override used by `run.sh`; must be at least 32 hexadecimal characters and is never logged |
 | `NEXT_PUBLIC_API_URL` | `http://localhost:8000` | Backend URL used by the frontend |
