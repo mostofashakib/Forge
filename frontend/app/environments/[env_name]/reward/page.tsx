@@ -101,7 +101,7 @@ export default function RewardPage() {
   const hasLLM = selectedMethods.includes("llm");
 
   return (
-    <div className="space-y-6 max-w-2xl">
+    <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Reward Requirements</h1>

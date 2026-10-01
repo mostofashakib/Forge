@@ -840,7 +840,7 @@ function DataCollectionPanel({
 
   return (
     <div className="fixed bottom-0 left-0 right-0 z-40 border-t bg-white shadow-2xl">
-      <div className="max-w-5xl mx-auto px-6 py-4">
+      <div className="app-width py-4">
         <div className="flex items-start gap-4">
           <div className="flex-1 space-y-2">
             {exportError && <p role="alert" className="text-xs text-red-600">Export failed: {exportError}</p>}
@@ -1073,7 +1073,7 @@ export default function AgentRunsPage() {
       </div>
 
       {/* Content */}
-      <div className="max-w-5xl mx-auto px-6 py-6 space-y-6">
+      <div className="py-6 space-y-6">
 
         {/* Synthetic epoch */}
         {replayStatus?.active && replayStatus.episodes && replayStatus.episodes.length > 0 && (

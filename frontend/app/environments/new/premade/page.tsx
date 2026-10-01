@@ -249,7 +249,7 @@ export default function PremadeEnvironmentsPage() {
         />
       )}
 
-      <div className="max-w-2xl mx-auto space-y-8">
+      <div className="space-y-8">
         {/* Header */}
         <div className="flex items-start justify-between">
           <div>

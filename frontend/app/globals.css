@@ -74,9 +74,9 @@
   100% { transform: translateX(200%); }
 }
 
-@keyframes forge-enter {
-  from { opacity: 0; transform: translateY(14px); }
-  to { opacity: 1; transform: translateY(0); }
+@keyframes route-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 @keyframes grid-drift {
@@ -88,9 +88,18 @@
   --animate-progress-slide: progress-slide 1.4s ease-in-out infinite;
 }
 
+/* The one page width. The header, every page and the footer share it. */
+@utility app-width {
+  @apply mx-auto w-full max-w-[88rem] px-5 sm:px-8;
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
+  }
+  html {
+    /* Reserve the scrollbar's space on every page, so tall and short pages line up. */
+    scrollbar-gutter: stable;
   }
   body {
     @apply bg-background text-foreground antialiased;
@@ -125,9 +134,7 @@
     @apply absolute bottom-0 left-0 h-[3px] w-full;
     background: linear-gradient(90deg, var(--primary) 0 22%, var(--accent) 22% 29%, transparent 29%);
   }
-  .app-header__rail {
-    @apply mx-auto flex h-[4.75rem] max-w-[88rem] items-center gap-6 px-5 sm:px-8;
-  }
+  .app-header__rail { @apply app-width flex h-[4.75rem] items-center gap-6; }
   .forge-mark {
     @apply flex shrink-0 items-center gap-3 text-white;
   }
@@ -154,9 +161,9 @@
   .app-nav__link--active { @apply bg-white/[0.06] text-white; }
   .app-nav__link--active::after { @apply w-full; }
   .app-nav__index { @apply hidden font-mono text-[0.55rem] text-primary sm:block; }
-  .app-main { @apply mx-auto w-full max-w-[88rem] flex-1 px-5 py-9 sm:px-8 sm:py-12; }
+  .app-main { @apply app-width flex-1 py-9 sm:py-12; }
   .app-footer {
-    @apply mx-auto mt-auto flex w-full max-w-[88rem] items-center justify-between border-t border-foreground/20 px-5 py-5 font-mono text-[0.62rem] uppercase tracking-[0.13em] text-muted-foreground sm:px-8;
+    @apply app-width mt-auto flex items-center justify-between border-t border-foreground/20 py-5 font-mono text-[0.62rem] uppercase tracking-[0.13em] text-muted-foreground sm:px-8;
   }
   .app-footer p { @apply flex items-center; }
 
@@ -558,7 +565,7 @@
   .settings-link { @apply font-medium text-primary underline underline-offset-2; }
   .tasks-hint code { @apply bg-muted px-1 font-mono text-[0.65rem]; }
 
-  .new-env-page { @apply mx-auto max-w-6xl space-y-7; }
+  .new-env-page { @apply space-y-7; }
   .new-env-hero {
     @apply grid overflow-hidden border border-foreground/80 bg-foreground text-background lg:grid-cols-[1fr_18rem];
     box-shadow: 8px 8px 0 var(--accent), 0 24px 50px oklch(0.12 0.015 65 / 0.13);
@@ -626,7 +633,7 @@
   .new-env-modal__submit { @apply bg-primary px-5 py-3 text-xs font-semibold uppercase tracking-wider text-primary-foreground transition-all hover:-translate-y-0.5 disabled:opacity-40; box-shadow: 3px 3px 0 var(--accent); }
   .new-env-modal__cancel { @apply text-xs text-background/45 hover:text-background; }
 
-  .custom-builder { @apply mx-auto max-w-6xl space-y-6; }
+  .custom-builder { @apply space-y-6; }
   .custom-builder__hero {
     @apply grid overflow-hidden border border-foreground/80 bg-foreground text-background lg:grid-cols-[1fr_17rem];
     box-shadow: 8px 8px 0 var(--primary), 0 24px 50px oklch(0.12 0.015 65 / 0.14);
@@ -785,7 +792,7 @@
       0 2px 8px oklch(0.12 0.018 265 / 0.06);
   }
 
-  .forge-enter { animation: forge-enter 420ms cubic-bezier(.2,.8,.2,1) both; }
+  .route-fade { animation: route-fade 180ms ease-out both; }
   .signal-chip {
     @apply inline-flex items-center gap-2 border border-foreground/70 bg-accent px-2.5 py-1 font-mono text-[0.62rem] font-semibold uppercase tracking-[0.17em] text-accent-foreground;
     box-shadow: 2px 2px 0 var(--foreground);
@@ -914,14 +921,13 @@
 }
 
 @media (max-width: 640px) {
-  .app-header__rail { @apply h-[4.25rem] gap-2 px-4; }
+  .app-header__rail { @apply h-[4.25rem] gap-2; }
   .app-nav__link { @apply gap-1.5 px-2.5 text-[0.6rem]; }
   .forge-mark__word { @apply text-xs; }
   .forge-mark__icon { @apply size-9; }
   .environment-hero__title {
     text-shadow: 3px 3px 0 var(--foreground);
   }
-  .app-footer { @apply px-5; }
   .benchmark-run__readout > div { @apply min-h-20; }
   .benchmark-field-row .benchmark-field:first-child { @apply border-r-0; }
   .benchmark-notice { @apply items-start gap-5; }
