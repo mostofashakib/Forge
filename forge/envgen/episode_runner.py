@@ -43,6 +43,16 @@ from forge.runtime.tasks import select_task
 from forge.runtime.trajectory import Trajectory
 from forge.runtime.control import SUBMIT_ENDPOINT, is_submit_action
 from forge.schema.state_schema import StateSchemaManifest
+from forge.runtime.reliability import (
+    InfrastructureCrash,
+    DivergenceError,
+    REASON_CONTAINER_UNREACHABLE,
+    REASON_RESET_FAILED,
+    REASON_STATE_READ_FAILED,
+    REASON_PROVIDER_ERROR,
+    SnapshotManager,
+    get_reliability_settings,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -312,6 +322,10 @@ class ContainerEpisodeRunner(EpisodeController):
         episode_id: str | None = None,
         seed: int | None = None,
         jsonl_path: Path | None = None,
+        replay_steps: list[dict] | None = None,
+        resume_from_step: int = 0,
+        snapshot_manager: SnapshotManager | None = None,
+        model_output_log: list[dict] | None = None,
     ) -> EpisodeResult:
         if episode_id is None:
             episode_id = f"cep_{secrets.token_hex(6)}"
@@ -323,11 +337,11 @@ class ContainerEpisodeRunner(EpisodeController):
         # This is the root cause of ECONNREFUSED: Docker marks the container
         # as "running" before uvicorn inside finishes startup.
         if not self.wait_for_health():
-            result.termination_reason = f"container_unreachable: {cfg.base_url}"
-            result.completed_at = datetime.now(timezone.utc)
-            if jsonl_path is not None:
-                result.write_jsonl(jsonl_path)
-            return result
+            raise InfrastructureCrash(
+                reason=REASON_CONTAINER_UNREACHABLE,
+                detail=f"container_unreachable: {cfg.base_url}",
+                step=0,
+            )
 
         available_actions = [
             *self._discover_actions(),
@@ -343,9 +357,12 @@ class ContainerEpisodeRunner(EpisodeController):
             state = self._reset(seed=seed)
         except Exception as exc:
             logger.error("[%s] reset failed: %s", episode_id, exc)
-            result.termination_reason = f"reset_failed: {exc}"
-            result.completed_at = datetime.now(timezone.utc)
-            return result
+            raise InfrastructureCrash(
+                reason=REASON_RESET_FAILED,
+                detail=f"reset failed: {exc}",
+                original_exc=exc,
+                step=0,
+            )
 
         dead_end_policy = DeadEndTerminationPolicy(cfg.dead_end_patience)
         max_steps_policy = MaxStepsTerminationPolicy(cfg.max_steps)
@@ -353,10 +370,26 @@ class ContainerEpisodeRunner(EpisodeController):
         # durable, replayable partial trace (not just an all-or-nothing dump).
         writer = TrajectoryWriter(jsonl_path, result) if jsonl_path is not None else None
 
+        if snapshot_manager is None:
+            snapshot_manager = SnapshotManager(
+                env_type="general", interval=get_reliability_settings().snapshot_interval
+            )
+
         try:
             self._run_steps(
-                agent, cfg, result, dead_end_policy, available_actions, episode_id,
-                writer, state, max_steps_policy=max_steps_policy
+                agent,
+                cfg,
+                result,
+                dead_end_policy,
+                available_actions,
+                episode_id,
+                writer,
+                state,
+                max_steps_policy=max_steps_policy,
+                replay_steps=replay_steps,
+                resume_from_step=resume_from_step,
+                snapshot_manager=snapshot_manager,
+                model_output_log=model_output_log,
             )
         finally:
             if writer is not None:
@@ -365,23 +398,63 @@ class ContainerEpisodeRunner(EpisodeController):
         return result
 
     def _run_steps(
-        self, agent, cfg, result, dead_end_policy, available_actions, episode_id,
-        writer, state, max_steps_policy=None,
+        self,
+        agent,
+        cfg,
+        result,
+        dead_end_policy,
+        available_actions,
+        episode_id,
+        writer,
+        state,
+        max_steps_policy=None,
+        replay_steps: list[dict] | None = None,
+        resume_from_step: int = 0,
+        snapshot_manager: SnapshotManager | None = None,
+        model_output_log: list[dict] | None = None,
     ):
         max_steps_policy = max_steps_policy or MaxStepsTerminationPolicy(cfg.max_steps)
-        for step_idx in range(cfg.max_steps):
+        for step_idx in range(resume_from_step, cfg.max_steps):
             state_hash_before = self._normalizer.hash(state)
 
-            # Agent picks an action
-            try:
-                action = agent.act(state, cfg.objective, available_actions)
-            except Exception as exc:
-                logger.warning("[%s] step %d: agent.act failed: %s", episode_id, step_idx, exc)
-                # Fall back to no-op
-                action = {
-                    "endpoint": available_actions[0]["endpoint"] if available_actions else "/forge/state",
-                    "payload": {},
-                }
+            if snapshot_manager is not None and snapshot_manager.should_snapshot(step_idx):
+                snapshot_manager.capture_snapshot(
+                    step=step_idx,
+                    state_hash=state_hash_before,
+                    http_client=self._http,
+                    base_url=cfg.base_url,
+                )
+
+            # Replay previously logged outputs or query agent live
+            if replay_steps is not None and step_idx < len(replay_steps):
+                replayed = replay_steps[step_idx]
+                expected_hash = replayed.get("state_hash_before")
+                if expected_hash and expected_hash != state_hash_before:
+                    raise DivergenceError(
+                        step=step_idx,
+                        expected_hash=expected_hash,
+                        actual_hash=state_hash_before,
+                    )
+                action = replayed["action"]
+            else:
+                try:
+                    action = agent.act(state, cfg.objective, available_actions)
+                except Exception as exc:
+                    logger.warning("[%s] step %d: agent.act failed: %s", episode_id, step_idx, exc)
+                    raise InfrastructureCrash(
+                        reason=REASON_PROVIDER_ERROR,
+                        detail=f"agent.act failed at step {step_idx}: {exc}",
+                        original_exc=exc,
+                        step=step_idx,
+                    )
+
+            # Write model output before action runs
+            if model_output_log is not None:
+                model_output_log.append({
+                    "step_index": step_idx,
+                    "action": action,
+                    "state_hash_before": state_hash_before,
+                })
 
             # Ensure the chosen endpoint is in the discovered set (safety)
             if not is_submit_action(action) and available_actions and not any(
@@ -425,7 +498,12 @@ class ContainerEpisodeRunner(EpisodeController):
                 new_state = self._get_state()
             except Exception as exc:
                 logger.warning("[%s] step %d: get_state failed: %s", episode_id, step_idx, exc)
-                new_state = state
+                raise InfrastructureCrash(
+                    reason=REASON_STATE_READ_FAILED,
+                    detail=f"get_state failed at step {step_idx}: {exc}",
+                    original_exc=exc,
+                    step=step_idx,
+                )
 
             state_hash_after = self._normalizer.hash(new_state)
 

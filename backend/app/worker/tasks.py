@@ -61,7 +61,16 @@ def run_episode_task(self, rollout_job_id: str, episode_index: int, seed: int) -
         db.commit()
 
     with SessionLocal() as db_ep:
-        try:
+        from forge.runtime.reliability import (
+            execute_reliable_episode,
+            compute_environment_version,
+            classify_failure,
+        )
+        from forge.contracts.termination import BUDGET_REASONS
+
+        env_version = compute_environment_version(env_name=env_name, env_dir=envs_root / env_name)
+
+        def _execute_attempt(attempt: int, attempt_seed: int):
             telemetry = EpisodeDataCollector(
                 episode_id=episode_id,
                 db_session=db_ep,
@@ -71,9 +80,6 @@ def run_episode_task(self, rollout_job_id: str, episode_index: int, seed: int) -
             try:
                 selected_task = env.task_source.get(task_name)
             except KeyError:
-                # Older generated packages may expose only a default task. Keep
-                # the requested rollout objective aligned for both reset and
-                # prompting even when that package predates TaskSource.
                 available_tasks = env.task_source.tasks()
                 selected_task = available_tasks[0] if available_tasks else {
                     "id": task_name,
@@ -85,28 +91,47 @@ def run_episode_task(self, rollout_job_id: str, episode_index: int, seed: int) -
                 task=selected_task,
             )
 
-            # Drive the episode through the run logger so the full trace (LLM
-            # calls, actions, and state changes) is captured. The trace is
-            # persisted in `finally` so an aborted run still leaves a partial one.
             run_logger = AgentRunLogger(run_id=episode_id)
             trace_path = jsonl_path.with_name(f"{episode_id}.trace.jsonl")
             try:
-                run_logged_episode(
+                res = run_logged_episode(
                     env,
                     agent,
                     run_logger,
-                    seed=seed,
+                    seed=attempt_seed,
                     task=selected_task,
                 )
+                return res
             finally:
                 trace_path.write_text(run_logger.to_jsonl())
-            # ForgeEnv.step() calls telemetry.complete_episode() on termination
 
+        try:
+            result, attempts = execute_reliable_episode(
+                task_runner=_execute_attempt,
+                task_id=task_name,
+                env_name=env_name,
+                environment_version=env_version,
+                seed=seed,
+                db_session=db_ep,
+                logger=logger,
+            )
+            ep = db_ep.get(Episode, episode_id)
+            if ep is not None:
+                ep.environment_version = env_version
+                ep.attempts_json = json.dumps([a.to_dict() for a in attempts])
+                last_reason = getattr(result, "termination_reason", None) or ""
+                if last_reason in BUDGET_REASONS or "budget" in last_reason or "max_steps" in last_reason:
+                    ep.status = "truncated"
+                db_ep.commit()
         except Exception as exc:
             logger.exception("Episode %s failed: %s", episode_id, exc)
             ep = db_ep.get(Episode, episode_id)
             if ep is not None:
+                ftype, freason = classify_failure(exc)
                 ep.status = "failed"
+                ep.failure_type = ftype
+                ep.failure_reason = freason
+                ep.environment_version = env_version
                 ep.completed_at = datetime.now(timezone.utc)
                 db_ep.commit()
 
@@ -585,6 +610,7 @@ def run_container_episode_task(self, run_id: str, episode_index: int, seed: int)
         env_type = sb.env_type
         container_id = sb.container_id
         container_port = sb.container_port
+        image_tag = sb.image_tag
         agent_id = run.agent_id
         objective = run.objective
         max_steps = run.max_steps
@@ -612,69 +638,30 @@ def run_container_episode_task(self, run_id: str, episode_index: int, seed: int)
     import redis as _redis
 
     try:
-        # Separate runs on this environment are separate chains. The lock
-        # keeps their episodes from interleaving on the shared container.
-        with exclusive_environment(_redis.from_url(redis_url()), env_name):
-            if env_type == "cli":
-                from forge.envgen.cli_runner import CliEpisodeRunner, CliEpisodeConfig
-                from forge.envgen.agents.cli_agent import make_cli_agent, ReplayCliAgent
-                from forge.envgen.tiered_reward import TieredRewardEngine, TieredRewardConfig
-                from forge.envgen.container import ContainerRuntime, cli_snapshot_tag
-                import json as _json
-                from backend.app.services.reward_config import load_reward_config
-                reward_cfg = load_reward_config(env_name)
-                reward_engine = TieredRewardEngine(
-                    config=TieredRewardConfig.from_preset(
-                        reward_cfg.reward_preset,
-                        partial_credit_methods=reward_cfg.scoring_methods,
-                    )
-                )
-                replay_path = envs_root / env_name / "synthetic_replay.json"
-                if replay_path.exists():
-                    manifest = _json.loads(replay_path.read_text(encoding="utf-8"))
-                    trajectory_episodes = manifest.get("episodes", [])
-                    if trajectory_episodes:
-                        ep_commands = trajectory_episodes[seed % len(trajectory_episodes)]
-                        agent = ReplayCliAgent(ep_commands)
-                        logger.info(
-                            "[container-ep] using replay agent seed=%d → trajectory %d (%d commands)",
-                            seed, seed % len(trajectory_episodes), len(ep_commands),
-                        )
-                    else:
-                        agent = make_cli_agent(agent_id, seed=experiment_seed(seed))
-                else:
-                    agent = make_cli_agent(agent_id, seed=experiment_seed(seed))
-                # Each episode forks a fresh shell from the run's snapshot, so
-                # none inherits another's files. The warm spare means no boot
-                # on the hot path, and the last episode leaves no spare behind.
-                runtime = ContainerRuntime()
-                snapshot = cli_snapshot_tag(env_name, run_id)
-                last_episode = episode_index + 1 >= num_episodes
-                with runtime.cli_episode(
-                    env_name, snapshot, refill=not last_episode,
-                ) as episode_container:
-                    cfg = CliEpisodeConfig(
-                        container_id=episode_container,
-                        objective=objective,
-                        max_steps=max_steps,
-                        dead_end_patience=dead_end_patience,
-                        success_threshold=success_threshold,
-                    )
-                    result = CliEpisodeRunner(cfg, reward_engine=reward_engine).run_episode(
-                        agent, episode_id=episode_id, jsonl_path=jsonl_path
-                    )
-                if last_episode:
-                    runtime.discard_cli_snapshot(snapshot)
+        from forge.runtime.reliability import (
+            execute_reliable_episode,
+            compute_environment_version,
+            classify_failure,
+        )
+        from forge.contracts.termination import BUDGET_REASONS
 
-            elif env_type == "browser":
+        env_version = compute_environment_version(
+            env_name=env_name,
+            env_type=env_type,
+            image_id=image_tag,
+            container_id=container_id,
+            env_dir=envs_root / env_name,
+        )
+
+        with exclusive_environment(_redis.from_url(redis_url()), env_name):
+            cdp_port = None
+            if env_type == "browser":
                 import docker as _docker
                 from forge.envgen.container import ContainerRuntime
                 dc = _docker.from_env()
                 try:
                     c = dc.containers.get(container_id)
                     c.reload()
-                    # The browser has no route out and publishes nothing. Its
-                    # gateway publishes DevTools on loopback.
                     cdp_port = ContainerRuntime(dc).host_port(c, 9222)
                 finally:
                     dc.close()
@@ -683,47 +670,115 @@ def run_container_episode_task(self, run_id: str, episode_index: int, seed: int)
                         "The browser's DevTools port is not published through its gateway. "
                         "Restart the environment to recreate it behind the gateway."
                     )
-                from forge.envgen.browser_runner import BrowserEpisodeRunner, BrowserEpisodeConfig
-                from forge.envgen.agents.browser_agent import make_browser_agent
-                cfg = BrowserEpisodeConfig(
-                    cdp_url=f"http://localhost:{cdp_port}",
-                    objective=objective,
-                    max_steps=max_steps,
-                    dead_end_patience=dead_end_patience,
-                    success_threshold=success_threshold,
-                )
-                agent = make_browser_agent(agent_id, seed=experiment_seed(seed))
-                result = BrowserEpisodeRunner(cfg).run_episode(
-                    agent, episode_id=episode_id, jsonl_path=jsonl_path
-                )
 
-            else:  # general / premade (both run FastAPI over HTTP)
-                from forge.envgen.episode_runner import ContainerEpisodeRunner, EpisodeConfig
-                from forge.envgen.agents.container_agent import make_container_agent
-                if container_port is None:
-                    raise RuntimeError(f"General sandbox {env_name} has no container_port")
-                cfg = EpisodeConfig(
-                    base_url=f"http://localhost:{container_port}",
-                    objective=objective,
-                    max_steps=max_steps,
-                    dead_end_patience=dead_end_patience,
-                    success_threshold=success_threshold,
-                    personas=_load_personas(envs_root / env_name),
+            def _execute_container_attempt(attempt: int, attempt_seed: int):
+                if env_type == "cli":
+                    from forge.envgen.cli_runner import CliEpisodeRunner, CliEpisodeConfig
+                    from forge.envgen.agents.cli_agent import make_cli_agent, ReplayCliAgent
+                    from forge.envgen.tiered_reward import TieredRewardEngine, TieredRewardConfig
+                    from forge.envgen.container import ContainerRuntime, cli_snapshot_tag
+                    import json as _json
+                    from backend.app.services.reward_config import load_reward_config
+                    reward_cfg = load_reward_config(env_name)
+                    reward_engine = TieredRewardEngine(
+                        config=TieredRewardConfig.from_preset(
+                            reward_cfg.reward_preset,
+                            partial_credit_methods=reward_cfg.scoring_methods,
+                        )
+                    )
+                    replay_path = envs_root / env_name / "synthetic_replay.json"
+                    if replay_path.exists():
+                        manifest = _json.loads(replay_path.read_text(encoding="utf-8"))
+                        trajectory_episodes = manifest.get("episodes", [])
+                        if trajectory_episodes:
+                            ep_commands = trajectory_episodes[attempt_seed % len(trajectory_episodes)]
+                            agent = ReplayCliAgent(ep_commands)
+                            logger.info(
+                                "[container-ep] using replay agent seed=%d → trajectory %d (%d commands)",
+                                attempt_seed, attempt_seed % len(trajectory_episodes), len(ep_commands),
+                            )
+                        else:
+                            agent = make_cli_agent(agent_id, seed=experiment_seed(attempt_seed))
+                    else:
+                        agent = make_cli_agent(agent_id, seed=experiment_seed(attempt_seed))
+                    runtime = ContainerRuntime()
+                    snapshot = cli_snapshot_tag(env_name, run_id)
+                    last_episode = episode_index + 1 >= num_episodes
+                    with runtime.cli_episode(
+                        env_name, snapshot, refill=not last_episode,
+                    ) as episode_container:
+                        cfg = CliEpisodeConfig(
+                            container_id=episode_container,
+                            objective=objective,
+                            max_steps=max_steps,
+                            dead_end_patience=dead_end_patience,
+                            success_threshold=success_threshold,
+                        )
+                        res = CliEpisodeRunner(cfg, reward_engine=reward_engine).run_episode(
+                            agent, episode_id=episode_id, jsonl_path=jsonl_path
+                        )
+                    if last_episode:
+                        runtime.discard_cli_snapshot(snapshot)
+                    return res
+
+                elif env_type == "browser":
+                    from forge.envgen.browser_runner import BrowserEpisodeRunner, BrowserEpisodeConfig
+                    from forge.envgen.agents.browser_agent import make_browser_agent
+                    cfg = BrowserEpisodeConfig(
+                        cdp_url=f"http://localhost:{cdp_port}",
+                        objective=objective,
+                        max_steps=max_steps,
+                        dead_end_patience=dead_end_patience,
+                        success_threshold=success_threshold,
+                    )
+                    agent = make_browser_agent(agent_id, seed=experiment_seed(attempt_seed))
+                    return BrowserEpisodeRunner(cfg).run_episode(
+                        agent, episode_id=episode_id, jsonl_path=jsonl_path
+                    )
+
+                else:  # general / premade (both run FastAPI over HTTP)
+                    from forge.envgen.episode_runner import ContainerEpisodeRunner, EpisodeConfig
+                    from forge.envgen.agents.container_agent import make_container_agent
+                    if container_port is None:
+                        raise RuntimeError(f"General sandbox {env_name} has no container_port")
+                    cfg = EpisodeConfig(
+                        base_url=f"http://localhost:{container_port}",
+                        objective=objective,
+                        max_steps=max_steps,
+                        dead_end_patience=dead_end_patience,
+                        success_threshold=success_threshold,
+                        personas=_load_personas(envs_root / env_name),
+                    )
+                    manifest = _load_manifest(envs_root / env_name)
+                    agent = make_container_agent(agent_id, seed=experiment_seed(attempt_seed))
+                    with ContainerEpisodeRunner(cfg, manifest=manifest) as runner:
+                        return runner.run_episode(agent, episode_id=episode_id, jsonl_path=jsonl_path)
+
+            with SessionLocal() as db_rel:
+                result, attempts = execute_reliable_episode(
+                    task_runner=_execute_container_attempt,
+                    task_id=f"{run_id}:{episode_index}",
+                    env_name=env_name,
+                    environment_version=env_version,
+                    seed=seed,
+                    db_session=db_rel,
+                    logger=logger,
                 )
-                # The manifest enables HashNormalizer + StateDiffFloor when present.
-                manifest = _load_manifest(envs_root / env_name)
-                agent = make_container_agent(agent_id, seed=experiment_seed(seed))
-                with ContainerEpisodeRunner(cfg, manifest=manifest) as runner:
-                    result = runner.run_episode(agent, episode_id=episode_id, jsonl_path=jsonl_path)
 
             with SessionLocal() as db:
                 ep = db.get(AgentEpisode, episode_id)
                 if ep is not None:
-                    ep.status = "completed"
+                    last_reason = result.termination_reason or ""
+                    if last_reason in BUDGET_REASONS or "budget" in last_reason or "max_steps" in last_reason:
+                        ep.status = "truncated"
+                    else:
+                        ep.status = "completed"
                     ep.total_steps = len(result.steps)
                     ep.total_reward = result.total_reward
                     ep.final_objective_score = result.final_objective_score
                     ep.termination_reason = result.termination_reason
+                    ep.environment_version = env_version
+                    ep.attempts_json = json.dumps([a.to_dict() for a in attempts])
                     ep.completed_at = datetime.now(timezone.utc)
                     db.commit()
 
@@ -732,7 +787,11 @@ def run_container_episode_task(self, run_id: str, episode_index: int, seed: int)
         with SessionLocal() as db:
             ep = db.get(AgentEpisode, episode_id)
             if ep is not None:
+                ftype, freason = classify_failure(exc)
                 ep.status = "failed"
+                ep.failure_type = ftype
+                ep.failure_reason = freason
+                ep.environment_version = env_version if 'env_version' in locals() else None
                 ep.termination_reason = str(exc)[:255]
                 ep.completed_at = datetime.now(timezone.utc)
                 db.commit()
@@ -929,21 +988,34 @@ def run_benchmark_task(
             from forge.envgen.episode_runner import ContainerEpisodeRunner, EpisodeConfig
             from forge.envgen.agents.container_agent import make_container_agent
             from forge.settings import experiment_seed
+            from forge.runtime.reliability import execute_reliable_episode, compute_environment_version
 
             manifest = manifest_for(task.domain)
-            # Read per episode: a restarted environment comes back on a new port.
             port_file = envs_root / task.domain / "port"
             if not port_file.exists():
                 publish({"log": f"  [skip] no port file for domain '{task.domain}' — start that environment first"})
                 return
 
-            port = int(port_file.read_text().strip())
-            cfg_ep = EpisodeConfig(base_url=f"http://localhost:{port}", objective=task.objective)
-            agent = make_container_agent("random", seed=experiment_seed(seed))
-            # Agent runs may be driving this same container.
-            with exclusive_environment(r, task.domain), \
-                    ContainerEpisodeRunner(cfg_ep, manifest=manifest) as runner:
-                result = runner.run_episode(agent, jsonl_path=jsonl_path, seed=seed)
+            env_version = compute_environment_version(env_name=task.domain, env_dir=envs_root / task.domain)
+
+            def _benchmark_attempt(attempt: int, attempt_seed: int):
+                port = int(port_file.read_text().strip())
+                cfg_ep = EpisodeConfig(base_url=f"http://localhost:{port}", objective=task.objective)
+                agent = make_container_agent("random", seed=experiment_seed(attempt_seed))
+                with exclusive_environment(r, task.domain), \
+                        ContainerEpisodeRunner(cfg_ep, manifest=manifest) as runner:
+                    return runner.run_episode(agent, jsonl_path=jsonl_path, seed=attempt_seed)
+
+            with get_session_factory()() as db_bench:
+                result, _ = execute_reliable_episode(
+                    task_runner=_benchmark_attempt,
+                    task_id=task.name,
+                    env_name=task.domain,
+                    environment_version=env_version,
+                    seed=seed,
+                    db_session=db_bench,
+                    logger=logger,
+                )
 
             completed += 1
             publish({"log": f"  {task.name} seed={seed}  reward={result.total_reward:.3f}  reason={result.termination_reason}"})

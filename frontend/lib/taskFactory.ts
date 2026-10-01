@@ -18,7 +18,7 @@ export type Settings = {
   settings: SettingRow[];
 };
 
-export type SettingGroup = "models" | "runtime" | "containers" | "budgets";
+export type SettingGroup = "models" | "runtime" | "containers" | "budgets" | "reliability";
 
 export type SettingRow = {
   key: string;

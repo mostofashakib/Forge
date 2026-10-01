@@ -72,4 +72,11 @@ def environ_with_saved(keys: Iterable[str]) -> dict[str, str]:
     The settings page writes the file while the API and workers run, so the
     file is read at call time and wins over the value loaded at startup.
     """
-    return {**os.environ, **read_env_values(BACKEND_ENV_FILE, keys)}
+    saved = read_env_values(BACKEND_ENV_FILE, keys)
+    out = dict(os.environ)
+    for key in keys:
+        if key in saved:
+            out[key] = saved[key]
+        else:
+            out.pop(key, None)
+    return out

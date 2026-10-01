@@ -59,6 +59,46 @@ class ThresholdTerminationPolicy(TerminationPolicy):
         return None
 
 
+BUDGET_REASONS: frozenset[str] = frozenset(
+    {"max_steps", "max_tokens", "max_wall_clock_time", "max_cost"}
+)
+
+
+class BudgetTerminationPolicy(TerminationPolicy):
+    """Enforces episode resource budgets: steps, tokens, wall clock time, and cost.
+
+    When any configured budget is exhausted, the episode is stopped with truncated=True
+    so it is marked as truncated rather than failed.
+    """
+
+    def __init__(
+        self,
+        *,
+        max_steps: int | None = None,
+        max_tokens: int | None = None,
+        max_wall_clock_time: float | None = None,
+        max_cost: float | None = None,
+    ) -> None:
+        self.max_steps = max_steps
+        self.max_tokens = max_tokens
+        self.max_wall_clock_time = max_wall_clock_time
+        self.max_cost = max_cost
+
+    def check(self, outcome: StepOutcome) -> Termination | None:
+        if self.max_steps is not None and outcome.step_index >= self.max_steps - 1:
+            return Termination(reason="max_steps", truncated=True)
+        if self.max_tokens is not None and outcome.tokens >= self.max_tokens:
+            return Termination(reason="max_tokens", truncated=True)
+        if (
+            self.max_wall_clock_time is not None
+            and outcome.wall_clock_time >= self.max_wall_clock_time
+        ):
+            return Termination(reason="max_wall_clock_time", truncated=True)
+        if self.max_cost is not None and outcome.cost >= self.max_cost:
+            return Termination(reason="max_cost", truncated=True)
+        return None
+
+
 class MaxStepsTerminationPolicy(TerminationPolicy):
     """The step budget, made explicit.
 
@@ -67,11 +107,10 @@ class MaxStepsTerminationPolicy(TerminationPolicy):
 
     def __init__(self, max_steps: int) -> None:
         self._max_steps = max_steps
+        self._budget = BudgetTerminationPolicy(max_steps=max_steps)
 
     def check(self, outcome: StepOutcome) -> Termination | None:
-        if outcome.step_index >= self._max_steps - 1:
-            return Termination(reason="max_steps", truncated=True)
-        return None
+        return self._budget.check(outcome)
 
 
 class DeadEndTerminationPolicy(TerminationPolicy):

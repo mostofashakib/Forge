@@ -85,6 +85,9 @@ class StepOutcome(BaseModel):
     reward: float = 0.0
     state_hash: str | None = None
     verifier_results: list["VerificationResult"] = Field(default_factory=list)
+    tokens: int = 0
+    wall_clock_time: float = 0.0
+    cost: float = 0.0
 
 
 class Termination(BaseModel):

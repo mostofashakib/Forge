@@ -38,6 +38,10 @@ class Episode(Base):
     total_reward: Mapped[float] = mapped_column(Float, default=0.0)
     passed: Mapped[bool] = mapped_column(Boolean, default=False)
     termination_reason: Mapped[str] = mapped_column(String, default="unknown")
+    failure_type: Mapped[str | None] = mapped_column(String, nullable=True)
+    failure_reason: Mapped[str | None] = mapped_column(String, nullable=True)
+    environment_version: Mapped[str | None] = mapped_column(String, nullable=True)
+    attempts_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime] = mapped_column(DateTime)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     jsonl_path: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -146,6 +150,10 @@ class AgentEpisode(Base):
     total_reward: Mapped[float] = mapped_column(Float, default=0.0)
     final_objective_score: Mapped[float] = mapped_column(Float, default=0.0)
     termination_reason: Mapped[str | None] = mapped_column(String, nullable=True)
+    failure_type: Mapped[str | None] = mapped_column(String, nullable=True)
+    failure_reason: Mapped[str | None] = mapped_column(String, nullable=True)
+    environment_version: Mapped[str | None] = mapped_column(String, nullable=True)
+    attempts_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     jsonl_path: Mapped[str | None] = mapped_column(String, nullable=True)
     started_at: Mapped[datetime] = mapped_column(DateTime)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -235,3 +243,32 @@ class TaskRejectionRecord(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     batch_id: Mapped[str] = mapped_column(String, ForeignKey("task_batches.id"), index=True)
     rejection_json: Mapped[str] = mapped_column(Text)
+
+
+class QuarantinedTask(Base):
+    __tablename__ = "quarantined_tasks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    task_id: Mapped[str] = mapped_column(String, index=True)
+    env_name: Mapped[str] = mapped_column(String, index=True)
+    environment_version: Mapped[str] = mapped_column(String)
+    reason: Mapped[str] = mapped_column(Text)
+    released: Mapped[bool] = mapped_column(Boolean, default=False)
+    quarantined_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc)
+    )
+    released_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class FlaggedEnvironmentVersion(Base):
+    __tablename__ = "flagged_environment_versions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    env_name: Mapped[str] = mapped_column(String, index=True)
+    version: Mapped[str] = mapped_column(String, index=True)
+    reason: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String, default="investigating")  # "investigating", "resolved"
+    flagged_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc)
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

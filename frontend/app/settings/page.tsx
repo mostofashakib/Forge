@@ -7,6 +7,7 @@ const GROUPS: { id: SettingGroup; title: string; note: string }[] = [
   { id: "runtime", title: "Runtime", note: "Determinism and sandboxes" },
   { id: "containers", title: "Containers", note: "Images and resource limits" },
   { id: "budgets", title: "Generation budgets", note: "Token and context limits" },
+  { id: "reliability", title: "Reliability & Retries", note: "Episode retries, snapshots, and replay" },
 ];
 
 // Each model field and the provider field that decides where it runs.

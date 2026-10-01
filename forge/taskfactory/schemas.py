@@ -192,6 +192,7 @@ class SyntheticTask(BaseModel):
     review: ReviewVerdict
     # Final-state fingerprint every pass^k run reproduced.
     fingerprint: str
+    contamination_report: Any | None = None
 
 
 class TaskRejection(BaseModel):
@@ -199,7 +200,7 @@ class TaskRejection(BaseModel):
     category: str
     difficulty: int
     round: int
-    stage: Literal["writer", "static", "pass_k", "review"]
+    stage: Literal["writer", "static", "pass_k", "review", "contamination"]
     reason: str
     # None when the writer returned nothing for the slot.
     draft: TaskDraft | None = None

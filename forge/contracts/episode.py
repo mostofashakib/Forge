@@ -23,6 +23,9 @@ from forge.contracts.rollout import RolloutRecord
 class BaseEpisodeConfig:
     objective: str
     max_steps: int = 30
+    max_tokens: int | None = None
+    max_wall_clock_time: float | None = None
+    max_cost: float | None = None
     # Stop if objective score stays below this for `consecutive_below_threshold` steps
     divergence_threshold: float = 0.2
     consecutive_below_threshold: int = 3
@@ -49,6 +52,10 @@ class BaseEpisodeResult:
     # it is the count of scorer calls, so a step recorded without being
     # scored does not inflate it.
     llm_verdicts: int = 0
+    failure_type: str | None = None
+    failure_reason: str | None = None
+    environment_version: str | None = None
+    attempts: list[dict] = field(default_factory=list)
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     completed_at: datetime | None = None
 
@@ -59,6 +66,21 @@ class BaseEpisodeResult:
     def _step_dicts(self) -> list[dict]:
         """Steps as JSON-serializable dicts."""
         return [self._step_to_dict(step) for step in self.steps]
+
+    @property
+    def is_truncated(self) -> bool:
+        """Whether the episode stopped because a resource budget was exhausted."""
+        from forge.contracts.termination import BUDGET_REASONS
+
+        if self.termination_reason in BUDGET_REASONS:
+            return True
+        if self.steps:
+            last = self.steps[-1]
+            if isinstance(last, dict) and last.get("truncated"):
+                return True
+            if hasattr(last, "truncated") and getattr(last, "truncated"):
+                return True
+        return False
 
     def summary(self) -> dict:
         return {
@@ -71,6 +93,11 @@ class BaseEpisodeResult:
             "verification_results": self.verification_results,
             "reward_breakdown": self.reward_breakdown,
             "llm_verdicts": self.llm_verdicts,
+            "failure_type": self.failure_type,
+            "failure_reason": self.failure_reason,
+            "environment_version": self.environment_version,
+            "attempts": self.attempts,
+            "truncated": self.is_truncated,
             "started_at": self.started_at.isoformat(),
             "completed_at": self.completed_at.isoformat() if self.completed_at else None,
         }
@@ -104,15 +131,18 @@ class BaseEpisodeResult:
                 actions.append({"type": "exec", "command": step["command"]})
         completion = "\n".join(json.dumps(action, sort_keys=True) for action in actions)
         passed = self.resolved_passed
+        last = step_dicts[-1] if step_dicts else {}
+        is_budget_truncated = self.is_truncated or bool(last.get("truncated", False))
         if passed:
             outcome = "success"
+        elif is_budget_truncated:
+            outcome = "truncated"
         elif any("error" in step for step in step_dicts):
             outcome = "edge_case"
         elif self.total_reward > 0:
             outcome = "partial_success"
         else:
             outcome = "failure"
-        last = step_dicts[-1] if step_dicts else {}
         return RolloutRecord(
             episode_id=str(getattr(self, "episode_id", "") or "episode"),
             env_name=env_name,
@@ -126,7 +156,7 @@ class BaseEpisodeResult:
             outcome=outcome,
             steps=len(step_dicts),
             terminated=bool(last.get("terminated", passed)),
-            truncated=bool(last.get("truncated", False)),
+            truncated=is_budget_truncated,
             invalid_actions=sum(1 for step in step_dicts if "error" in step),
             termination_reason=self.termination_reason,
             verification_results=self.verification_results,

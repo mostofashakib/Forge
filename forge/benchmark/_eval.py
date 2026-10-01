@@ -266,10 +266,38 @@ def _container_episode_runner(
         episode_config = EpisodeConfig(
             base_url=f"http://localhost:{port}", objective=task.objective
         )
-        with ContainerEpisodeRunner(episode_config, manifest=manifest) as runner:
-            result = runner.run_episode(
-                policy, jsonl_path=jsonl_path, seed=seed
+        from forge.runtime.reliability import execute_reliable_episode, classify_failure
+
+        def _exec_episode(attempt=0, mode="fresh", replay_steps=None, resume_from_step=0, model_outputs=None, env_version=None):
+            with ContainerEpisodeRunner(episode_config, manifest=manifest) as runner:
+                return runner.run_episode(
+                    policy,
+                    jsonl_path=jsonl_path,
+                    seed=seed,
+                    replay_steps=replay_steps,
+                    resume_from_step=resume_from_step,
+                    model_output_log=model_outputs,
+                )
+
+        try:
+            result = execute_reliable_episode(
+                episode_id=f"eval_{task.name}_{seed}",
+                env_name=task.domain,
+                task_name=task.name,
+                env_type="general",
+                seed=seed,
+                run_fn=_exec_episode,
             )
+        except Exception as exc:
+            ftype, freason = classify_failure(exc)
+            from forge.contracts.episode import BaseEpisodeResult
+            result = BaseEpisodeResult(
+                termination_reason=freason,
+                failure_type=ftype,
+                failure_reason=freason,
+                passed=False,
+            )
+
         verdict = resolve_verdict(result, task, reward_preset, jury=verdict_jury)
         preset = reward_preset_spec(reward_preset)
         reward = (
@@ -278,14 +306,15 @@ def _container_episode_runner(
         )
         if preset.binary_final_state and not verdict.passed:
             reward = 0.0
+        is_infra_crash = getattr(result, "failure_type", None) == "infrastructure"
         return EpisodeOutcome(
-            passed=verdict.passed,
-            reward=reward,
+            passed=verdict.passed if not is_infra_crash else False,
+            reward=reward if not is_infra_crash else 0.0,
             reward_hacking=_has_reward_hacking_pattern(result, verdict.passed),
             # The post-episode ObjectiveScorer call is counted even when the
             # authoritative pass/fail came from a computed structural check.
             llm_verdicts=result.llm_verdicts,
-            indeterminate=verdict.indeterminate,
+            indeterminate=verdict.indeterminate or is_infra_crash,
         )
 
     # ContainerEpisodeRunner issues one post-episode objective verdict.

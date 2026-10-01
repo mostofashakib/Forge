@@ -10,6 +10,7 @@ from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
 from typing import Protocol
 
+from forge.taskfactory.contamination import TaskContaminationVerifier
 from forge.taskfactory.pass_k import PassKResult, run_pass_k
 from forge.taskfactory.profile import EnvironmentProfile
 from forge.taskfactory.runner import TaskRunner
@@ -73,6 +74,7 @@ class TaskFactoryPipeline:
         pass_k: PassK = run_pass_k,
         exclusive: Callable[[], AbstractContextManager[None]] | None = None,
         progress: Progress | None = None,
+        contamination_verifier: TaskContaminationVerifier | None = None,
     ) -> None:
         self._profile = profile
         self._taxonomy_builder = taxonomy_builder
@@ -82,6 +84,7 @@ class TaskFactoryPipeline:
         self._pass_k = pass_k
         self._exclusive = exclusive or nullcontext
         self._progress = progress or (lambda _event: None)
+        self._contamination_verifier = contamination_verifier or TaskContaminationVerifier()
 
     def run(self, count: int, k: int) -> PipelineResult:
         if not MIN_COUNT <= count <= MAX_COUNT:
@@ -191,6 +194,7 @@ class TaskFactoryPipeline:
             return
         self._emit("review", f"Round {round_number}: reviewing {len(executable)} tasks", round_number)
         verdicts = self._reviewer.review(self._profile, executable)
+        accepted_candidates: list[tuple[Slot, TaskDraft, ReviewVerdict]] = []
         for slot, draft in executable:
             verdict = verdicts.get(slot.index)
             if verdict is None:
@@ -198,7 +202,18 @@ class TaskFactoryPipeline:
             elif not verdict.accepted:
                 reject(slot, "review", verdict.rejection_reason(), draft)
             else:
-                result.tasks.append(_accepted(slot, draft, verdict, round_number, fingerprints[slot.index]))
+                accepted_candidates.append((slot, draft, verdict))
+
+        if accepted_candidates:
+            self._emit("contamination", f"Round {round_number}: checking {len(accepted_candidates)} tasks for contamination", round_number)
+            for slot, draft, verdict in accepted_candidates:
+                report = self._contamination_verifier.verify_draft(draft) if self._contamination_verifier else None
+                if report and report.is_contaminated:
+                    reject(slot, "contamination", "; ".join(report.reasons), draft)
+                else:
+                    result.tasks.append(
+                        _accepted(slot, draft, verdict, round_number, fingerprints[slot.index], contamination_report=report)
+                    )
 
     def _emit(self, stage: str, log: str, round_number: int | None = None, **extra) -> None:
         event = {"stage": stage, "log": log, **extra}
@@ -215,7 +230,14 @@ def _recent_titles(tasks: list[SyntheticTask], categories: set[str]) -> list[str
     return [task.title for task in tasks if task.category in categories][-TITLE_CONTEXT:]
 
 
-def _accepted(slot: Slot, draft: TaskDraft, verdict: ReviewVerdict, round_number: int, fingerprint: str) -> SyntheticTask:
+def _accepted(
+    slot: Slot,
+    draft: TaskDraft,
+    verdict: ReviewVerdict,
+    round_number: int,
+    fingerprint: str,
+    contamination_report: Any | None = None,
+) -> SyntheticTask:
     return SyntheticTask(
         id=f"t-{slot.index + 1:05d}",
         category=slot.category,
@@ -230,4 +252,5 @@ def _accepted(slot: Slot, draft: TaskDraft, verdict: ReviewVerdict, round_number
         round=round_number,
         review=verdict,
         fingerprint=fingerprint,
+        contamination_report=contamination_report,
     )

@@ -64,10 +64,29 @@ def init_db() -> None:
         episode_columns = {
             column["name"] for column in inspect(conn).get_columns("episodes")
         }
-        if "termination_reason" not in episode_columns:
-            conn.execute(text(
-                "ALTER TABLE episodes ADD COLUMN termination_reason TEXT DEFAULT 'unknown'"
-            ))
+        episode_migrations = {
+            "termination_reason": "ALTER TABLE episodes ADD COLUMN termination_reason TEXT DEFAULT 'unknown'",
+            "failure_type": "ALTER TABLE episodes ADD COLUMN failure_type TEXT",
+            "failure_reason": "ALTER TABLE episodes ADD COLUMN failure_reason TEXT",
+            "environment_version": "ALTER TABLE episodes ADD COLUMN environment_version TEXT",
+            "attempts_json": "ALTER TABLE episodes ADD COLUMN attempts_json TEXT",
+        }
+        for col_name, stmt in episode_migrations.items():
+            if col_name not in episode_columns:
+                conn.execute(text(stmt))
+
+        agent_ep_columns = {
+            column["name"] for column in inspect(conn).get_columns("agent_episodes")
+        }
+        agent_ep_migrations = {
+            "failure_type": "ALTER TABLE agent_episodes ADD COLUMN failure_type TEXT",
+            "failure_reason": "ALTER TABLE agent_episodes ADD COLUMN failure_reason TEXT",
+            "environment_version": "ALTER TABLE agent_episodes ADD COLUMN environment_version TEXT",
+            "attempts_json": "ALTER TABLE agent_episodes ADD COLUMN attempts_json TEXT",
+        }
+        for col_name, stmt in agent_ep_migrations.items():
+            if col_name not in agent_ep_columns:
+                conn.execute(text(stmt))
         benchmark_columns = {
             column["name"] for column in inspect(conn).get_columns("benchmark_runs")
         }

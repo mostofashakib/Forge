@@ -6,7 +6,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
-RolloutOutcome = Literal["success", "failure", "partial_success", "edge_case"]
+RolloutOutcome = Literal["success", "failure", "partial_success", "edge_case", "truncated"]
 
 
 class RolloutRecord(BaseModel):

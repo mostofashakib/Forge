@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { API_BASE } from "@/lib/api";
 import { SandboxControls } from "@/components/SandboxControls";
+import { ReliabilityPanel } from "@/components/ReliabilityPanel";
 
 interface SandboxInfo {
   id: string;
@@ -411,6 +412,9 @@ export default async function EnvironmentHubPage({
           </Link>
         </div>
       )}
+
+      {/* Reliability Panel */}
+      <ReliabilityPanel envName={env_name} />
 
       {/* ------------------------------------------------------------------ */}
       {/* All action cards in one flat grid — section labels as col-span-2 separators */}

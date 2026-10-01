@@ -98,6 +98,13 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("FORGE_DISABLE_PREWARM", "runtime", "Skip image prewarm", "choice", "0",
             "1 skips pulling base images when a worker starts.", choices=("0", "1")),
 
+    Setting("FORGE_RETRY_CAP", "reliability", "Episode retry cap", "integer", "3",
+            "Maximum retries allowed per episode across runs.", minimum=0),
+    Setting("FORGE_SHORT_EPISODE_THRESHOLD", "reliability", "Short-episode threshold", "integer", "5",
+            "Step threshold below which failed episodes restart from scratch.", minimum=1),
+    Setting("FORGE_SNAPSHOT_INTERVAL", "reliability", "Snapshot interval", "integer", "5",
+            "Step interval between snapshots for long episode recovery.", minimum=1),
+
     Setting("FORGE_PYTHON_BASE_IMAGE", "containers", "Python base image", "text", DEFAULT_PYTHON_BASE_IMAGE),
     Setting("FORGE_CLI_IMAGE", "containers", "CLI image", "text", DEFAULT_CLI_IMAGE),
     Setting("FORGE_BROWSER_IMAGE", "containers", "Browser image", "text", DEFAULT_BROWSER_IMAGE),
