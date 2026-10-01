@@ -164,7 +164,6 @@ export default function TaskFactoryPage() {
         <section className="benchmark-config">
           <div className="benchmark-panel__heading">
             <div><span>01</span><h2>New batch</h2></div>
-            <p>Pick an environment and a size</p>
           </div>
 
           <div className="benchmark-field">
@@ -254,7 +253,6 @@ export default function TaskFactoryPage() {
               onChange={(e) => setK(Number(e.target.value))}
               className="benchmark-range"
             />
-            <div className="benchmark-range__legend"><span>1 run</span><span>10 runs, all must pass</span></div>
           </div>
 
           <div className="benchmark-field tasks-models">
