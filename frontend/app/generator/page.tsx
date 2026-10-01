@@ -150,11 +150,11 @@ export default function TaskFactoryPage() {
 
   return (
     <div className="benchmark-run tasks-page">
-      <header className="benchmark-run__hero">
-        <div className="benchmark-run__hero-copy">
+      <header className="benchmark-run__hero !grid-cols-1">
+        <div className="benchmark-run__hero-copy flex flex-col items-center text-center">
           <span className="benchmark-run__eyebrow">Synthetic data generator</span>
           <h1>FORGE THE <em>WORK.</em></h1>
-          <p>
+          <p className="mx-auto">
             Build a taxonomy, build synthetic datasets. Every batch is saved as a dated version.
           </p>
         </div>
