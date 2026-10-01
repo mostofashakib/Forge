@@ -9,8 +9,8 @@ const NAV_ITEMS = [
   { label: "Generator", href: "/generator", icon: Sparkles },
   { label: "Training", href: "/training", icon: Cpu },
   { label: "Benchmark", href: "/benchmark", icon: FlaskConical },
-  { label: "Settings", href: "/settings", icon: Settings },
   { label: "Environments", href: "/environments", icon: Boxes },
+  { label: "Settings", href: "/settings", icon: Settings },
 ];
 
 function isActivePath(pathname: string, href: string): boolean {
