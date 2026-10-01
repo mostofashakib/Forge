@@ -59,6 +59,15 @@ interface HardwareInfo {
   };
 }
 
+const TRAINING_STAGES = [
+  { key: "env", label: "Env & Device" },
+  { key: "dataset", label: "Dataset" },
+  { key: "rollout", label: "Policy Rollout" },
+  { key: "loss", label: "Loss & Policy" },
+  { key: "checkpoint", label: "Checkpoint" },
+  { key: "registry", label: "Registry" },
+];
+
 export default function TrainingPage() {
   const [runs, setRuns] = useState<TrainingRun[]>([]);
   const [checkpoints, setCheckpoints] = useState<Checkpoint[]>([]);
@@ -564,71 +573,46 @@ export default function TrainingPage() {
           )}
         </section>
 
-        {/* Right Column: Hardware Telemetry & Live Terminal Console */}
-        <section className="benchmark-progress">
-          <div className="benchmark-panel__heading">
-            <div>
-              <span>02</span>
-              <h2>Compute Status & Live Log</h2>
-            </div>
+        {/* Right Column: Live Terminal Console matching other pages */}
+        <section className="benchmark-console">
+          <div className="benchmark-console__bar">
+            <div><i /><i /><i /></div>
+            <span>worker://training</span>
+            {(submitting || systemState === "running") && (
+              <span className="benchmark-console__live">
+                <i /> live
+              </span>
+            )}
           </div>
-
-          {/* Hardware Diagnostic Card */}
-          {hardware && (
-            <div className="border rounded-xl p-4 bg-muted/20 space-y-3">
-              <div className="flex items-center justify-between text-xs">
-                <span className="font-semibold text-muted-foreground uppercase tracking-wider">
-                  Hardware Probing
-                </span>
-                <span className="font-mono text-emerald-500 flex items-center gap-1">
-                  <CheckCircle2 size={13} />
-                  Ready
-                </span>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3 text-xs">
-                <div className="border rounded-lg p-2.5 bg-card">
-                  <div className="text-muted-foreground">Local Acceleration</div>
-                  <strong className="text-sm font-mono block mt-1">
-                    {hardware.hardware.cuda_available
-                      ? `CUDA (${hardware.hardware.device_count} GPUs)`
-                      : hardware.hardware.mps_available
-                      ? "Apple Silicon (MPS)"
-                      : "CPU Core"}
-                  </strong>
-                </div>
-
-                <div className="border rounded-lg p-2.5 bg-card">
-                  <div className="text-muted-foreground">Cloud API Gateway</div>
-                  <strong className="text-sm font-mono block mt-1 truncate" title={hardware.api_gateway.endpoint_url}>
-                    {hardware.api_gateway.endpoint_url.replace("https://", "")}
-                  </strong>
-                </div>
-              </div>
-
-              {hardware.hardware.devices.length > 0 && (
-                <div className="text-[11px] font-mono text-muted-foreground space-y-1">
-                  {hardware.hardware.devices.map((d) => (
-                    <div key={d.id} className="flex justify-between border-t pt-1 border-border/40">
-                      <span>Device {d.id}: {d.name}</span>
-                      {d.total_memory_mb && <span>{d.total_memory_mb.toLocaleString()} MB</span>}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Live Log Console */}
-          <div className="tasks-log-terminal" ref={logRef}>
+          <ol className="tasks-stages">
+            {TRAINING_STAGES.map((s, i) => (
+              <li
+                key={s.key}
+                className={
+                  systemState === "running"
+                    ? i === 2
+                      ? "tasks-stage--active"
+                      : i < 2
+                      ? "tasks-stage--done"
+                      : ""
+                    : submitting
+                    ? i === 0
+                      ? "tasks-stage--active"
+                      : ""
+                    : ""
+                }
+              >
+                <span>0{i + 1}</span>{s.label}
+              </li>
+            ))}
+          </ol>
+          <div ref={logRef} className="benchmark-console__output scrollbar-thin">
             {logs.length === 0 ? (
-              <div className="tasks-log-empty">
+              <div className="benchmark-console__idle">
                 <span>&gt;_</span>
                 <p>
-                  Training runner idle.
-                  <br />
-                  Launch a training run to stream execution logs
-                  <span className="animate-pulse">_</span>
+                  Trainer idle.<br />
+                  Waiting for a training run<span className="animate-pulse">_</span>
                 </p>
               </div>
             ) : (
