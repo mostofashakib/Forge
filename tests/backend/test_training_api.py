@@ -20,16 +20,38 @@ def client(tmp_path, monkeypatch):
     return TestClient(app)
 
 
-def test_create_training_run_missing_data_dir(client):
+def test_create_training_run_invalid_confined_path_fails(client):
     res = client.post(
         "/api/training/runs",
         json={
             "base_model": "test-model",
-            "data_dir": "nonexistent_dir_12345",
+            "data_dir": "../../outside_root_dir",
             "objective": "grpo",
         },
     )
     assert res.status_code == 422
+
+
+def test_create_training_run_auto_creates_missing_data_dir(client, tmp_path):
+    with patch("backend.app.api.training.threading.Thread"):
+        res = client.post(
+            "/api/training/runs",
+            json={
+                "base_model": "test-model",
+                "data_dir": "auto_created_dir_12345",
+                "objective": "grpo",
+            },
+        )
+        assert res.status_code == 202
+        assert (tmp_path / "auto_created_dir_12345").exists()
+
+
+def test_get_training_data_sources(client):
+    res = client.get("/api/training/data-sources")
+    assert res.status_code == 200
+    data = res.json()
+    assert isinstance(data, list)
+    assert any(s["id"] == "exports" for s in data)
 
 
 def test_create_and_get_training_run(client, tmp_path):

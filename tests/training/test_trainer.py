@@ -99,6 +99,45 @@ def test_dpo_training_uses_preference_examples(tmp_path):
     assert result.objective == "dpo"
 
 
+def test_sft_training_uses_demonstrations(tmp_path):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    with (data_dir / "sft_pairs.jsonl").open("w") as f:
+        f.write(json.dumps({
+            "prompt": "Task: sort files\nEnvironment: bash",
+            "completion": "$ sort files.txt",
+            "total_reward": 1.0,
+        }) + "\n")
+        f.write(json.dumps({
+            "prompt": "Task: list files\nEnvironment: bash",
+            "completion": "$ ls -la",
+            "total_reward": 1.0,
+        }) + "\n")
+    backend = _FakeBackend()
+    out = tmp_path / "out"
+    result = PolicyTrainer(backend=backend).train(TrainingConfig(
+        data_dir=data_dir, base_model="base", output_dir=out,
+        objective=TrainingObjective.SFT,
+    ))
+    assert backend.calls[0]["n"] == 2
+    assert result.objective == "sft"
+    ckpt = PolicyCheckpoint.load(out)
+    assert ckpt.objective == "sft"
+
+
+def test_ppo_training_uses_rollouts(tmp_path):
+    data_dir = tmp_path / "data"
+    _write_grpo(data_dir, [_grpo_row("t", 0.0), _grpo_row("t", 1.0)])
+    backend = _FakeBackend()
+    out = tmp_path / "out"
+    result = PolicyTrainer(backend=backend).train(TrainingConfig(
+        data_dir=data_dir, base_model="base", output_dir=out,
+        objective=TrainingObjective.PPO,
+    ))
+    assert backend.calls[0]["n"] == 2
+    assert result.objective == "ppo"
+
+
 def test_training_filters_rollouts_to_experiment_train_envs(tmp_path):
     data_dir = tmp_path / "data"
     _write_grpo(data_dir, [

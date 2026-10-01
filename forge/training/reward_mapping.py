@@ -40,6 +40,13 @@ class DPOExample:
     rejected: str
 
 
+@dataclass
+class SFTExample:
+    prompt: str
+    completion: str
+    behavior_model: str = ""
+
+
 def grpo_advantages(rollouts: list[RolloutRecord], eps: float = _EPS) -> list[GRPOExample]:
     """Group-relative advantages, one example per rollout in a signal-bearing group."""
     groups: dict[str, list[RolloutRecord]] = {}
@@ -72,4 +79,17 @@ def dpo_examples(preferences: list[PreferenceRecord]) -> list[DPOExample]:
         DPOExample(prompt=p.prompt, chosen=p.chosen, rejected=p.rejected)
         for p in preferences
         if p.chosen_reward > p.rejected_reward
+    ]
+
+
+def sft_examples(records: list) -> list[SFTExample]:
+    """SFT examples from demonstrations with non-empty prompt and completion."""
+    return [
+        SFTExample(
+            prompt=r.prompt,
+            completion=r.completion,
+            behavior_model=getattr(r, "behavior_model", ""),
+        )
+        for r in records
+        if r.prompt and r.completion
     ]

@@ -6,11 +6,11 @@ import ForgeMark from "@/components/ForgeMark";
 import { Boxes, Cpu, FlaskConical, Settings, Sparkles } from "lucide-react";
 
 const NAV_ITEMS = [
-  { label: "Environments", href: "/environments", icon: Boxes },
   { label: "Generator", href: "/generator", icon: Sparkles },
   { label: "Training", href: "/training", icon: Cpu },
   { label: "Benchmark", href: "/benchmark", icon: FlaskConical },
   { label: "Settings", href: "/settings", icon: Settings },
+  { label: "Environments", href: "/environments", icon: Boxes },
 ];
 
 function isActivePath(pathname: string, href: string): boolean {
@@ -23,7 +23,7 @@ export default function AppHeader() {
   return (
     <header className="app-header">
       <div className="app-header__rail">
-        <Link href="/environments" className="forge-mark group" aria-label="Forge home">
+        <Link href="/generator" className="forge-mark group" aria-label="Forge home">
           <span className="forge-mark__icon" aria-hidden="true">
             <ForgeMark />
           </span>

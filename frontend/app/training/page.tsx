@@ -8,7 +8,7 @@ import { Cpu, Cloud, Zap, CheckCircle2, AlertCircle, ArrowUpRight, Play, Refresh
 interface TrainingRun {
   id: string;
   status: "queued" | "running" | "completed" | "failed";
-  objective: "grpo" | "dpo";
+  objective: "grpo" | "dpo" | "sft" | "ppo";
   training_mode?: "online" | "offline";
   base_model: string;
   data_dir: string;
@@ -34,6 +34,17 @@ interface Checkpoint {
   run_id: string;
 }
 
+interface DataSource {
+  id: string;
+  batch_id?: string;
+  label: string;
+  source_type: "generator" | "environment" | "directory";
+  data_type: string;
+  env_name: string;
+  path: string;
+  suggested_objective?: "grpo" | "dpo" | "sft" | "ppo";
+}
+
 interface HardwareInfo {
   hardware: {
     cuda_available: boolean;
@@ -52,10 +63,12 @@ export default function TrainingPage() {
   const [runs, setRuns] = useState<TrainingRun[]>([]);
   const [checkpoints, setCheckpoints] = useState<Checkpoint[]>([]);
   const [hardware, setHardware] = useState<HardwareInfo | null>(null);
+  const [dataSources, setDataSources] = useState<DataSource[]>([]);
+  const [selectedSource, setSelectedSource] = useState<string>("exports");
   const [loading, setLoading] = useState(true);
 
   // Form State
-  const [objective, setObjective] = useState<"grpo" | "dpo">("grpo");
+  const [objective, setObjective] = useState<"grpo" | "dpo" | "sft" | "ppo">("grpo");
   const [trainingMode, setTrainingMode] = useState<"online" | "offline">("online");
   const [baseModel, setBaseModel] = useState("Qwen/Qwen2.5-Coder-7B-Instruct");
   const [dataDir, setDataDir] = useState("exports");
@@ -80,15 +93,17 @@ export default function TrainingPage() {
 
   const loadData = useCallback(async () => {
     try {
-      const [runsRes, cpRes, hwRes] = await Promise.all([
+      const [runsRes, cpRes, hwRes, dsRes] = await Promise.all([
         fetch(`${API_BASE}/api/training/runs`, { cache: "no-store" }),
         fetch(`${API_BASE}/api/training/checkpoints`, { cache: "no-store" }),
         fetch(`${API_BASE}/api/training/hardware`, { cache: "no-store" }),
+        fetch(`${API_BASE}/api/training/data-sources`, { cache: "no-store" }),
       ]);
 
       if (runsRes.ok) setRuns(await runsRes.json());
       if (cpRes.ok) setCheckpoints(await cpRes.json());
       if (hwRes.ok) setHardware(await hwRes.json());
+      if (dsRes.ok) setDataSources(await dsRes.json());
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -203,8 +218,8 @@ export default function TrainingPage() {
           {/* Objective Selection */}
           <div className="benchmark-field">
             <div className="benchmark-field__label">
-              <span>Training Objective</span>
-              <small>Algorithm</small>
+              <span>Training Strategy / Algorithm</span>
+              <small>Objective & Loss Formulation</small>
             </div>
             <div className="benchmark-domain-grid" style={{ gridTemplateColumns: "repeat(2, 1fr)" }}>
               <label className="benchmark-domain">
@@ -218,7 +233,7 @@ export default function TrainingPage() {
                 <span className="benchmark-domain__check">✓</span>
                 <span>
                   <strong>GRPO</strong>
-                  <small>Group Relative Advantage (from rollouts)</small>
+                  <small>Group Relative Advantage (from rollout groups)</small>
                 </span>
               </label>
 
@@ -234,6 +249,36 @@ export default function TrainingPage() {
                 <span>
                   <strong>DPO</strong>
                   <small>Direct Preference Optimization (from pairs)</small>
+                </span>
+              </label>
+
+              <label className="benchmark-domain">
+                <input
+                  type="radio"
+                  name="objective"
+                  checked={objective === "ppo"}
+                  onChange={() => setObjective("ppo")}
+                  disabled={submitting}
+                />
+                <span className="benchmark-domain__check">✓</span>
+                <span>
+                  <strong>PPO</strong>
+                  <small>Proximal Policy Optimization (clipped surrogate)</small>
+                </span>
+              </label>
+
+              <label className="benchmark-domain">
+                <input
+                  type="radio"
+                  name="objective"
+                  checked={objective === "sft"}
+                  onChange={() => setObjective("sft")}
+                  disabled={submitting}
+                />
+                <span className="benchmark-domain__check">✓</span>
+                <span>
+                  <strong>SFT</strong>
+                  <small>Supervised Fine-Tuning (from demonstrations)</small>
                 </span>
               </label>
             </div>
@@ -357,19 +402,76 @@ export default function TrainingPage() {
             />
           </label>
 
+          {/* Data Source Selector from Generator or Environments */}
+          <div className="benchmark-field">
+            <div className="benchmark-field__label">
+              <span>Dataset / Data Source</span>
+              <small>Select from Data Generator or Environments</small>
+            </div>
+            <select
+              value={selectedSource}
+              onChange={(e) => {
+                const val = e.target.value;
+                setSelectedSource(val);
+                if (val !== "custom") {
+                  const src = dataSources.find((s) => s.id === val);
+                  if (src) {
+                    setDataDir(src.path);
+                    if (src.suggested_objective) {
+                      setObjective(src.suggested_objective);
+                    }
+                  }
+                }
+              }}
+              disabled={submitting}
+              className="benchmark-input text-xs font-mono mb-2"
+            >
+              <optgroup label="Synthetic Data Generator Batches">
+                {dataSources.filter((s) => s.source_type === "generator").length === 0 ? (
+                  <option disabled value="">No generator batches yet (generate in Generator tab)</option>
+                ) : (
+                  dataSources
+                    .filter((s) => s.source_type === "generator")
+                    .map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.label}
+                      </option>
+                    ))
+                )}
+              </optgroup>
+              <optgroup label="Environment Rollouts">
+                {dataSources
+                  .filter((s) => s.source_type === "environment")
+                  .map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.label}
+                    </option>
+                  ))}
+              </optgroup>
+              <optgroup label="Direct File System">
+                <option value="exports">Default Exports Directory (exports/)</option>
+                <option value="custom">Custom Directory Path...</option>
+              </optgroup>
+            </select>
+          </div>
+
           {/* Data and Output Directory */}
           <div className="grid grid-cols-2 gap-3">
             <label className="benchmark-field">
               <span className="benchmark-field__label">
-                <span>Data Directory</span>
-                <small>Source rollouts/pairs</small>
+                <span>Data Directory Path</span>
+                <small>Source rollouts / pairs / SFT</small>
               </span>
               <input
                 type="text"
                 value={dataDir}
-                onChange={(e) => setDataDir(e.target.value)}
+                onChange={(e) => {
+                  setDataDir(e.target.value);
+                  setSelectedSource("custom");
+                }}
                 disabled={submitting}
                 className="benchmark-input benchmark-input--mono text-xs"
+                placeholder="exports"
               />
             </label>
 

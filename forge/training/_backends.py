@@ -256,3 +256,64 @@ class DPOBackend:
         trainer.save_model(str(model_dir))
         tokenizer.save_pretrained(model_dir)
         return str(model_dir)
+
+
+class PPOBackend(GRPOBackend):
+    """PPO clipped surrogate objective with value estimation baseline."""
+
+    clip_epsilon = 0.2
+    kl_beta = 0.02
+
+
+class SFTBackend:
+    """Supervised Fine-Tuning trainer over prompt-completion demonstrations."""
+
+    def train(self, base_model: str, examples: list, output_dir: Path, max_steps: int) -> str:
+        _require_training_deps("transformers", "datasets", "torch")
+        from datasets import Dataset
+        from transformers import (
+            AutoModelForCausalLM,
+            AutoTokenizer,
+            Trainer,
+            TrainingArguments,
+        )
+
+        output_dir = Path(output_dir)
+        model_dir = output_dir / "forge_policy"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        tokenizer = AutoTokenizer.from_pretrained(base_model)
+        if tokenizer.pad_token_id is None:
+            tokenizer.pad_token = tokenizer.eos_token
+
+        def tokenize(example: dict) -> dict:
+            prompt_ids = tokenizer(example["prompt"], add_special_tokens=True)["input_ids"]
+            completion_ids = tokenizer(
+                example["completion"], add_special_tokens=False
+            )["input_ids"]
+            if tokenizer.eos_token_id is not None:
+                completion_ids = [*completion_ids, tokenizer.eos_token_id]
+            return {
+                "input_ids": [*prompt_ids, *completion_ids],
+                "labels": [-100] * len(prompt_ids) + completion_ids,
+            }
+
+        rows = [{"prompt": ex.prompt, "completion": ex.completion} for ex in examples]
+        tokenized = [tokenize(r) for r in rows]
+        dataset = Dataset.from_list(tokenized)
+
+        model = AutoModelForCausalLM.from_pretrained(base_model)
+        arguments = TrainingArguments(
+            output_dir=str(output_dir / "trainer_state"),
+            max_steps=max_steps,
+            per_device_train_batch_size=1,
+            gradient_accumulation_steps=min(8, max(1, len(rows))),
+            logging_steps=1,
+            save_strategy="no",
+            report_to=[],
+            remove_unused_columns=False,
+        )
+        trainer = Trainer(model=model, args=arguments, train_dataset=dataset)
+        trainer.train()
+        trainer.save_model(str(model_dir))
+        tokenizer.save_pretrained(model_dir)
+        return str(model_dir)

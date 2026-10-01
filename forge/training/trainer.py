@@ -18,10 +18,16 @@ import logging
 from pathlib import Path
 import random
 
-from forge.training._backends import DPOBackend, GRPOBackend, TrainingBackend
+from forge.training._backends import (
+    DPOBackend,
+    GRPOBackend,
+    PPOBackend,
+    SFTBackend,
+    TrainingBackend,
+)
 from forge.training.checkpoint import PolicyCheckpoint
-from forge.training.dataset import load_preferences, load_rollouts
-from forge.training.reward_mapping import dpo_examples, grpo_advantages
+from forge.training.dataset import load_preferences, load_rollouts, load_sft
+from forge.training.reward_mapping import dpo_examples, grpo_advantages, sft_examples
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +35,8 @@ logger = logging.getLogger(__name__)
 class TrainingObjective(str, Enum):
     GRPO = "grpo"
     DPO = "dpo"
+    SFT = "sft"
+    PPO = "ppo"
 
 
 class NoTrainingSignalError(RuntimeError):
@@ -90,7 +98,7 @@ class PolicyTrainer:
             )
 
         is_online = config.training_mode.lower() == "online"
-        if is_online and objective is TrainingObjective.GRPO:
+        if is_online and objective in (TrainingObjective.GRPO, TrainingObjective.PPO):
             # Online mode: training model / model family must match the behavior model / model family that generated the data
             def _family_of(m: str) -> str:
                 clean = m.replace("vllm:", "").strip()
@@ -104,7 +112,7 @@ class PolicyTrainer:
             mismatched = sorted({
                 example.behavior_model
                 for example in examples
-                if example.behavior_model
+                if getattr(example, "behavior_model", "")
                 and example.behavior_model not in {
                     config.base_model,
                     f"vllm:{config.base_model}",
@@ -152,9 +160,9 @@ class PolicyTrainer:
         return TrainingResult(
             checkpoint_path=str(config.output_dir),
             objective=objective.value,
-            training_mode=config.training_mode,
             num_examples=len(examples),
             mean_reward=mean_reward,
+            training_mode=config.training_mode,
         )
 
     # ------------------------------------------------------------------
@@ -166,8 +174,13 @@ class PolicyTrainer:
         train_envs: list[str] | None = None,
     ) -> tuple[list, float]:
         data_dir = Path(data_dir)
-        if objective is TrainingObjective.GRPO:
+        if objective in (TrainingObjective.GRPO, TrainingObjective.PPO):
             path = data_dir / _ROLLOUTS_FILE
+            if not path.exists():
+                for alt in ("ppo_rollouts.parquet", "rollouts.parquet"):
+                    if (data_dir / alt).exists():
+                        path = data_dir / alt
+                        break
             if not path.exists():
                 return [], 0.0
             rollouts = load_rollouts(path)
@@ -178,20 +191,43 @@ class PolicyTrainer:
             mean = sum(r.total_reward for r in rollouts) / len(rollouts) if rollouts else 0.0
             return examples, mean
 
-        path = data_dir / _PREFERENCES_FILE
-        if not path.exists():
-            return [], 0.0
-        preferences = load_preferences(path)
-        if train_envs is not None:
-            allowed = set(train_envs)
-            preferences = [pair for pair in preferences if pair.env_name in allowed]
-        examples = dpo_examples(preferences)
-        rewards = [p.chosen_reward for p in preferences] + [p.rejected_reward for p in preferences]
-        mean = sum(rewards) / len(rewards) if rewards else 0.0
-        return examples, mean
+        if objective is TrainingObjective.DPO:
+            path = data_dir / _PREFERENCES_FILE
+            if not path.exists():
+                for alt in ("preference_pairs.json", "pairs.jsonl"):
+                    if (data_dir / alt).exists():
+                        path = data_dir / alt
+                        break
+            if not path.exists():
+                return [], 0.0
+            preferences = load_preferences(path)
+            if train_envs is not None:
+                allowed = set(train_envs)
+                preferences = [pair for pair in preferences if pair.env_name in allowed]
+            examples = dpo_examples(preferences)
+            rewards = [p.chosen_reward for p in preferences] + [p.rejected_reward for p in preferences]
+            mean = sum(rewards) / len(rewards) if rewards else 0.0
+            return examples, mean
+
+        if objective is TrainingObjective.SFT:
+            sft_records = load_sft(data_dir)
+            if train_envs is not None:
+                allowed = set(train_envs)
+                sft_records = [r for r in sft_records if not r.env_name or r.env_name in allowed]
+            examples = sft_examples(sft_records)
+            mean = sum(getattr(r, "reward", 1.0) for r in sft_records) / len(sft_records) if sft_records else 0.0
+            return examples, mean
+
+        return [], 0.0
 
     def _default_backend(self, objective: TrainingObjective) -> TrainingBackend:
-        return GRPOBackend() if objective is TrainingObjective.GRPO else DPOBackend()
+        if objective is TrainingObjective.GRPO:
+            return GRPOBackend()
+        if objective is TrainingObjective.PPO:
+            return PPOBackend()
+        if objective is TrainingObjective.SFT:
+            return SFTBackend()
+        return DPOBackend()
 
 
 def _set_training_seed(seed: int) -> None:
