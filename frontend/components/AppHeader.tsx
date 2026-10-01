@@ -2,11 +2,12 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Boxes, FlaskConical, ListChecks, Settings } from "lucide-react";
+import ForgeMark from "@/components/ForgeMark";
+import { Boxes, FlaskConical, Settings, Sparkles } from "lucide-react";
 
 const NAV_ITEMS = [
   { label: "Environments", href: "/environments", icon: Boxes },
-  { label: "Tasks", href: "/tasks", icon: ListChecks },
+  { label: "Generator", href: "/generator", icon: Sparkles },
   { label: "Benchmark", href: "/benchmark", icon: FlaskConical },
   { label: "Settings", href: "/settings", icon: Settings },
 ];
@@ -23,10 +24,7 @@ export default function AppHeader() {
       <div className="app-header__rail">
         <Link href="/environments" className="forge-mark group" aria-label="Forge home">
           <span className="forge-mark__icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24" fill="none">
-              <path d="M12 2.5 21 7v10l-9 4.5L3 17V7l9-4.5Z" stroke="currentColor" strokeWidth="1.6" />
-              <path d="m8 9.25 4-2 4 2v5.5l-4 2-4-2v-5.5Z" fill="currentColor" />
-            </svg>
+            <ForgeMark />
           </span>
           <span>
             <span className="forge-mark__word">FORGE</span>
@@ -46,7 +44,7 @@ export default function AppHeader() {
               >
                 <span className="app-nav__index">0{index + 1}</span>
                 <Icon size={15} strokeWidth={1.8} aria-hidden="true" />
-                <span>{item.label}</span>
+                <span className="app-nav__label">{item.label}</span>
               </Link>
             );
           })}
