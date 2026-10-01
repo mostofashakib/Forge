@@ -32,6 +32,7 @@ dependencies = [
     "rouge-score>=0.1.2",
     "nltk>=3.8.0",
     "ollama>=0.3.0",
+    "openai>=1.40",
 ]
 
 [project.optional-dependencies]
