@@ -314,10 +314,7 @@ export default function LandingPage() {
                   </div>
                 </div>
 
-                <div className="mt-6 flex items-center justify-between border-t border-border/60 pt-4">
-                  <span className="font-mono text-[0.62rem] text-muted-foreground">
-                    Direct entry point
-                  </span>
+                <div className="mt-6 flex items-center justify-end border-t border-border/60 pt-4">
                   <Link
                     href={guide.route}
                     className="inline-flex items-center gap-2 border border-foreground/30 bg-foreground px-4 py-2 font-mono text-[0.65rem] font-semibold uppercase tracking-[0.12em] text-background hover:bg-primary hover:border-primary transition-all"
@@ -342,9 +339,6 @@ export default function LandingPage() {
           <h2 className="mt-1 text-2xl font-semibold tracking-[-0.03em] uppercase">
             How Forge Closes the Learning Loop
           </h2>
-          <p className="mt-1 max-w-2xl text-xs text-muted-foreground">
-            From raw workflow specs to fine-tuned agent policies with zero subjective bias.
-          </p>
         </div>
 
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
