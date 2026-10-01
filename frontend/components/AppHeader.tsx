@@ -3,9 +3,10 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import ForgeMark from "@/components/ForgeMark";
-import { Boxes, Cpu, FlaskConical, Settings, Sparkles } from "lucide-react";
+import { Boxes, Compass, Cpu, FlaskConical, Settings, Sparkles } from "lucide-react";
 
 const NAV_ITEMS = [
+  { label: "Overview", href: "/", icon: Compass },
   { label: "Generator", href: "/generator", icon: Sparkles },
   { label: "Training", href: "/training", icon: Cpu },
   { label: "Benchmark", href: "/benchmark", icon: FlaskConical },
@@ -14,6 +15,7 @@ const NAV_ITEMS = [
 ];
 
 function isActivePath(pathname: string, href: string): boolean {
+  if (href === "/") return pathname === "/";
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
@@ -23,7 +25,7 @@ export default function AppHeader() {
   return (
     <header className="app-header">
       <div className="app-header__rail">
-        <Link href="/generator" className="forge-mark group" aria-label="Forge home">
+        <Link href="/" className="forge-mark group" aria-label="Forge home">
           <span className="forge-mark__icon" aria-hidden="true">
             <ForgeMark />
           </span>

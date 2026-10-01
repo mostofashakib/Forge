@@ -909,6 +909,44 @@
   .persona-table th { @apply border-b py-2 pr-4 text-left text-xs font-medium uppercase tracking-wider text-muted-foreground; }
   .persona-table td { @apply border-b border-border/50 py-2 pr-4 align-top; }
   .persona-table td:nth-child(3), .persona-table td:nth-child(4) { @apply font-mono text-xs text-muted-foreground; }
+
+  /* Landing page styles */
+  .landing-hero {
+    @apply relative border border-foreground/35 bg-card/75 backdrop-blur-sm p-6 sm:p-10 lg:p-12 overflow-hidden;
+    box-shadow: 6px 6px 0 var(--foreground), 0 20px 40px oklch(0.20 0.02 62 / 0.08);
+  }
+  .landing-hero::before {
+    content: "";
+    @apply absolute -right-20 -top-20 size-80 rounded-full pointer-events-none;
+    background: radial-gradient(circle, oklch(0.64 0.235 39 / 0.2), transparent 70%);
+  }
+  .landing-hero::after {
+    content: "";
+    @apply pointer-events-none absolute bottom-0 left-0 h-1 w-full bg-gradient-to-r from-primary via-accent to-primary;
+  }
+  .landing-card {
+    @apply relative flex flex-col justify-between border border-foreground/25 bg-card p-6 transition-all duration-200 overflow-hidden;
+    box-shadow: 4px 4px 0 oklch(0.20 0.02 62 / 0.12);
+  }
+  .landing-card::before {
+    content: "";
+    @apply absolute top-0 left-0 h-1 w-full bg-primary/40 transition-colors;
+  }
+  .landing-card:hover {
+    @apply -translate-y-1 border-foreground/75;
+    box-shadow: 7px 7px 0 var(--primary);
+  }
+  .landing-card:hover::before {
+    @apply bg-primary;
+  }
+  .landing-pipeline-step {
+    @apply relative border border-foreground/25 bg-card/70 p-5 transition-all;
+    box-shadow: 3px 3px 0 oklch(0.20 0.02 62 / 0.1);
+  }
+  .landing-pipeline-step:hover {
+    @apply border-foreground/60 -translate-y-0.5 bg-card;
+    box-shadow: 5px 5px 0 var(--primary);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
