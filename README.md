@@ -702,7 +702,6 @@ The responsive Next.js control surface uses an industrial foundry visual system 
 
 | Page | What it does |
 |---|---|
-| **Overview** | Platform entry point illustrating the Forge flywheel pipeline, verifiable reasoning principles, and quick module navigation |
 | **Generator** | Synthesize task taxonomies and datasets with automated golden pass^k validation and dated batch versioning |
 | **Training** | Configure and run Online/Offline policy training (GRPO, DPO, PPO, SFT) with live terminal execution streaming |
 | **Run** | Select which active environments to benchmark, max difficulty (1–5), seeds per task, inference target, and output dir; launch with live log streaming and progress |
