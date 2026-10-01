@@ -1,6 +1,7 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { Cloud, Cpu, Zap } from "lucide-react";
 import { API_BASE, wsBase } from "@/lib/api";
 import { Toast } from "@/components/Toast";
 
@@ -18,6 +19,7 @@ export default function BenchmarkRunPage() {
   const [depth, setDepth] = useState(5);
   const [seeds, setSeeds] = useState(5);
   const [outputDir, setOutputDir] = useState("benchmark_results");
+  const [inferenceMode, setInferenceMode] = useState<"auto" | "local_gpu" | "api_gateway">("auto");
   const [phase, setPhase] = useState<Phase>("idle");
   const [logs, setLogs] = useState<string[]>([]);
   const [progress, setProgress] = useState<{ completed: number; total: number | null }>({
@@ -83,7 +85,7 @@ export default function BenchmarkRunPage() {
       const res = await fetch(`${API_BASE}/api/benchmark/runs`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ domains, depth, seeds, output_dir: outputDir }),
+        body: JSON.stringify({ domains, depth, seeds, output_dir: outputDir, inference_mode: inferenceMode }),
       });
       if (!res.ok) {
         const msg = await res.text();
@@ -134,6 +136,7 @@ export default function BenchmarkRunPage() {
           <div><span>Environments</span><strong>{String(domains.length).padStart(2, "0")}</strong></div>
           <div><span>Difficulty</span><strong>0{depth}</strong></div>
           <div><span>Seeds / task</span><strong>{String(seeds).padStart(2, "0")}</strong></div>
+          <div><span>Inference</span><strong className="text-xs uppercase">{inferenceMode === "auto" ? "Auto" : inferenceMode === "local_gpu" ? "GPU" : "Gateway"}</strong></div>
           <div className={`benchmark-run__state benchmark-run__state--${phase}`}>
             <span>System state</span><strong><i />{phase}</strong>
           </div>
@@ -193,6 +196,69 @@ export default function BenchmarkRunPage() {
             <div className="benchmark-range__legend">
               <span>01 / Foundation</span>
               <span>05 / Full stress</span>
+            </div>
+          </div>
+
+          {/* Inference Target */}
+          <div className="benchmark-field">
+            <div className="benchmark-field__label">
+              <span>Inference</span>
+              <small>Local GPU vs Cloud Gateway</small>
+            </div>
+            <div className="benchmark-domain-grid" style={{ gridTemplateColumns: "repeat(3, 1fr)" }}>
+              <label className="benchmark-domain">
+                <input
+                  type="radio"
+                  name="benchmark_inference_mode"
+                  checked={inferenceMode === "auto"}
+                  onChange={() => setInferenceMode("auto")}
+                  disabled={isRunning}
+                />
+                <span className="benchmark-domain__check">✓</span>
+                <span>
+                  <div className="flex items-center gap-1">
+                    <Zap size={13} className="text-amber-500" />
+                    <strong>Auto</strong>
+                  </div>
+                  <small>Detect local GPU or fallback</small>
+                </span>
+              </label>
+
+              <label className="benchmark-domain">
+                <input
+                  type="radio"
+                  name="benchmark_inference_mode"
+                  checked={inferenceMode === "local_gpu"}
+                  onChange={() => setInferenceMode("local_gpu")}
+                  disabled={isRunning}
+                />
+                <span className="benchmark-domain__check">✓</span>
+                <span>
+                  <div className="flex items-center gap-1">
+                    <Cpu size={13} className="text-emerald-500" />
+                    <strong>Local GPU</strong>
+                  </div>
+                  <small>CUDA / Apple Silicon MPS</small>
+                </span>
+              </label>
+
+              <label className="benchmark-domain">
+                <input
+                  type="radio"
+                  name="benchmark_inference_mode"
+                  checked={inferenceMode === "api_gateway"}
+                  onChange={() => setInferenceMode("api_gateway")}
+                  disabled={isRunning}
+                />
+                <span className="benchmark-domain__check">✓</span>
+                <span>
+                  <div className="flex items-center gap-1">
+                    <Cloud size={13} className="text-blue-500" />
+                    <strong>API Gateway</strong>
+                  </div>
+                  <small>Hosted vLLM / Ollama</small>
+                </span>
+              </label>
             </div>
           </div>
 

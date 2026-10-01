@@ -13,7 +13,7 @@ const SIDEBAR_ITEMS = [
   {
     href: "/benchmark/transfer",
     label: "Transfer",
-    available: false,
+    available: true,
     badge: "GPU",
   },
   { href: "/benchmark/eval", label: "Eval", available: true, badge: "held-out" },

@@ -322,10 +322,10 @@ export default function TrainingPage() {
             </div>
           </div>
 
-          {/* Compute & Inference Target (GPU Contract) */}
+          {/* Inference Target (GPU Contract) */}
           <div className="benchmark-field">
             <div className="benchmark-field__label">
-              <span>Compute & Inference Target</span>
+              <span>Inference</span>
               <small>Local GPU vs Cloud Gateway</small>
             </div>
             <div className="benchmark-domain-grid" style={{ gridTemplateColumns: "repeat(3, 1fr)" }}>
