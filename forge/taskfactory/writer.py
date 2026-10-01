@@ -88,6 +88,17 @@ check kinds:
 _STEP_TARGETS = {1: 3, 2: 8, 3: 20, 4: 36, 5: 45}
 
 
+_REVISE = """\
+REVISION: each slot below comes with your earlier draft, whose golden solution
+has the wrong number of steps. Return a reworked task for each slot.
+If the solution is too short, widen the task until it needs about the target
+number of steps: more records to handle, more sub-goals that depend on each
+other, results to verify before going on. Seed the data the new scope needs
+and add checks for it. Never pad with repeated, pointless or no-op steps.
+If it is too long, narrow the task to fewer sub-goals instead.
+"""
+
+
 def _span(difficulty: int) -> str:
     low, high = DIFFICULTY_STEP_BOUNDS[difficulty]
     span = f"{low} or more" if high is None else f"{low} to {high}"
@@ -121,6 +132,34 @@ class TaskWriter:
                     drafts[draft.slot] = draft
                     titles.append(draft.title)
         return drafts
+
+    def revise(
+        self,
+        profile: EnvironmentProfile,
+        taxonomy: Taxonomy,
+        items: Sequence[tuple[Slot, TaskDraft, str]],
+    ) -> dict[int, TaskDraft]:
+        """Rework drafts whose golden solution is the wrong length for their slot."""
+        system = (
+            _COMMON % {"min_reflections": MIN_REFLECTION_POINTS} + "\n" + _FAMILY[profile.family] + "\n" + _REVISE
+        )
+        revised: dict[int, TaskDraft] = {}
+        for start in range(0, len(items), CHUNK_SIZE):
+            chunk = items[start:start + CHUNK_SIZE]
+            lines = [profile.prompt_view(), "", f"Difficulty rubric: {json.dumps(taxonomy.difficulty_rubric, sort_keys=True)}", ""]
+            for slot, draft, problem in chunk:
+                lines += [
+                    f"SLOT {slot.index} | category {slot.category} | difficulty {slot.difficulty} | "
+                    f"golden solution of {_span(slot.difficulty)} steps",
+                    f"  Problem: {problem}",
+                    f"  Draft: {draft.model_dump_json(exclude={'slot'})}",
+                ]
+            batch: TaskDraftBatch = self._client.extract(system=system, user="\n".join(lines), schema=TaskDraftBatch)
+            wanted = {slot.index for slot, _draft, _problem in chunk}
+            for draft in batch.tasks:
+                if draft.slot in wanted and draft.slot not in revised:
+                    revised[draft.slot] = draft
+        return revised
 
     @staticmethod
     def _prompt(

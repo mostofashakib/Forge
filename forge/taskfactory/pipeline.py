@@ -15,7 +15,7 @@ from forge.taskfactory.profile import EnvironmentProfile
 from forge.taskfactory.runner import TaskRunner
 from forge.taskfactory.schemas import ReviewVerdict, SyntheticTask, TaskDraft, TaskRejection, Taxonomy
 from forge.taskfactory.slots import Slot, plan_slots
-from forge.taskfactory.static_check import static_problems
+from forge.taskfactory.static_check import length_problems, static_problems
 
 MAX_ROUNDS = 3
 MIN_COUNT, MAX_COUNT = 1, 20_000
@@ -37,6 +37,8 @@ class _TaxonomyBuilder(Protocol):
 
 class _Writer(Protocol):
     def write(self, profile, taxonomy, slots, *, avoid_titles=(), feedback=None) -> dict[int, TaskDraft]: ...
+
+    def revise(self, profile, taxonomy, items) -> dict[int, TaskDraft]: ...
 
 
 class _Reviewer(Protocol):
@@ -137,19 +139,41 @@ class TaskFactoryPipeline:
         )
         taken = {_title_key(task.title) for task in result.tasks}
         survivors: list[tuple[Slot, TaskDraft]] = []
+
+        def check(slot: Slot, draft: TaskDraft) -> list[str]:
+            problems = static_problems(draft, slot, self._profile)
+            if _title_key(draft.title) in taken:
+                problems.append(f"duplicate of an accepted task titled {draft.title!r}")
+            return problems
+
+        def keep(slot: Slot, draft: TaskDraft) -> None:
+            survivors.append((slot, draft))
+            taken.add(_title_key(draft.title))
+
+        off_length: list[tuple[Slot, TaskDraft, str]] = []
         for slot in slots:
             draft = drafts.get(slot.index)
             if draft is None:
                 reject(slot, "writer", "the writer returned no task for this slot", None)
                 continue
-            problems = static_problems(draft, slot, self._profile)
-            if _title_key(draft.title) in taken:
-                problems.append(f"duplicate of an accepted task titled {draft.title!r}")
-            if problems:
-                reject(slot, "static", "; ".join(problems), draft)
+            problems = check(slot, draft)
+            if not problems:
+                keep(slot, draft)
+            elif problems == length_problems(draft, slot):
+                # Only the length is off: rework it now instead of losing a round.
+                off_length.append((slot, draft, "; ".join(problems)))
             else:
-                survivors.append((slot, draft))
-                taken.add(_title_key(draft.title))
+                reject(slot, "static", "; ".join(problems), draft)
+        if off_length:
+            self._emit("static", f"Round {round_number}: reworking {len(off_length)} tasks of the wrong length", round_number)
+            revised = self._writer.revise(self._profile, result.taxonomy, off_length)
+            for slot, draft, problem in off_length:
+                rework = revised.get(slot.index)
+                problems = check(slot, rework) if rework is not None else [problem]
+                if problems:
+                    reject(slot, "static", "; ".join(problems), rework or draft)
+                else:
+                    keep(slot, rework)
         self._emit("static", f"Round {round_number}: {len(survivors)} of {len(slots)} passed the static check", round_number)
 
         fingerprints: dict[int, str] = {}

@@ -145,3 +145,19 @@ def test_the_review_prompt_shows_the_golden_solution_and_reflections():
 
     assert "/archive_email" in client.prompts[0]
     assert "confirm the sender first" in client.prompts[0]
+
+
+def test_a_revision_shows_the_draft_its_problem_and_the_target():
+    client = _EchoWriterClient()
+    draft = _draft(3, title="Archive old invoices")
+
+    TaskWriter(client).revise(
+        PROFILE, TAXONOMY,
+        [(Slot(index=3, category="triage", difficulty=5), draft, "difficulty 5 needs 30 or more steps, got 12")],
+    )
+
+    prompt = client.prompts[0]
+    assert "Archive old invoices" in prompt
+    assert "got 12" in prompt
+    assert "aim for about 45" in prompt
+    assert "SLOT 3" in prompt

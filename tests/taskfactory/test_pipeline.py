@@ -46,11 +46,20 @@ def _draft(slot: int, *, tool: str = "/archive_email", title: str | None = None)
 
 
 class _Writer:
-    """Writes per round from a script: {round: {slot: draft or None}}. Default: a good draft."""
+    """Writes per round from a script: {round: {slot: draft or None}}. Default: a good draft.
 
-    def __init__(self, script: dict[int, dict[int, TaskDraft | None]] | None = None) -> None:
+    `revisions` maps a slot to the draft `revise` returns for it.
+    """
+
+    def __init__(self, script: dict[int, dict[int, TaskDraft | None]] | None = None, revisions=None) -> None:
         self.script = script or {}
+        self.revisions = revisions or {}
         self.calls: list[dict] = []
+        self.revised: list[tuple[int, str]] = []
+
+    def revise(self, profile, taxonomy, items):
+        self.revised += [(slot.index, problem) for slot, _draft, problem in items]
+        return {slot.index: self.revisions[slot.index] for slot, _d, _p in items if slot.index in self.revisions}
 
     def write(self, profile, taxonomy, slots, *, avoid_titles=(), feedback=None):
         round_number = len(self.calls) + 1
@@ -215,6 +224,41 @@ def test_progress_reports_each_rejection_with_its_reason():
     assert len(rejected) == 1
     assert "/nuke_inbox" in rejected[0]["log"]
     assert rejected[0]["stage"] == "static"
+
+
+def _short(slot: int, steps: int) -> TaskDraft:
+    return _draft(slot).model_copy(update={"golden": [GoldenStep(tool="/archive_email")] * steps})
+
+
+def test_a_draft_off_only_on_length_is_revised_in_the_same_round():
+    # Slot 0 is difficulty 1 in this taxonomy; a 6-step golden is too long,
+    # and the revision brings it back inside the range.
+    writer = _Writer({1: {0: _short(0, 6)}}, revisions={0: _draft(0, title="revised")})
+
+    result = _pipeline(writer=writer).run(count=1, k=1)
+
+    assert result.status == "complete"
+    assert len(writer.calls) == 1
+    assert writer.revised[0][0] == 0 and "1 to 5" in writer.revised[0][1]
+    assert result.tasks[0].round == 1 and result.tasks[0].title == "revised"
+
+
+def test_a_draft_with_other_problems_is_not_revised():
+    writer = _Writer({1: {0: _draft(0, tool="/nuke_inbox")}})
+
+    _pipeline(writer=writer).run(count=1, k=1)
+
+    assert writer.revised == []
+
+
+def test_a_revision_still_off_on_length_is_rejected_and_rewritten_next_round():
+    writer = _Writer({1: {0: _short(0, 6)}}, revisions={0: _short(0, 7)})
+
+    result = _pipeline(writer=writer).run(count=1, k=1)
+
+    assert len(writer.calls) == 2
+    assert result.rejections[0].stage == "static"
+    assert "got 7" in result.rejections[0].reason
 
 
 def test_a_count_outside_one_to_twenty_thousand_is_rejected():

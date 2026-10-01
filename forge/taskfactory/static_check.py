@@ -31,7 +31,7 @@ _URL_OPS = {"equals", "contains"}
 
 def static_problems(draft: TaskDraft, slot: Slot, profile: EnvironmentProfile) -> list[str]:
     """Every reason `draft` cannot fill `slot` in this environment. Empty means it may run."""
-    problems = _length_problems(draft, slot)
+    problems = length_problems(draft, slot)
     problems += _reflection_problems(draft, slot)
     problems += _check_problems(draft, profile)
     family_rules = {"state": _state_problems, "cli": _cli_problems, "browser": _browser_problems}
@@ -40,7 +40,7 @@ def static_problems(draft: TaskDraft, slot: Slot, profile: EnvironmentProfile) -
     return list(dict.fromkeys(problems))
 
 
-def _length_problems(draft: TaskDraft, slot: Slot) -> list[str]:
+def length_problems(draft: TaskDraft, slot: Slot) -> list[str]:
     steps = len(draft.golden)
     low, high = DIFFICULTY_STEP_BOUNDS[slot.difficulty]
     if steps > MAX_GOLDEN_STEPS:
