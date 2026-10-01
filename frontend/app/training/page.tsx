@@ -212,7 +212,6 @@ export default function TrainingPage() {
               <span>01</span>
               <h2>Launch Run</h2>
             </div>
-            <p>Configure model, data, objective, training mode, and compute backend</p>
           </div>
 
           {/* Objective Selection */}
@@ -600,7 +599,6 @@ export default function TrainingPage() {
               <span>02</span>
               <h2>Compute Status & Live Log</h2>
             </div>
-            <p>GPU acceleration telemetry and execution feed</p>
           </div>
 
           {/* Hardware Diagnostic Card */}
