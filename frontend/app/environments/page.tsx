@@ -121,41 +121,22 @@ export default function EnvironmentsPage() {
   return (
     <div className="space-y-10">
       {/* Header */}
-      <section className="environment-hero blueprint-panel">
-        <div className="environment-hero__copy">
-          <div className="flex items-center gap-3 mb-6">
-            <span className="signal-chip"><span className="size-1.5 rounded-full bg-foreground animate-pulse" /> system inventory</span>
-          </div>
-          <p className="environment-hero__eyebrow">Build controlled worlds for capable agents.</p>
-          <h1 className="environment-hero__title">ENVIRONMENTS</h1>
-          {allNames.length > 0 && (
-            <p className="text-sm leading-6 text-muted-foreground mt-5 max-w-xl">
-              {`${allNames.length} training ground${allNames.length !== 1 ? "s" : ""} connected to your local foundry.`}
-            </p>
-          )}
-          <Link href="/environments/new" className="forge-cta mt-8">
-            <span className="forge-cta__plus" aria-hidden="true">+</span>
-            Create environment
-            <span aria-hidden="true">↗</span>
-          </Link>
-        </div>
-
-        <div className="environment-hero__telemetry" aria-label="Environment summary">
-          <div className="environment-hero__orb" aria-hidden="true">
-            <span className="environment-hero__orbit environment-hero__orbit--one" />
-            <span className="environment-hero__orbit environment-hero__orbit--two" />
-            <svg viewBox="0 0 100 100" fill="none">
-              <path d="M50 15 80 31v38L50 85 20 69V31l30-16Z" stroke="currentColor" />
-              <path d="m50 37 12 6v14l-12 6-12-6V43l12-6Z" fill="currentColor" />
-            </svg>
-          </div>
-          <div className="environment-stats">
-            <div><span>Registered</span><strong>{String(allNames.length).padStart(2, "0")}</strong></div>
-            <div><span>Online</span><strong>{String(liveCount).padStart(2, "0")}</strong></div>
-            <div><span>Building</span><strong>{String(buildCount).padStart(2, "0")}</strong></div>
+      <header className="benchmark-run__hero !grid-cols-1">
+        <div className="benchmark-run__hero-copy flex flex-col items-center text-center">
+          <span className="benchmark-run__eyebrow">System inventory / Sandboxes</span>
+          <h1>FORGE THE <em>WORLDS.</em></h1>
+          <p className="mx-auto">
+            Build controlled worlds for capable agents. {allNames.length > 0 ? `${allNames.length} training ground${allNames.length !== 1 ? "s" : ""} connected to your local foundry.` : "Create isolated Gymnasium environments for agent RL."}
+          </p>
+          <div className="mt-6">
+            <Link href="/environments/new" className="forge-cta">
+              <span className="forge-cta__plus" aria-hidden="true">+</span>
+              Create environment
+              <span aria-hidden="true">↗</span>
+            </Link>
           </div>
         </div>
-      </section>
+      </header>
 
       {requestError && (
         <div role="alert" className="border border-red-200 bg-red-50 p-4 text-sm text-red-700">

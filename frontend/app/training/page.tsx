@@ -163,43 +163,15 @@ export default function TrainingPage() {
 
   return (
     <div className="benchmark-run tasks-page">
-      <header className="benchmark-run__hero">
-        <div className="benchmark-run__hero-copy">
+      <header className="benchmark-run__hero !grid-cols-1">
+        <div className="benchmark-run__hero-copy flex flex-col items-center text-center">
           <span className="benchmark-run__eyebrow">Policy Training & Alignment</span>
-          <h1>
-            FORGE THE<br />
-            <em>POLICY.</em>
-          </h1>
-          <p>
+          <h1>FORGE THE <em>POLICY.</em></h1>
+          <p className="mx-auto">
             Train agents from graded rollouts and synthetic preference pairs. Optimize policies with
             Group Relative Policy Optimization (GRPO) or Direct Preference Optimization (DPO) in
             either Online (same model family) or Offline (cross-model distillation) mode.
           </p>
-        </div>
-        <div className="benchmark-run__readout" aria-label="Training system overview">
-          <div>
-            <span>Active Runs</span>
-            <strong>{String(activeRunsCount).padStart(2, "0")}</strong>
-          </div>
-          <div>
-            <span>Objective</span>
-            <strong>{objective.toUpperCase()}</strong>
-          </div>
-          <div>
-            <span>Mode</span>
-            <strong className="uppercase">{trainingMode}</strong>
-          </div>
-          <div>
-            <span>Checkpoints</span>
-            <strong>{String(checkpoints.length).padStart(2, "0")}</strong>
-          </div>
-          <div className={`benchmark-run__state benchmark-run__state--${systemState}`}>
-            <span>System State</span>
-            <strong>
-              <i />
-              {systemState}
-            </strong>
-          </div>
         </div>
       </header>
 

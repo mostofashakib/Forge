@@ -126,20 +126,11 @@ export default function BenchmarkRunPage() {
 
   return (
     <div className="benchmark-run">
-      <header className="benchmark-run__hero">
-        <div className="benchmark-run__hero-copy">
+      <header className="benchmark-run__hero !grid-cols-1">
+        <div className="benchmark-run__hero-copy flex flex-col items-center text-center">
           <span className="benchmark-run__eyebrow">Evaluation protocol / 01</span>
-          <h1>MEASURE THE<br /><em>EDGE.</em></h1>
-          <p>Collect episodes across the task suite and turn raw trajectories into quality signals.</p>
-        </div>
-        <div className="benchmark-run__readout" aria-label="Current run configuration">
-          <div><span>Environments</span><strong>{String(domains.length).padStart(2, "0")}</strong></div>
-          <div><span>Difficulty</span><strong>0{depth}</strong></div>
-          <div><span>Seeds / task</span><strong>{String(seeds).padStart(2, "0")}</strong></div>
-          <div><span>Inference</span><strong className="text-xs uppercase">{inferenceMode === "auto" ? "Auto" : inferenceMode === "local_gpu" ? "GPU" : "Gateway"}</strong></div>
-          <div className={`benchmark-run__state benchmark-run__state--${phase}`}>
-            <span>System state</span><strong><i />{phase}</strong>
-          </div>
+          <h1>MEASURE THE <em>EDGE.</em></h1>
+          <p className="mx-auto">Collect episodes across the task suite and turn raw trajectories into quality signals.</p>
         </div>
       </header>
 

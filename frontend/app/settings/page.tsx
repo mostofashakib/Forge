@@ -113,22 +113,14 @@ export default function SettingsPage() {
 
   return (
     <div className="benchmark-run settings-page">
-      <header className="benchmark-run__hero">
-        <div className="benchmark-run__hero-copy">
+      <header className="benchmark-run__hero !grid-cols-1">
+        <div className="benchmark-run__hero-copy flex flex-col items-center text-center">
           <span className="benchmark-run__eyebrow">System / settings</span>
-          <h1>TUNE THE<br /><em>FORGE.</em></h1>
-          <p>
+          <h1>TUNE THE <em>FORGE.</em></h1>
+          <p className="mx-auto">
             Models, runtime, containers and generation budgets for the whole platform. Saving rewrites only the
             changed lines in backend/.env. API keys stay in that file and never appear here.
           </p>
-        </div>
-        <div className="benchmark-run__readout">
-          <div><span>Generator</span><strong className="settings-model">{settings?.writer.model ?? "—"}</strong></div>
-          <div><span>Judge</span><strong className="settings-model">{judge || "Not set"}</strong></div>
-          <div><span>Task validator</span><strong className="settings-model">{validator?.model ?? "Not set"}</strong></div>
-          <div className={`benchmark-run__state benchmark-run__state--${pending.length ? "error" : "done"}`}>
-            <span>Restart</span><strong><i />{pending.length ? `${pending.length} pending` : "up to date"}</strong>
-          </div>
         </div>
       </header>
 

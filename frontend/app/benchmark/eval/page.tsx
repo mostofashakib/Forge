@@ -94,16 +94,13 @@ export default function BenchmarkEvalPage() {
 
   return (
     <div className="benchmark-run">
-      <header className="benchmark-run__hero">
-        <div className="benchmark-run__hero-copy">
+      <header className="benchmark-run__hero !grid-cols-1">
+        <div className="benchmark-run__hero-copy flex flex-col items-center text-center">
           <span className="benchmark-run__eyebrow">Evaluation protocol / 04</span>
-          <h1>VERIFY THE<br /><em>TRANSFER.</em></h1>
-        </div>
-        <div className="benchmark-run__readout" aria-label="Evaluation status">
-          <div><span>Engine</span><strong className="text-sm uppercase">{engine}</strong></div>
-          <div><span>Split</span><strong className="text-sm uppercase">held-out</strong></div>
-          <div><span>Harbor</span><strong className="text-sm uppercase">{harborAvailable === null ? "unknown" : harborAvailable ? "ready" : "offline"}</strong></div>
-          <div className={`benchmark-run__state benchmark-run__state--${phase}`}><span>System state</span><strong><i />{phase}</strong></div>
+          <h1>VERIFY THE <em>TRANSFER.</em></h1>
+          <p className="mx-auto">
+            Run transfer evaluations against held-out tasks and verification suites.
+          </p>
         </div>
       </header>
 

@@ -122,21 +122,13 @@ export default function BenchmarkTransferPage() {
 
   return (
     <div className="benchmark-run">
-      <header className="benchmark-run__hero">
-        <div className="benchmark-run__hero-copy">
+      <header className="benchmark-run__hero !grid-cols-1">
+        <div className="benchmark-run__hero-copy flex flex-col items-center text-center">
           <span className="benchmark-run__eyebrow">Transfer benchmark / 03</span>
-          <h1>EVALUATE THE<br /><em>TRANSFER.</em></h1>
-          <p>
+          <h1>EVALUATE THE <em>TRANSFER.</em></h1>
+          <p className="mx-auto">
             Measure cross-distribution generalization on held-out tasks and external benchmark environments.
           </p>
-        </div>
-        <div className="benchmark-run__readout" aria-label="Transfer status">
-          <div><span>Model</span><strong className="text-xs truncate">{baseModel.split("/").pop()}</strong></div>
-          <div><span>Target</span><strong className="text-xs uppercase">{evalSuite}</strong></div>
-          <div><span>Inference</span><strong className="text-xs uppercase">{inferenceMode === "auto" ? "Auto" : inferenceMode === "local_gpu" ? "GPU" : "Gateway"}</strong></div>
-          <div className={`benchmark-run__state benchmark-run__state--${phase}`}>
-            <span>System state</span><strong><i />{phase}</strong>
-          </div>
         </div>
       </header>
 
