@@ -129,8 +129,20 @@ class CliEpisodeRunner(EpisodeController):
         # signature and deliberately unused.
         del seed
         result = CliEpisodeResult()
+        end_state_spec = self._plan(result)
+        # Persist each step as it happens so a crash mid-episode still leaves a
+        # durable, replayable partial trace.
+        writer = TrajectoryWriter(jsonl_path, result) if jsonl_path is not None else None
+        try:
+            early_termination = self._run_steps(agent, end_state_spec, result, writer)
+            self._grade(result, end_state_spec, early_termination)
+        finally:
+            if writer is not None:
+                writer.close()
+        return result
 
-        # Tier 1: derive an end-state spec from the natural-language objective.
+    def _plan(self, result: CliEpisodeResult) -> EndStateSpec:
+        """Tier 1: derive an end-state spec from the natural-language objective."""
         end_state_spec = self._reward_engine.plan_end_state(self._cfg.objective)
         result.end_state_spec = end_state_spec.to_dict()
         logger.info(
@@ -138,136 +150,125 @@ class CliEpisodeRunner(EpisodeController):
             end_state_spec.summary, end_state_spec.expected_steps,
             len(end_state_spec.assertions),
         )
+        return end_state_spec
 
+    def _run_steps(self, agent, end_state_spec: EndStateSpec, result: CliEpisodeResult, writer) -> str | None:
+        """Run commands until submit, a loop, or the step budget. Returns the early stop, if any."""
         # Tier 2: live loop / stuck-failure detector.
         loop_detector = LoopDetector(LoopDetectorConfig(
             repeat_threshold=self._cfg.loop_repeat_threshold,
             consecutive_failure_threshold=self._cfg.loop_consecutive_failures,
             window_size=self._cfg.loop_window_size,
         ))
-
-        early_termination: str | None = None
         computer_use = self.computer_use()
-        # Persist each step as it happens so a crash mid-episode still leaves a
-        # durable, replayable partial trace.
-        writer = TrajectoryWriter(jsonl_path, result) if jsonl_path is not None else None
 
-        try:
-            for step_idx in range(self._cfg.max_steps):
-                state = self._state(end_state_spec)
+        def record(step_record: dict) -> None:
+            result.steps.append(step_record)
+            if writer is not None:
+                writer.record(step_record)
 
-                try:
-                    command = agent.act(state=state, objective=self._cfg.objective)
-                except Exception as exc:
-                    logger.warning("[cli-ep] step %d: agent.act failed: %s", step_idx, exc)
-                    command = "echo 'agent error'"
-
-                if is_submit_action(command):
-                    step_record = {
-                        "step_index": step_idx,
-                        "command": command,
-                        "stdout": "",
-                        "stderr": "",
-                        "exit_code": 0,
-                        "objective_score": 0.0,
-                        "reward": 0.0,
-                        "terminated": True,
-                        "truncated": False,
-                        "termination_reason": "submitted",
-                    }
-                    result.steps.append(step_record)
-                    if writer is not None:
-                        writer.record(step_record)
-                    result.termination_reason = "submitted"
-                    break
-
-                try:
-                    exec_result = computer_use.execute({"action_type": "exec", "command": command})
-                except InvalidActionError as exc:
-                    exec_result = {"command": command, "stdout": "", "stderr": exc.detail, "exit_code": -1}
-                self._history.append(exec_result)
-
-                step_record = {
+        for step_idx in range(self._cfg.max_steps):
+            command = self._next_command(agent, end_state_spec, step_idx)
+            if is_submit_action(command):
+                record({
                     "step_index": step_idx,
                     "command": command,
-                    "stdout": exec_result["stdout"],
-                    "stderr": exec_result["stderr"],
-                    "exit_code": exec_result["exit_code"],
+                    "stdout": "",
+                    "stderr": "",
+                    "exit_code": 0,
                     "objective_score": 0.0,
                     "reward": 0.0,
-                }
-                result.steps.append(step_record)
-                if writer is not None:
-                    writer.record(step_record)
-                logger.info(
-                    "[cli-ep] step %02d/%d  cmd=%r  exit=%d",
-                    step_idx + 1, self._cfg.max_steps, command[:50],
-                    exec_result["exit_code"],
-                )
+                    "terminated": True,
+                    "truncated": False,
+                    "termination_reason": "submitted",
+                })
+                result.termination_reason = "submitted"
+                return None
 
-                # Tier 2: kill the episode if the agent is looping or stuck failing.
-                loop_termination = loop_detector.observe(
-                    command, exec_result["exit_code"], exec_result["stdout"]
-                )
-                if loop_termination is not None:
-                    early_termination = loop_termination
-                    result.termination_reason = loop_termination
-                    break
-
-            else:
-                result.termination_reason = "max_steps"
-
-            # Tier 3: grade the trajectory and replace the per-step running sum
-            # with the tiered final reward.
-            grade: TrajectoryGrade = self._reward_engine.grade(
-                objective=self._cfg.objective,
-                spec=end_state_spec,
-                history=self._history,
-                container_id=self._cfg.container_id,
-                early_termination=early_termination,
-            )
-            result.grade = grade.to_dict()
-            result.final_objective_score = grade.test_pass_rate
-            passed = grade.test_pass_rate >= self._cfg.success_threshold
-            verification = VerificationResult.from_checks(
-                "tiered_cli_grader",
-                [CheckResult(
-                    name="assertion_pass_rate",
-                    passed=passed,
-                    score=grade.test_pass_rate,
-                )],
-            )
-            reward = RewardBreakdown(
-                total_reward=grade.final_reward,
-                components=[
-                    RewardComponent(name="test_pass_rate", value=grade.test_pass_rate),
-                    RewardComponent(name="efficiency_factor", value=grade.efficiency_factor),
-                    RewardComponent(name="partial_credit", value=grade.partial_credit),
-                ],
-            )
-            result.apply_evaluation(EpisodeEvaluation(
-                passed=passed,
-                reward=reward,
-                verification_results=[verification],
-                reason=result.termination_reason,
-            ))
-            if result.steps:
-                result.steps[-1]["reward"] = grade.final_reward
-                result.steps[-1]["objective_score"] = grade.test_pass_rate
-                result.steps[-1]["termination_reason"] = result.termination_reason
-                result.steps[-1]["terminated"] = (
-                    result.termination_reason == "submitted"
-                )
-                result.steps[-1]["truncated"] = (
-                    result.termination_reason != "submitted"
-                )
-            result.completed_at = datetime.now(timezone.utc)
+            try:
+                exec_result = computer_use.execute({"action_type": "exec", "command": command})
+            except InvalidActionError as exc:
+                exec_result = {"command": command, "stdout": "", "stderr": exc.detail, "exit_code": -1}
+            self._history.append(exec_result)
+            record({
+                "step_index": step_idx,
+                "command": command,
+                "stdout": exec_result["stdout"],
+                "stderr": exec_result["stderr"],
+                "exit_code": exec_result["exit_code"],
+                "objective_score": 0.0,
+                "reward": 0.0,
+            })
             logger.info(
-                "[cli-ep] graded: pass_rate=%.2f efficiency=%.2f partial=%.2f → reward=%.2f (%s)",
-                grade.test_pass_rate, grade.efficiency_factor, grade.partial_credit,
-                grade.final_reward, grade.reasoning,
+                "[cli-ep] step %02d/%d  cmd=%r  exit=%d",
+                step_idx + 1, self._cfg.max_steps, command[:50],
+                exec_result["exit_code"],
             )
-        finally:
-            if writer is not None:
-                writer.close()
-        return result
+
+            # Tier 2: kill the episode if the agent is looping or stuck failing.
+            loop_termination = loop_detector.observe(
+                command, exec_result["exit_code"], exec_result["stdout"]
+            )
+            if loop_termination is not None:
+                result.termination_reason = loop_termination
+                return loop_termination
+
+        result.termination_reason = "max_steps"
+        return None
+
+    def _next_command(self, agent, end_state_spec: EndStateSpec, step_idx: int) -> str:
+        try:
+            return agent.act(state=self._state(end_state_spec), objective=self._cfg.objective)
+        except Exception as exc:
+            logger.warning("[cli-ep] step %d: agent.act failed: %s", step_idx, exc)
+            return "echo 'agent error'"
+
+    def _grade(self, result: CliEpisodeResult, end_state_spec: EndStateSpec, early_termination: str | None) -> None:
+        """Tier 3: grade the trajectory and replace the running sum with the tiered final reward."""
+        grade: TrajectoryGrade = self._reward_engine.grade(
+            objective=self._cfg.objective,
+            spec=end_state_spec,
+            history=self._history,
+            container_id=self._cfg.container_id,
+            early_termination=early_termination,
+        )
+        result.grade = grade.to_dict()
+        result.final_objective_score = grade.test_pass_rate
+        passed = grade.test_pass_rate >= self._cfg.success_threshold
+        verification = VerificationResult.from_checks(
+            "tiered_cli_grader",
+            [CheckResult(
+                name="assertion_pass_rate",
+                passed=passed,
+                score=grade.test_pass_rate,
+            )],
+        )
+        reward = RewardBreakdown(
+            total_reward=grade.final_reward,
+            components=[
+                RewardComponent(name="test_pass_rate", value=grade.test_pass_rate),
+                RewardComponent(name="efficiency_factor", value=grade.efficiency_factor),
+                RewardComponent(name="partial_credit", value=grade.partial_credit),
+            ],
+        )
+        result.apply_evaluation(EpisodeEvaluation(
+            passed=passed,
+            reward=reward,
+            verification_results=[verification],
+            reason=result.termination_reason,
+        ))
+        if result.steps:
+            submitted = result.termination_reason == "submitted"
+            result.steps[-1].update(
+                reward=grade.final_reward,
+                objective_score=grade.test_pass_rate,
+                termination_reason=result.termination_reason,
+                terminated=submitted,
+                truncated=not submitted,
+            )
+        result.completed_at = datetime.now(timezone.utc)
+        logger.info(
+            "[cli-ep] graded: pass_rate=%.2f efficiency=%.2f partial=%.2f → reward=%.2f (%s)",
+            grade.test_pass_rate, grade.efficiency_factor, grade.partial_credit,
+            grade.final_reward, grade.reasoning,
+        )

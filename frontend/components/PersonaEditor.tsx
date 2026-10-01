@@ -8,17 +8,14 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { PersonaCard } from "@/components/persona-editor/PersonaCard";
+import { driverChoices, isScriptedDriver } from "@/lib/personaDrivers";
 import { DEFAULT_TRAITS } from "@/lib/personaTraits";
 import type { Behavior, PersonaEntry, Population, Payload } from "@/components/persona-editor/types";
 
 export type { Behavior, PersonaEntry, Population } from "@/components/persona-editor/types";
 
-const DRIVERS = [
-  { id: "scripted", label: "Scripted", hint: "Free, offline, byte-reproducible. Personas act at human-like times but say nothing new." },
-  { id: "anthropic:claude-sonnet-5", label: "Claude Sonnet 5", hint: "A model decides each turn, inside the action space you set below." },
-  { id: "anthropic:claude-opus-5", label: "Claude Opus 5", hint: "A model decides each turn, inside the action space you set below." },
-  { id: "openai:gpt-4.1", label: "GPT-4.1", hint: "A model decides each turn, inside the action space you set below." },
-];
+const SCRIPTED_HINT = "Free, offline, byte-reproducible. Personas act at human-like times but say nothing new.";
+const MODEL_HINT = "A model decides each turn, inside the action space you set below.";
 
 const DEFAULT_BEHAVIOR: Behavior = {
   allowed_actions: [],
@@ -137,7 +134,7 @@ export default function PersonaEditor({
     [population.roster],
   );
 
-  const driverHint = DRIVERS.find((d) => d.id === population.driver)?.hint;
+  const driverHint = isScriptedDriver(population.driver) ? SCRIPTED_HINT : MODEL_HINT;
 
   return (
     <div className="persona-editor">
@@ -241,16 +238,13 @@ export default function PersonaEditor({
               value={population.driver}
               onChange={(e) => mutate({ driver: e.target.value })}
             >
-              {DRIVERS.map((d) => (
+              {driverChoices(population.driver).map((d) => (
                 <option key={d.id} value={d.id}>
                   {d.label}
                 </option>
               ))}
-              {!DRIVERS.some((d) => d.id === population.driver) && (
-                <option value={population.driver}>{population.driver}</option>
-              )}
             </select>
-            {driverHint && <p className="persona-hint">{driverHint}</p>}
+            <p className="persona-hint">{driverHint}</p>
           </div>
         </CardContent>
       </Card>

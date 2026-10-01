@@ -13,6 +13,9 @@ logger = logging.getLogger("forge.reliability")
 
 FAILURE_TYPE_INFRASTRUCTURE = "infrastructure"
 FAILURE_TYPE_AGENT = "agent"
+# The run asked for something the environment cannot provide (an unknown
+# task). Neither side failed, and retrying cannot help.
+FAILURE_TYPE_CONFIGURATION = "configuration"
 
 # Specific Infrastructure Failure Reasons
 REASON_CONTAINER_UNREACHABLE = "container_unreachable"

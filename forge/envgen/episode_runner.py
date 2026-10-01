@@ -5,6 +5,7 @@ import logging
 import secrets
 import time
 from dataclasses import dataclass, field
+from typing import Any
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -136,6 +137,21 @@ class EpisodeResult(BaseEpisodeResult):
 # ---------------------------------------------------------------------------
 # Episode runner
 # ---------------------------------------------------------------------------
+
+@dataclass
+class _EpisodeRun:
+    """What one episode's step loop works with, beyond the runner's own config."""
+
+    agent: Any
+    result: "EpisodeResult"
+    available_actions: list[dict]
+    writer: Any
+    dead_end: Any
+    max_steps: Any
+    replay_steps: list[dict] | None = None
+    snapshot_manager: Any = None
+    model_output_log: list[dict] | None = None
+
 
 class ContainerEpisodeRunner(EpisodeController):
     """Runs one or more agent episodes against a containerized FastAPI environment.
@@ -334,14 +350,39 @@ class ContainerEpisodeRunner(EpisodeController):
 
         cfg = self._cfg
         result = EpisodeResult(episode_id=episode_id, config=cfg)
+        available_actions, state = self._start(episode_id, seed)
+        # Write each step as it happens so a crash mid-episode still leaves a
+        # durable, replayable partial trace (not just an all-or-nothing dump).
+        writer = TrajectoryWriter(jsonl_path, result) if jsonl_path is not None else None
+        run = _EpisodeRun(
+            agent=agent,
+            result=result,
+            available_actions=available_actions,
+            writer=writer,
+            dead_end=DeadEndTerminationPolicy(cfg.dead_end_patience),
+            max_steps=MaxStepsTerminationPolicy(cfg.max_steps),
+            replay_steps=replay_steps,
+            snapshot_manager=snapshot_manager or SnapshotManager(
+                env_type="general", interval=get_reliability_settings().snapshot_interval
+            ),
+            model_output_log=model_output_log,
+        )
+        try:
+            self._run_steps(run, state, resume_from_step=resume_from_step)
+        finally:
+            if writer is not None:
+                writer.close()
+        return result
 
+    def _start(self, episode_id: str, seed: int | None) -> tuple[list[dict], dict]:
+        """(available actions, initial state) once the app is healthy and reset."""
         # Wait for the container app to be ready before doing anything else.
         # This is the root cause of ECONNREFUSED: Docker marks the container
         # as "running" before uvicorn inside finishes startup.
         if not self.wait_for_health():
             raise InfrastructureCrash(
                 reason=REASON_CONTAINER_UNREACHABLE,
-                detail=f"container_unreachable: {cfg.base_url}",
+                detail=f"container_unreachable: {self._cfg.base_url}",
                 step=0,
             )
 
@@ -353,8 +394,6 @@ class ContainerEpisodeRunner(EpisodeController):
                 "description": "Finish the episode and grade the current state",
             },
         ]
-
-        # Reset the environment
         try:
             state = self._reset(seed=seed)
         except Exception as exc:
@@ -365,134 +404,93 @@ class ContainerEpisodeRunner(EpisodeController):
                 original_exc=exc,
                 step=0,
             )
+        return available_actions, state
 
-        dead_end_policy = DeadEndTerminationPolicy(cfg.dead_end_patience)
-        max_steps_policy = MaxStepsTerminationPolicy(cfg.max_steps)
-        # Write each step as it happens so a crash mid-episode still leaves a
-        # durable, replayable partial trace (not just an all-or-nothing dump).
-        writer = TrajectoryWriter(jsonl_path, result) if jsonl_path is not None else None
-
-        if snapshot_manager is None:
-            snapshot_manager = SnapshotManager(
-                env_type="general", interval=get_reliability_settings().snapshot_interval
-            )
-
-        try:
-            self._run_steps(
-                agent,
-                cfg,
-                result,
-                dead_end_policy,
-                available_actions,
-                episode_id,
-                writer,
-                state,
-                max_steps_policy=max_steps_policy,
-                replay_steps=replay_steps,
-                resume_from_step=resume_from_step,
-                snapshot_manager=snapshot_manager,
-                model_output_log=model_output_log,
-            )
-        finally:
-            if writer is not None:
-                writer.close()
-
-        return result
-
-    def _run_steps(
-        self,
-        agent,
-        cfg,
-        result,
-        dead_end_policy,
-        available_actions,
-        episode_id,
-        writer,
-        state,
-        max_steps_policy=None,
-        replay_steps: list[dict] | None = None,
-        resume_from_step: int = 0,
-        snapshot_manager: SnapshotManager | None = None,
-        model_output_log: list[dict] | None = None,
-    ):
-        max_steps_policy = max_steps_policy or MaxStepsTerminationPolicy(cfg.max_steps)
-        for step_idx in range(resume_from_step, cfg.max_steps):
-            state_hash_before = self._normalizer.hash(state)
-
-            if snapshot_manager is not None and snapshot_manager.should_snapshot(step_idx):
-                snapshot_manager.capture_snapshot(
-                    step=step_idx,
-                    state_hash=state_hash_before,
-                    http_client=self._http,
-                    base_url=cfg.base_url,
-                )
-
-            action = self._next_action(
-                agent, state, cfg.objective, available_actions, step_idx, state_hash_before, replay_steps, episode_id,
-            )
-            # Write model output before action runs
-            if model_output_log is not None:
-                model_output_log.append({
-                    "step_index": step_idx,
-                    "action": action,
-                    "state_hash_before": state_hash_before,
-                })
-            action = self._known_action(action, available_actions, step_idx, episode_id)
-
-            if is_submit_action(action):
-                self._submit(result, state, action, step_idx, writer)
+    def _run_steps(self, run: "_EpisodeRun", state: dict, *, resume_from_step: int = 0) -> None:
+        for step_idx in range(resume_from_step, self._cfg.max_steps):
+            state = self._step(run, step_idx, state)
+            if state is None:
                 break
+        run.result.completed_at = datetime.now(timezone.utc)
 
-            self._execute_action(action, step_idx)
-            new_state = self._observe_after(step_idx, episode_id)
-            state_hash_after = self._normalizer.hash(new_state)
+    def _step(self, run: "_EpisodeRun", step_idx: int, state: dict) -> dict | None:
+        """Take one step. Returns the next state, or None once the episode has ended."""
+        cfg, result, episode_id = self._cfg, run.result, run.result.episode_id
+        state_hash_before = self._normalizer.hash(state)
 
-            # Stopping checks use only deterministic state progress and budget.
-            outcome = StepOutcome(step_index=step_idx, state_hash=state_hash_after)
-            decision = dead_end_policy.check(outcome) or max_steps_policy.check(outcome)
-            step = StepRecord(
-                step_index=step_idx,
-                state_before=state,
-                action=action,
-                state_after=new_state,
-                reward=0.0,
-                objective_score=0.0,
-                state_hash_before=state_hash_before,
-                state_hash_after=state_hash_after,
-                terminated=bool(decision and not decision.truncated),
-                truncated=bool(decision and decision.truncated),
-                termination_reason=decision.reason if decision else None,
-            )
-            result.steps.append(step)
-            logger.info(
-                "[%s] step %02d/%d  hash=%s→%s%s",
-                episode_id,
-                step_idx + 1,
-                cfg.max_steps,
-                state_hash_before[:6],
-                state_hash_after[:6],
-                f"  → {decision.reason}" if decision else "",
+        if run.snapshot_manager is not None and run.snapshot_manager.should_snapshot(step_idx):
+            run.snapshot_manager.capture_snapshot(
+                step=step_idx,
+                state_hash=state_hash_before,
+                http_client=self._http,
+                base_url=cfg.base_url,
             )
 
-            if decision is not None:
-                result.termination_reason = decision.reason or (
-                    "truncated" if decision.truncated else "unknown"
-                )
-                derived_diff = self._manifest.derived_diff(state, new_state) if self._manifest else {}
-                self._finalize_result(
-                    result,
-                    new_state,
-                    action,
-                    derived_diff=derived_diff or None,
-                    state_changed=state_hash_before != state_hash_after,
-                )
-                self._record_graded(step, result, writer)
-                break
-            state = new_state
-            if writer is not None:
-                writer.record(step)
+        action = self._next_action(
+            run.agent, state, cfg.objective, run.available_actions, step_idx, state_hash_before,
+            run.replay_steps, episode_id,
+        )
+        # Write model output before action runs
+        if run.model_output_log is not None:
+            run.model_output_log.append({
+                "step_index": step_idx,
+                "action": action,
+                "state_hash_before": state_hash_before,
+            })
+        action = self._known_action(action, run.available_actions, step_idx, episode_id)
 
-        result.completed_at = datetime.now(timezone.utc)
+        if is_submit_action(action):
+            self._submit(result, state, action, step_idx, run.writer)
+            return None
+
+        self._execute_action(action, step_idx)
+        new_state = self._observe_after(step_idx, episode_id)
+        state_hash_after = self._normalizer.hash(new_state)
+
+        # Stopping checks use only deterministic state progress and budget.
+        outcome = StepOutcome(step_index=step_idx, state_hash=state_hash_after)
+        decision = run.dead_end.check(outcome) or run.max_steps.check(outcome)
+        step = StepRecord(
+            step_index=step_idx,
+            state_before=state,
+            action=action,
+            state_after=new_state,
+            reward=0.0,
+            objective_score=0.0,
+            state_hash_before=state_hash_before,
+            state_hash_after=state_hash_after,
+            terminated=bool(decision and not decision.truncated),
+            truncated=bool(decision and decision.truncated),
+            termination_reason=decision.reason if decision else None,
+        )
+        result.steps.append(step)
+        logger.info(
+            "[%s] step %02d/%d  hash=%s→%s%s",
+            episode_id,
+            step_idx + 1,
+            cfg.max_steps,
+            state_hash_before[:6],
+            state_hash_after[:6],
+            f"  → {decision.reason}" if decision else "",
+        )
+
+        if decision is None:
+            if run.writer is not None:
+                run.writer.record(step)
+            return new_state
+        result.termination_reason = decision.reason or (
+            "truncated" if decision.truncated else "unknown"
+        )
+        derived_diff = self._manifest.derived_diff(state, new_state) if self._manifest else {}
+        self._finalize_result(
+            result,
+            new_state,
+            action,
+            derived_diff=derived_diff or None,
+            state_changed=state_hash_before != state_hash_after,
+        )
+        self._record_graded(step, result, run.writer)
+        return None
 
     @staticmethod
     def _next_action(

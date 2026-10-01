@@ -180,3 +180,72 @@ def test_a_running_batch_cannot_be_deleted(client, queued):
 def test_an_unknown_batch_is_not_found(client):
     assert client.get("/api/task-factory/batches/tb_missing").status_code == 404
     assert client.delete("/api/task-factory/batches/tb_missing").status_code == 404
+
+
+def _preference_batch(client) -> str:
+    from forge.taskfactory.schemas import (
+        Check, GoldenStep, ReviewVerdict, SyntheticTask, TaskDraft, TaskRejection, TaskSeed,
+    )
+
+    def draft(slot: int, tool: str) -> TaskDraft:
+        return TaskDraft(
+            slot=slot, title=f"draft {slot}", objective="archive e1", seed=TaskSeed(),
+            golden=[GoldenStep(tool=tool, args={})],
+            checks=[Check(kind="value", path="archived", value=True)],
+        )
+
+    verdict = ReviewVerdict(
+        slot=0, realistic=True, realistic_reason="ok", fair=True, fair_reason="ok",
+        sensible=True, sensible_reason="ok",
+    )
+    task = SyntheticTask(
+        id="t-00001", category="triage", difficulty=1, title="Archive", objective="archive e1",
+        seed=TaskSeed(), golden=[GoldenStep(tool="/archive_email", args={})],
+        checks=[Check(kind="value", path="archived", value=True)], reflection_points=[],
+        step_budget=2, round=2, review=verdict, fingerprint="fp",
+    )
+    rejections = [
+        TaskRejection(slot=0, category="triage", difficulty=1, round=1, stage="pass_k",
+                      reason="flaky check", draft=draft(0, "/delete_email")),
+        TaskRejection(slot=1, category="triage", difficulty=1, round=1, stage="review",
+                      reason="unfair", draft=draft(1, "/star_email")),
+    ]
+    taxonomy = Taxonomy(categories=[TaxonomyCategory(name="triage", description="sort", exercises=[], difficulties=[1])])
+    with client.session_factory() as db:
+        batch_id = task_registry.create_batch(
+            db, env_name="mail", requested=2, pass_k=3,
+            writer=ModelSpec("anthropic", "claude-sonnet-5"), validator=ModelSpec("openai", "gpt-5"),
+        )
+        task_registry.save_result(db, batch_id, PipelineResult(
+            requested=2, taxonomy=taxonomy, tasks=[task], rejections=rejections,
+            data_type="preference_pairs",
+        ))
+    return batch_id
+
+
+def test_exported_preference_pairs_compare_drafts_written_for_the_same_slot(client):
+    batch_id = _preference_batch(client)
+
+    pairs = client.get(f"/api/task-factory/batches/{batch_id}/export").json()["preference_pairs"]
+
+    assert pairs == [{
+        "prompt": "archive e1",
+        "preferred_response": "/archive_email",
+        "dispreferred_response": "/delete_email",
+        "metadata": {"task_id": "t-00001", "difficulty": 1, "rejection_reason": "flaky check"},
+    }]
+
+
+def test_a_preference_batch_without_rejected_drafts_exports_no_pairs(client):
+    with client.session_factory() as db:
+        batch_id = task_registry.create_batch(
+            db, env_name="mail", requested=1, pass_k=3,
+            writer=ModelSpec("anthropic", "claude-sonnet-5"), validator=ModelSpec("openai", "gpt-5"),
+        )
+        task_registry.save_result(db, batch_id, PipelineResult(
+            requested=1, taxonomy=Taxonomy(categories=[]), data_type="preference_pairs",
+        ))
+
+    body = client.get(f"/api/task-factory/batches/{batch_id}/export").json()
+
+    assert body["preference_pairs"] == []

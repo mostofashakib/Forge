@@ -129,20 +129,8 @@ def generate_benchmark_graphs(
 ) -> BenchmarkGraphData:
     """Generate comprehensive benchmark graph options and diagnostic signals."""
     if not trials:
-        return BenchmarkGraphData(
-            k_labels=[1],
-            pass_at_k=[0.0],
-            pass_pow_k=[0.0],
-            cohens_kappa=0.0,
-            gap_pass_vs_pow=[0.0],
-            diagnostics={
-                "reward_hacking_risk": "low",
-                "memorization_risk": "low",
-                "contamination_risk": "low",
-                "genuine_learning_index": 0.0,
-            },
-            chart_configs={},
-        )
+        # No samples means no measurement, not a low risk.
+        raise ValueError("no trials to chart")
 
     # Determine feasible range of k
     min_total = min(t.total_samples for t in trials)

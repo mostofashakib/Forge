@@ -4,7 +4,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import Callable
+import shutil
+import tempfile
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -245,13 +248,31 @@ async def build_premade(request: BuildRequest, reporter: BuildReporter) -> None:
     template = request.env_type[len("premade:"):]
     reporter.log(f"[forge] setting up premade '{template}' environment…")
     reporter.building()
-    premade_dir = Path(__file__).parent.parent.parent.parent / "docker" / "premade" / template
-    if not premade_dir.exists():
-        raise FileNotFoundError(f"Premade template '{template}' not found at {premade_dir}")
-    reporter.log(f"[forge] building Docker image for '{template}'…")
-    image_tag, container_id, port = await _build_and_run(request.env_name, premade_dir)
+    with _staged_premade(template) as context_dir:
+        reporter.log(f"[forge] building Docker image for '{template}'…")
+        image_tag, container_id, port = await _build_and_run(request.env_name, context_dir)
     reporter.running(container_id, port, image_tag)
     reporter.log(f"[forge] {template} environment ready on port {port} ✓")
+
+
+_PREMADE_ROOT = Path(__file__).resolve().parents[3] / "docker" / "premade"
+
+
+@contextmanager
+def _staged_premade(template: str) -> Iterator[Path]:
+    """A throwaway build context: the app's folder plus the shared Forge protocol.
+
+    The build rewrites files in its context, so it never runs on the tracked
+    template itself.
+    """
+    source = _PREMADE_ROOT / template
+    if template != source.name or template.startswith("_") or not source.is_dir():
+        raise FileNotFoundError(f"Premade template '{template}' not found at {source}")
+    with tempfile.TemporaryDirectory(prefix=f"forge-premade-{template}-") as staging:
+        context_dir = Path(staging) / template
+        shutil.copytree(source, context_dir, ignore=shutil.ignore_patterns("__pycache__", "*.db"))
+        shutil.copy2(_PREMADE_ROOT / "_shared" / "forge_protocol.py", context_dir)
+        yield context_dir
 
 
 async def build_cli(request: BuildRequest, reporter: BuildReporter) -> None:

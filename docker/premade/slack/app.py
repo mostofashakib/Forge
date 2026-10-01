@@ -16,11 +16,10 @@ Action endpoints (all POST):
 """
 from __future__ import annotations
 
-import json
 from datetime import datetime, timedelta
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -29,6 +28,9 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
+from forge_protocol import (
+    BASELINE_SLOT, TIMESTAMP_FORMAT, Ledger, dump_ledger, forge_router, protocol_tables, restore_ledger, save_snapshot,
+)
 from slack_seed import CHANNEL_AUTO_RESPONDERS, SEED_CHANNELS, SEED_DMS, SEED_MESSAGES, SEED_REACTIONS, SEED_READ_STATES, SEED_THREAD_REPLIES
 
 # ---------------------------------------------------------------------------
@@ -105,28 +107,8 @@ class ChannelReadState(Base):
     unread_count = Column(Integer, default=0)
 
 
-class SavedState(Base):
-    __tablename__ = "saved_states"
-
-    slot = Column(String, primary_key=True)
-    data = Column(Text, nullable=False)
-
-
-class ActionLog(Base):
-    __tablename__ = "action_log"
-    id = Column(String, primary_key=True)
-    action_type = Column(String, nullable=False)
-    target_id = Column(String, nullable=True)
-    payload = Column(Text, default="{}")
-    timestamp = Column(String, nullable=False)
-
-
-class ForgeCounter(Base):
-    """The virtual clock and the id counters, stored with the data they number."""
-    __tablename__ = "forge_counters"
-    name = Column(String, primary_key=True)
-    value = Column(Integer, nullable=False)
-
+_TABLES = protocol_tables(Base)
+ActionLog = _TABLES.action_log
 
 Base.metadata.create_all(bind=engine)
 
@@ -148,39 +130,6 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-# Episodes must replay identically, so the app never reads the wall clock or
-# mints random ids. Time is a counter that moves one second per event, and ids
-# count up per prefix. Both live in SQLite, so they reset, snapshot, and
-# survive a restart together with the rows they describe.
-
-def _clock_value(db: Session) -> int:
-    counter = db.get(ForgeCounter, "clock")
-    return counter.value if counter is not None else 0
-
-
-def _bump(db: Session, name: str) -> int:
-    counter = db.get(ForgeCounter, name)
-    if counter is None:
-        counter = ForgeCounter(name=name, value=0)
-        db.add(counter)
-        db.flush()  # later lookups in this session must find it
-    counter.value += 1
-    return counter.value
-
-
-def _virtual_time(seconds: int) -> str:
-    return (_CLOCK_EPOCH + timedelta(seconds=seconds)).strftime(_TIMESTAMP_FORMAT)
-
-
-def _now(db: Session) -> str:
-    return _virtual_time(_bump(db, "clock"))
-
-
-def _next_id(db: Session, prefix: str) -> str:
-    # The underscore keeps minted ids apart from seed ids like "m014".
-    return f"{prefix}_{_bump(db, f'id:{prefix}'):04d}"
-
 
 def _counts_by_channel(db: Session, *criteria) -> dict[str, int]:
     return dict(
@@ -243,16 +192,6 @@ def _dm_to_dict(dm: DirectMessage) -> dict:
         "timestamp": dm.timestamp,
         "is_read": dm.is_read,
     }
-
-
-def _log_action(db: Session, action_type: str, target_id: str = None, payload: dict = None) -> None:
-    db.add(ActionLog(
-        id=_next_id(db, "a"),
-        action_type=action_type,
-        target_id=target_id,
-        payload=json.dumps(payload or {}),
-        timestamp=_now(db),
-    ))
 
 
 def _get_state_dict(db: Session) -> dict:
@@ -318,18 +257,10 @@ def _dump_full_db(db: Session) -> dict:
         {"channel_id": rs.channel_id, "unread_count": rs.unread_count}
         for rs in db.query(ChannelReadState).all()
     ]
-    action_log = [
-        {"id": a.id, "action_type": a.action_type, "target_id": a.target_id,
-         "payload": a.payload, "timestamp": a.timestamp}
-        for a in db.query(ActionLog).order_by(ActionLog.timestamp).all()
-    ]
-    forge_counters = {
-        c.name: c.value for c in db.query(ForgeCounter).order_by(ForgeCounter.name).all()
-    }
     return {
         "channels": channels, "messages": messages, "reactions": reactions,
         "direct_messages": dms, "user_statuses": statuses, "read_states": read_states,
-        "action_log": action_log, "forge_counters": forge_counters,
+        **dump_ledger(db, _TABLES),
     }
 
 
@@ -340,19 +271,12 @@ def _restore_from_dict(db: Session, data: dict) -> None:
     db.query(DirectMessage).delete()
     db.query(UserStatus).delete()
     db.query(ChannelReadState).delete()
-    db.query(ActionLog).delete()
-    # A snapshot carries the clock and counters, so restoring it rewinds them
-    # too. State JSON without them leaves them running, which keeps new ids
-    # clear of the rows already there.
-    if "forge_counters" in data:
-        db.query(ForgeCounter).delete()
-        for name, value in data["forge_counters"].items():
-            db.add(ForgeCounter(name=name, value=value))
+    restore_ledger(db, _TABLES, data)
     for c in data.get("channels", []):
         db.add(Channel(
             id=c["id"], name=c["name"], purpose=c.get("purpose", ""),
             is_private=c.get("is_private", False), is_archived=c.get("is_archived", c.get("archived", False)),
-            created_at=c["created_at"] if "created_at" in c else _now(db),
+            created_at=c["created_at"] if "created_at" in c else _ledger.now(db),
         ))
     for m in data.get("messages", []):
         db.add(Message(
@@ -375,9 +299,6 @@ def _restore_from_dict(db: Session, data: dict) -> None:
         ))
     for rs in data.get("read_states", []):
         db.add(ChannelReadState(channel_id=rs["channel_id"], unread_count=rs.get("unread_count", 0)))
-    for a in data.get("action_log", []):
-        db.add(ActionLog(id=a["id"], action_type=a["action_type"], target_id=a.get("target_id"),
-                         payload=a.get("payload", "{}"), timestamp=a["timestamp"]))
     db.commit()
 
 
@@ -386,13 +307,12 @@ def _restore_from_dict(db: Session, data: dict) -> None:
 # ---------------------------------------------------------------------------
 
 
-_TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 # Virtual time starts a minute after the newest seed message, so anything
 # created during an episode sorts as the newest activity.
-_CLOCK_EPOCH = max(
-    datetime.strptime(item["timestamp"], _TIMESTAMP_FORMAT)
+_ledger = Ledger(_TABLES, epoch=max(
+    datetime.strptime(item["timestamp"], TIMESTAMP_FORMAT)
     for item in (*SEED_MESSAGES, *SEED_THREAD_REPLIES, *SEED_DMS)
-) + timedelta(minutes=1)
+) + timedelta(minutes=1))
 
 
 def _seed_if_empty() -> None:
@@ -428,91 +348,18 @@ def _seed_if_empty() -> None:
         for rs in SEED_READ_STATES:
             db.add(ChannelReadState(channel_id=rs["channel_id"], unread_count=rs["unread_count"]))
         db.commit()
-    # Auto-save baseline snapshot after seeding
-    with SessionLocal() as snap_db:
-        data = _dump_full_db(snap_db)
-        snap_db.add(SavedState(slot="baseline", data=json.dumps(data)))
-        snap_db.commit()
+    with SessionLocal() as db:
+        save_snapshot(db, _TABLES, BASELINE_SLOT, _dump_full_db(db))
 
 
 _seed_if_empty()
 
-
-# ---------------------------------------------------------------------------
-# Forge protocol
-# ---------------------------------------------------------------------------
-
-@app.get("/forge/health")
-def health():
-    return {"status": "ok"}
-
-
-@app.get("/forge/state")
-def forge_state():
-    with SessionLocal() as db:
-        return _get_state_dict(db)
-
-
-@app.get("/forge/dump")
-def forge_dump():
-    """The full restorable state, in the shape /forge/restore-state takes."""
-    with SessionLocal() as db:
-        return _dump_full_db(db)
-
-
-@app.post("/forge/reset")
-def forge_reset():
-    with SessionLocal() as db:
-        db.query(Reaction).delete()
-        db.query(Message).delete()
-        db.query(Channel).delete()
-        db.query(DirectMessage).delete()
-        db.query(UserStatus).delete()
-        db.query(ChannelReadState).delete()
-        db.query(ActionLog).delete()
-        db.query(SavedState).delete()
-        db.query(ForgeCounter).delete()
-        db.commit()
-    _seed_if_empty()
-    with SessionLocal() as db:
-        return {"status": "reset", "state": _get_state_dict(db)}
-
-
-class SnapshotRequest(BaseModel):
-    slot: str
-
-
-@app.post("/forge/snapshot")
-def forge_snapshot(req: SnapshotRequest):
-    with SessionLocal() as db:
-        data = _dump_full_db(db)
-        saved = db.query(SavedState).filter(SavedState.slot == req.slot).first()
-        if saved:
-            saved.data = json.dumps(data)
-        else:
-            db.add(SavedState(slot=req.slot, data=json.dumps(data)))
-        db.commit()
-    return {"status": "snapshot_saved", "slot": req.slot}
-
-
-@app.post("/forge/restore/{slot}")
-def forge_restore(slot: str):
-    with SessionLocal() as db:
-        saved = db.query(SavedState).filter(SavedState.slot == slot).first()
-        if not saved:
-            raise HTTPException(status_code=404, detail=f"Slot '{slot}' not found")
-        data = json.loads(saved.data)
-        _restore_from_dict(db, data)
-        state = _get_state_dict(db)
-    return {"status": "restored", "slot": slot, "state": state}
-
-
-@app.post("/forge/restore-state")
-def forge_restore_state(data: dict):
-    with SessionLocal() as db:
-        _restore_from_dict(db, data)
-        state = _get_state_dict(db)
-    return {"status": "restored", "state": state}
+app.include_router(forge_router(
+    SessionLocal, _TABLES,
+    state=_get_state_dict, dump=_dump_full_db, restore=_restore_from_dict,
+    domain_tables=(Reaction, Message, Channel, DirectMessage, UserStatus, ChannelReadState),
+    seed=_seed_if_empty,
+))
 
 
 # ---------------------------------------------------------------------------
@@ -607,12 +454,12 @@ def _get_channel(db: Session, channel_ref: str) -> Channel | None:
 def receive_dm(req: ReceiveDmRequest):
     """Inject an incoming DM. Used by evaluators."""
     with SessionLocal() as db:
-        dm_id = _next_id(db, "dm")
+        dm_id = _ledger.next_id(db, "dm")
         db.add(DirectMessage(
             id=dm_id, from_user=req.from_user, to_user="me",
-            text=req.text, timestamp=_now(db), is_read=False,
+            text=req.text, timestamp=_ledger.now(db), is_read=False,
         ))
-        _log_action(db, "receive_dm", dm_id, {"from": req.from_user})
+        _ledger.log_action(db, "receive_dm", dm_id, {"from": req.from_user})
         db.commit()
         state = _get_state_dict(db)
     return {"status": "received", "dm_id": dm_id, "state": state}
@@ -626,18 +473,18 @@ def send_message(req: SendMessageRequest):
             return {"status": "error", "message": f"Channel '{req.channel}' not found", "state": _get_state_dict(db)}
         if channel.is_archived:
             return {"status": "error", "message": f"Channel '{req.channel}' is archived", "state": _get_state_dict(db)}
-        msg_id = _next_id(db, "m")
+        msg_id = _ledger.next_id(db, "m")
         db.add(Message(
             id=msg_id, channel_id=channel.id, user_name="me",
-            text=req.text, timestamp=_now(db), is_pinned=False,
+            text=req.text, timestamp=_ledger.now(db), is_pinned=False,
             thread_parent_id=None, reply_count=0,
         ))
-        _log_action(db, "send_message", msg_id, {"channel": channel.name, "text": req.text[:80]})
+        _ledger.log_action(db, "send_message", msg_id, {"channel": channel.name, "text": req.text[:80]})
         db.commit()
         # Auto-inject channel responder if configured and not triggered in the last minute
         channel_name = channel.name
         if channel_name in CHANNEL_AUTO_RESPONDERS:
-            one_minute_ago = _virtual_time(_clock_value(db) - 60)
+            one_minute_ago = _ledger.at(_ledger.elapsed(db) - 60)
             already = db.query(ActionLog).filter(
                 ActionLog.action_type == "auto_response",
                 ActionLog.payload.contains(f'"channel": "{channel_name}"'),
@@ -645,13 +492,13 @@ def send_message(req: SendMessageRequest):
             ).first()
             if not already:
                 responder_user, responder_text = CHANNEL_AUTO_RESPONDERS[channel_name][0]
-                resp_id = _next_id(db, "m")
+                resp_id = _ledger.next_id(db, "m")
                 db.add(Message(
                     id=resp_id, channel_id=channel.id, user_name=responder_user,
-                    text=responder_text, timestamp=_now(db), is_pinned=False,
+                    text=responder_text, timestamp=_ledger.now(db), is_pinned=False,
                     thread_parent_id=None, reply_count=0,
                 ))
-                _log_action(db, "auto_response", resp_id, {"channel": channel_name, "from": responder_user})
+                _ledger.log_action(db, "auto_response", resp_id, {"channel": channel_name, "from": responder_user})
                 db.commit()
         state = _get_state_dict(db)
     return {"status": "sent", "message_id": msg_id, "channel": req.channel, "state": state}
@@ -666,14 +513,14 @@ def reply_thread(req: ReplyThreadRequest):
         parent = db.query(Message).filter(Message.id == req.message_id, Message.channel_id == channel.id).first()
         if not parent:
             return {"status": "error", "message": f"Message '{req.message_id}' not found", "state": _get_state_dict(db)}
-        reply_id = _next_id(db, "t")
+        reply_id = _ledger.next_id(db, "t")
         db.add(Message(
             id=reply_id, channel_id=channel.id, user_name="me",
-            text=req.text, timestamp=_now(db), is_pinned=False,
+            text=req.text, timestamp=_ledger.now(db), is_pinned=False,
             thread_parent_id=req.message_id, reply_count=0,
         ))
         parent.reply_count += 1
-        _log_action(db, "reply_thread", reply_id, {"message_id": req.message_id})
+        _ledger.log_action(db, "reply_thread", reply_id, {"message_id": req.message_id})
         db.commit()
         state = _get_state_dict(db)
     return {"status": "replied", "reply_id": reply_id, "thread_of": req.message_id, "state": state}
@@ -695,10 +542,10 @@ def add_reaction(req: ReactionRequest):
         ).first()
         if not existing:
             db.add(Reaction(
-                id=_next_id(db, "rx"),
+                id=_ledger.next_id(db, "rx"),
                 message_id=req.message_id, emoji=req.emoji, user_name="me",
             ))
-            _log_action(db, "add_reaction", req.message_id, {"emoji": req.emoji})
+            _ledger.log_action(db, "add_reaction", req.message_id, {"emoji": req.emoji})
             db.commit()
         state = _get_state_dict(db)
     return {"status": "reacted", "emoji": req.emoji, "message_id": req.message_id, "state": state}
@@ -714,7 +561,7 @@ def remove_reaction(req: ReactionRequest):
         ).first()
         if existing:
             db.delete(existing)
-            _log_action(db, "remove_reaction", req.message_id, {"emoji": req.emoji})
+            _ledger.log_action(db, "remove_reaction", req.message_id, {"emoji": req.emoji})
             db.commit()
         state = _get_state_dict(db)
     return {"status": "removed", "emoji": req.emoji, "message_id": req.message_id, "state": state}
@@ -730,7 +577,7 @@ def pin_message(req: PinRequest):
         if not msg:
             return {"status": "error", "message": f"Message '{req.message_id}' not found", "state": _get_state_dict(db)}
         msg.is_pinned = True
-        _log_action(db, "pin_message", req.message_id)
+        _ledger.log_action(db, "pin_message", req.message_id)
         db.commit()
         state = _get_state_dict(db)
     return {"status": "pinned", "message_id": req.message_id, "state": state}
@@ -746,7 +593,7 @@ def unpin_message(req: PinRequest):
         if not msg:
             return {"status": "error", "message": f"Message '{req.message_id}' not found", "state": _get_state_dict(db)}
         msg.is_pinned = False
-        _log_action(db, "unpin_message", req.message_id)
+        _ledger.log_action(db, "unpin_message", req.message_id)
         db.commit()
         state = _get_state_dict(db)
     return {"status": "unpinned", "message_id": req.message_id, "state": state}
@@ -764,7 +611,7 @@ def delete_message(req: DeleteMessageRequest):
         was_pinned = bool(msg.is_pinned)
         db.query(Reaction).filter(Reaction.message_id == req.message_id).delete()
         db.delete(msg)
-        _log_action(db, "delete_message", req.message_id, {"was_pinned": was_pinned})
+        _ledger.log_action(db, "delete_message", req.message_id, {"was_pinned": was_pinned})
         db.commit()
         state = _get_state_dict(db)
     return {"status": "deleted", "message_id": req.message_id, "state": state}
@@ -776,17 +623,17 @@ def create_channel(req: CreateChannelRequest):
         existing = _get_channel(db, req.name)
         if existing:
             return {"status": "error", "message": f"Channel '{req.name}' already exists", "state": _get_state_dict(db)}
-        channel_id = _next_id(db, "C")
+        channel_id = _ledger.next_id(db, "C")
         db.add(Channel(
             id=channel_id,
             name=req.name.lower().replace(" ", "-"),
             purpose=req.purpose or "",
             is_private=False,
             is_archived=False,
-            created_at=_now(db),
+            created_at=_ledger.now(db),
         ))
         db.add(ChannelReadState(channel_id=channel_id, unread_count=0))
-        _log_action(db, "create_channel", channel_id, {"name": req.name})
+        _ledger.log_action(db, "create_channel", channel_id, {"name": req.name})
         db.commit()
         state = _get_state_dict(db)
     return {"status": "created", "channel_id": channel_id, "name": req.name, "state": state}
@@ -799,7 +646,7 @@ def archive_channel(req: ArchiveChannelRequest):
         if not channel:
             return {"status": "error", "message": f"Channel '{req.channel}' not found", "state": _get_state_dict(db)}
         channel.is_archived = True
-        _log_action(db, "archive_channel", channel.id, {"name": channel.name})
+        _ledger.log_action(db, "archive_channel", channel.id, {"name": channel.name})
         db.commit()
         state = _get_state_dict(db)
     return {"status": "archived", "channel": req.channel, "state": state}
@@ -814,7 +661,7 @@ def set_status(req: SetStatusRequest):
             status.status_emoji = req.emoji or ""
         else:
             db.add(UserStatus(user_name="me", status_text=req.status, status_emoji=req.emoji or "", presence="online"))
-        _log_action(db, "set_status", None, {"status": req.status, "emoji": req.emoji or ""})
+        _ledger.log_action(db, "set_status", None, {"status": req.status, "emoji": req.emoji or ""})
         db.commit()
         state = _get_state_dict(db)
     return {"status": "updated", "new_status": req.status, "emoji": req.emoji, "state": state}
@@ -823,12 +670,12 @@ def set_status(req: SetStatusRequest):
 @app.post("/send_dm")
 def send_dm(req: SendDmRequest):
     with SessionLocal() as db:
-        dm_id = _next_id(db, "dm")
+        dm_id = _ledger.next_id(db, "dm")
         db.add(DirectMessage(
             id=dm_id, from_user="me", to_user=req.to,
-            text=req.text, timestamp=_now(db), is_read=True,
+            text=req.text, timestamp=_ledger.now(db), is_read=True,
         ))
-        _log_action(db, "send_dm", dm_id, {"to": req.to})
+        _ledger.log_action(db, "send_dm", dm_id, {"to": req.to})
         db.commit()
         state = _get_state_dict(db)
     return {"status": "sent", "dm_id": dm_id, "to": req.to, "state": state}
@@ -843,7 +690,7 @@ def mark_channel_read(req: MarkChannelReadRequest):
         rs = db.query(ChannelReadState).filter(ChannelReadState.channel_id == channel.id).first()
         if rs:
             rs.unread_count = 0
-        _log_action(db, "mark_channel_read", channel.id, {"channel": channel.name})
+        _ledger.log_action(db, "mark_channel_read", channel.id, {"channel": channel.name})
         db.commit()
         state = _get_state_dict(db)
     return {"status": "marked_read", "channel": req.channel, "state": state}

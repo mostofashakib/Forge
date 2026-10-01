@@ -93,36 +93,63 @@ def check_subclass_arity(
             f"read as an attribute, not called, so it cannot satisfy the "
             f"method contract {method_name}(self, {', '.join(params)})"
         )
-
-    # `functools.partialmethod` is a descriptor but not a plain function, so
-    # `inspect.signature()` raises TypeError directly on the raw object
-    # (it "is not a callable object") rather than describing its shape.
-    # Falling into the generic "not introspectable, accept" fallback below
-    # would silently accept a wrong-arity partialmethod, exactly the defect
-    # this module exists to catch. Unwrap to the underlying function and
-    # simulate the real call: the descriptor supplies `self` first, then
-    # the partialmethod's own bound `args`/`keywords`, then whatever the
-    # engine passes positionally for `params`.
     if isinstance(raw, functools.partialmethod):
-        func = raw.func
-        try:
-            func_signature = inspect.signature(func)
-        except (TypeError, ValueError):
-            return
-        try:
-            func_signature.bind(
-                None, *raw.args, *(None,) * len(params), **raw.keywords
-            )
-        except TypeError as exc:
-            raise TypeError(
-                f"{cls.__name__}.{method_name} (a partialmethod wrapping "
-                f"{getattr(func, '__qualname__', func)}) must accept "
-                f"(self, {', '.join(params)}) once its bound arguments are "
-                f"applied, but its signature is {method_name}{func_signature}: "
-                f"{exc}"
-            ) from exc
+        _check_partialmethod(cls, method_name, raw, params)
         return
 
+    func, implicit_count, implicit_label = _callable_shape(raw)
+    try:
+        signature = inspect.signature(func)
+    except (TypeError, ValueError):
+        # No introspectable signature (e.g. some genuinely opaque
+        # C-implemented callable) — nothing to check, so accept rather than
+        # reject. classmethod/staticmethod/partialmethod never reach here:
+        # they were unwrapped to their underlying function above.
+        return
+    try:
+        signature.bind(*(None,) * (len(params) + implicit_count))
+    except TypeError as exc:
+        raise TypeError(
+            f"{cls.__name__}.{method_name} must accept "
+            f"({implicit_label}{', '.join(params)}), but its signature is "
+            f"{method_name}{signature}: {exc}"
+        ) from exc
+
+
+def _check_partialmethod(cls: type, method_name: str, raw: functools.partialmethod, params: tuple[str, ...]) -> None:
+    """Arity-check a partialmethod by simulating its real call.
+
+    `functools.partialmethod` is a descriptor but not a plain function, so
+    `inspect.signature()` raises TypeError directly on the raw object
+    (it "is not a callable object") rather than describing its shape.
+    Falling into the generic "not introspectable, accept" fallback would
+    silently accept a wrong-arity partialmethod, exactly the defect this
+    module exists to catch. Unwrap to the underlying function and simulate
+    the real call: the descriptor supplies `self` first, then the
+    partialmethod's own bound `args`/`keywords`, then whatever the engine
+    passes positionally for `params`.
+    """
+    func = raw.func
+    try:
+        func_signature = inspect.signature(func)
+    except (TypeError, ValueError):
+        return
+    try:
+        func_signature.bind(
+            None, *raw.args, *(None,) * len(params), **raw.keywords
+        )
+    except TypeError as exc:
+        raise TypeError(
+            f"{cls.__name__}.{method_name} (a partialmethod wrapping "
+            f"{getattr(func, '__qualname__', func)}) must accept "
+            f"(self, {', '.join(params)}) once its bound arguments are "
+            f"applied, but its signature is {method_name}{func_signature}: "
+            f"{exc}"
+        ) from exc
+
+
+def _callable_shape(raw) -> tuple[object, int, str]:
+    """(callable to introspect, implicit leading args, label for them) for a raw attribute."""
     if isinstance(raw, staticmethod):
         func = raw.__func__
         implicit_count = 0
@@ -149,20 +176,4 @@ def check_subclass_arity(
         func = raw
         implicit_count = 0
         implicit_label = ""
-
-    try:
-        signature = inspect.signature(func)
-    except (TypeError, ValueError):
-        # No introspectable signature (e.g. some genuinely opaque
-        # C-implemented callable) — nothing to check, so accept rather than
-        # reject. classmethod/staticmethod/partialmethod never reach here:
-        # they were unwrapped to their underlying function above.
-        return
-    try:
-        signature.bind(*(None,) * (len(params) + implicit_count))
-    except TypeError as exc:
-        raise TypeError(
-            f"{cls.__name__}.{method_name} must accept "
-            f"({implicit_label}{', '.join(params)}), but its signature is "
-            f"{method_name}{signature}: {exc}"
-        ) from exc
+    return func, implicit_count, implicit_label

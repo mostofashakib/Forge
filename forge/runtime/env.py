@@ -339,23 +339,9 @@ class ForgeEnv(gym.Env, Environment):
         if is_submit_action(action):
             return self._submit(state_before, hash_before)
 
-        validation_error = self._action_validator.validate(action)
-        if validation_error:
-            return self._stationary_step_result(
-                state_before,
-                hash_before,
-                action,
-                events=[],
-                info={"error": validation_error},
-                invalid=True,
-            )
-
-        if self._policy_engine:
-            violations = self._policy_engine.check(state_before, action)
-            if violations:
-                return self._policy_violation_result(
-                    state_before, hash_before, action, violations
-                )
+        rejected = self._gate(action, state_before, hash_before)
+        if rejected is not None:
+            return rejected
 
         try:
             result = self._backend.execute(
@@ -373,22 +359,7 @@ class ForgeEnv(gym.Env, Environment):
 
         self._state_store.apply(result.state)
         self._ctx.clock.advance()
-
-        # Simulated colleagues act on the world the agent just changed, before
-        # the agent observes it. Their writes therefore land inside this step's
-        # diff and state hash rather than appearing out of nowhere at the start
-        # of the next one — an episode where a nurse replies is one step, not
-        # two, and replays as one.
-        persona_tick = self._personas.tick(
-            backend=self._backend,
-            state=self._state_store.get(),
-            ctx=self._ctx,
-            step_index=self._step_count,
-            agent_action=action,
-            events=result.events,
-        )
-        if persona_tick.acted:
-            self._state_store.apply(persona_tick.state)
+        persona_tick = self._tick_personas(action, result.events)
         events = list(result.events) + persona_tick.events
         state_after = self._state_store.get()
         hash_after = self._state_store.hash()
@@ -397,22 +368,7 @@ class ForgeEnv(gym.Env, Environment):
             hash_before, hash_after, action, events, diff=compute_diff(state_before, state_after)
         )
         trajectory = self._traj_store.to_trajectory_with_step(snapshot)
-        monitor_results = (
-            self._online_verifier_engine.run_all(
-                state_after, trajectory, self._current_task
-            )
-            if self._online_verifier_engine is not None
-            else []
-        )
-        termination = self._termination.check(
-            StepOutcome(
-                step_index=self._step_count - 1,
-                score=max((item.score for item in monitor_results), default=0.0),
-                reward=0.0,
-                state_hash=hash_after,
-                verifier_results=monitor_results,
-            )
-        )
+        monitor_results, termination = self._monitor(state_after, trajectory, hash_after)
         info = {
             "episode_id": self._episode_id,
             "events": events,
@@ -435,6 +391,66 @@ class ForgeEnv(gym.Env, Environment):
         if termination is not None:
             self._complete_episode(termination.reason)
         return self._observe(state_after), reward, snapshot.terminated, snapshot.truncated, info
+
+    def _gate(self, action: dict, state_before: dict, hash_before: str):
+        """The step result for an action the validator or policy refuses, else None."""
+        validation_error = self._action_validator.validate(action)
+        if validation_error:
+            return self._stationary_step_result(
+                state_before,
+                hash_before,
+                action,
+                events=[],
+                info={"error": validation_error},
+                invalid=True,
+            )
+        if self._policy_engine:
+            violations = self._policy_engine.check(state_before, action)
+            if violations:
+                return self._policy_violation_result(
+                    state_before, hash_before, action, violations
+                )
+        return None
+
+    def _tick_personas(self, action: dict, events: list):
+        """Let simulated colleagues act on the world the agent just changed.
+
+        They act before the agent observes it, so their writes land inside
+        this step's diff and state hash rather than appearing out of nowhere
+        at the start of the next one — an episode where a nurse replies is one
+        step, not two, and replays as one.
+        """
+        persona_tick = self._personas.tick(
+            backend=self._backend,
+            state=self._state_store.get(),
+            ctx=self._ctx,
+            step_index=self._step_count,
+            agent_action=action,
+            events=events,
+        )
+        if persona_tick.acted:
+            self._state_store.apply(persona_tick.state)
+        return persona_tick
+
+    def _monitor(self, state_after: dict, trajectory, hash_after: str):
+        """(online verifier results, termination decision or None) for the step just taken."""
+        monitor_results = (
+            self._online_verifier_engine.run_all(
+                state_after, trajectory, self._current_task
+            )
+            if self._online_verifier_engine is not None
+            else []
+        )
+        termination = self._termination.check(
+            StepOutcome(
+                step_index=self._step_count - 1,
+                score=max((item.score for item in monitor_results), default=0.0),
+                reward=0.0,
+                state_hash=hash_after,
+                verifier_results=monitor_results,
+            )
+        )
+        return monitor_results, termination
 
     def finalize_episode(self, reason: str = "external") -> EpisodeEvaluation:
         """Grade the active episode once; repeated calls return the same verdict."""

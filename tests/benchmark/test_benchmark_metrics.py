@@ -114,3 +114,8 @@ def test_rejects_invalid_sample_count():
     # Negative path: passing k > n should raise ValueError or return 0
     with pytest.raises((ValueError, ZeroDivisionError)):
         compute_pass_at_k(n=0, c=0, k=1)
+
+
+def test_graphs_refuse_to_rate_risk_without_any_trials():
+    with pytest.raises(ValueError, match="no trials"):
+        generate_benchmark_graphs([])

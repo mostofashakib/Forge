@@ -172,82 +172,94 @@ def load_sft(path_or_dir: Path) -> list[SFTRecord]:
     """Load SFT demonstrations from jsonl, batch export json, or rollouts parquet."""
     path = Path(path_or_dir)
     if path.is_dir():
-        # Check files in priority
-        candidates = [
-            path / "sft_pairs.jsonl",
-            path / "sft_dataset.jsonl",
-            path / "sft_data.jsonl",
-            path / "batch_export.json",
-            path / "tasks.json",
-            path / "preference_pairs.jsonl",
-            path / "grpo_rollouts.parquet",
-        ]
-        target_file = next((c for c in candidates if c.exists()), None)
-        if target_file is None:
-            # Check for any .jsonl or .json file
-            target_file = next(iter(path.glob("*.jsonl")), next(iter(path.glob("*.json")), None))
-        if target_file is None:
+        path = _sft_source(path)
+        if path is None:
             return []
-        path = target_file
-
     if path.suffix == ".parquet":
-        rollouts = load_rollouts(path)
-        # Use rollouts that passed or scored reward > 0
-        valid = [r for r in rollouts if r.passed or r.total_reward > 0]
-        return [
-            SFTRecord(
-                prompt=r.prompt,
-                completion=r.completion,
-                env_name=r.env_name,
-                reward=r.total_reward,
-                passed=r.passed,
-                behavior_model=r.behavior_model,
-            )
-            for r in valid
-        ]
-
+        return _sft_from_parquet(path)
     if path.suffix == ".json":
-        try:
-            with path.open(encoding="utf-8") as fh:
-                data = json.load(fh)
-        except Exception as exc:
-            raise MalformedExportError(f"could not load json {path}: {exc}") from exc
+        return _sft_from_json(path)
+    return _sft_from_jsonl(path)
 
-        records: list[SFTRecord] = []
-        if isinstance(data, dict):
-            # Check for sft_items
-            if "sft_items" in data and isinstance(data["sft_items"], list):
-                for item in data["sft_items"]:
-                    records.append(SFTRecord(
-                        prompt=str(item.get("prompt", "")),
-                        completion=str(item.get("completion", "")),
-                        env_name=str(data.get("env_name", "")),
-                    ))
-            # Check for tasks
-            elif "tasks" in data and isinstance(data["tasks"], list):
-                for task in data["tasks"]:
-                    prompt = str(task.get("objective") or task.get("prompt") or "")
-                    golden = task.get("golden", [])
-                    completion = "\n".join(
-                        f"$ {s.get('command') or s.get('tool', '')}" if isinstance(s, dict) else str(s)
-                        for s in golden
-                    ) if golden else str(task.get("completion", ""))
-                    records.append(SFTRecord(
-                        prompt=prompt,
-                        completion=completion,
-                        env_name=str(data.get("env_name", "")),
-                    ))
-        elif isinstance(data, list):
-            for item in data:
-                if isinstance(item, dict):
-                    records.append(SFTRecord(
-                        prompt=str(item.get("prompt", "")),
-                        completion=str(item.get("completion", "")),
-                        env_name=str(item.get("env_name", "")),
-                    ))
-        return [r for r in records if r.prompt and r.completion]
 
-    # jsonl parsing
+def _sft_source(directory: Path) -> Path | None:
+    """The export in `directory` to read demonstrations from, by priority."""
+    candidates = [
+        directory / "sft_pairs.jsonl",
+        directory / "sft_dataset.jsonl",
+        directory / "sft_data.jsonl",
+        directory / "batch_export.json",
+        directory / "tasks.json",
+        directory / "preference_pairs.jsonl",
+        directory / "grpo_rollouts.parquet",
+    ]
+    target_file = next((c for c in candidates if c.exists()), None)
+    if target_file is None:
+        # Fall back to any .jsonl or .json file
+        target_file = next(iter(directory.glob("*.jsonl")), next(iter(directory.glob("*.json")), None))
+    return target_file
+
+
+def _sft_from_parquet(path: Path) -> list[SFTRecord]:
+    rollouts = load_rollouts(path)
+    # Use rollouts that passed or scored reward > 0
+    valid = [r for r in rollouts if r.passed or r.total_reward > 0]
+    return [
+        SFTRecord(
+            prompt=r.prompt,
+            completion=r.completion,
+            env_name=r.env_name,
+            reward=r.total_reward,
+            passed=r.passed,
+            behavior_model=r.behavior_model,
+        )
+        for r in valid
+    ]
+
+
+def _sft_from_json(path: Path) -> list[SFTRecord]:
+    try:
+        with path.open(encoding="utf-8") as fh:
+            data = json.load(fh)
+    except Exception as exc:
+        raise MalformedExportError(f"could not load json {path}: {exc}") from exc
+
+    records: list[SFTRecord] = []
+    if isinstance(data, dict):
+        # Check for sft_items
+        if "sft_items" in data and isinstance(data["sft_items"], list):
+            for item in data["sft_items"]:
+                records.append(SFTRecord(
+                    prompt=str(item.get("prompt", "")),
+                    completion=str(item.get("completion", "")),
+                    env_name=str(data.get("env_name", "")),
+                ))
+        # Check for tasks
+        elif "tasks" in data and isinstance(data["tasks"], list):
+            for task in data["tasks"]:
+                prompt = str(task.get("objective") or task.get("prompt") or "")
+                golden = task.get("golden", [])
+                completion = "\n".join(
+                    f"$ {s.get('command') or s.get('tool', '')}" if isinstance(s, dict) else str(s)
+                    for s in golden
+                ) if golden else str(task.get("completion", ""))
+                records.append(SFTRecord(
+                    prompt=prompt,
+                    completion=completion,
+                    env_name=str(data.get("env_name", "")),
+                ))
+    elif isinstance(data, list):
+        for item in data:
+            if isinstance(item, dict):
+                records.append(SFTRecord(
+                    prompt=str(item.get("prompt", "")),
+                    completion=str(item.get("completion", "")),
+                    env_name=str(item.get("env_name", "")),
+                ))
+    return [r for r in records if r.prompt and r.completion]
+
+
+def _sft_from_jsonl(path: Path) -> list[SFTRecord]:
     records = []
     with path.open(encoding="utf-8") as fh:
         for lineno, line in enumerate(fh, start=1):

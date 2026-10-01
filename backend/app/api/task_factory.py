@@ -17,7 +17,8 @@ from backend.app.services.task_factory_targets import list_targets
 from backend.app.worker.task_factory import channel_for, create_task_batch_task
 from forge.settings import redis_url
 from forge.taskfactory.model_settings import VALIDATOR_VARS, TaskFactoryConfigError, require_sdks, resolve_models
-from forge.taskfactory.pipeline import MAX_COUNT, MAX_K, MIN_COUNT, MIN_K
+from forge.taskfactory.pipeline import MAX_COUNT, MAX_K, MIN_COUNT, MIN_K, preference_pairs
+from forge.taskfactory.schemas import SyntheticTask, TaskRejection
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/task-factory")
@@ -96,30 +97,46 @@ def export_batch(batch_id: str, db: Session = Depends(get_db)) -> JSONResponse:
         raise HTTPException(status_code=409, detail="only a saved batch can be exported")
     data_type = detail.get("data_type", "rl_tasks")
     if data_type == "preference_pairs":
-        pairs = []
-        for task in detail.get("tasks", []):
-            rej = next((r for r in detail.get("rejections", []) if r.get("slot_index") == task.get("slot_index")), None)
-            pairs.append({
-                "prompt": task.get("objective", ""),
-                "preferred_response": "\n".join(s.get("command") or s.get("tool", "") for s in task.get("golden", [])),
-                "dispreferred_response": rej.get("reason", "rejected") if rej else "Execution failed validation",
-                "metadata": {"task_id": task.get("id"), "difficulty": task.get("difficulty")},
-            })
-        detail["preference_pairs"] = pairs
+        detail["preference_pairs"] = _exported_pairs(detail)
     elif data_type == "sft":
-        sft_items = []
-        for task in detail.get("tasks", []):
-            sft_items.append({
+        detail["sft_items"] = [
+            {
                 "prompt": task.get("objective", ""),
-                "completion": "\n".join(s.get("command") or s.get("tool", "") for s in task.get("golden", [])),
+                "completion": _commands(task.get("golden", [])),
                 "trajectory": task.get("golden", []),
                 "metadata": {"task_id": task.get("id"), "difficulty": task.get("difficulty")},
-            })
-        detail["sft_items"] = sft_items
+            }
+            for task in detail.get("tasks", [])
+        ]
 
     date = (detail["created_at"] or "")[:10]
     filename = f"{detail['env_name']}-{data_type}-v{detail['version']}-{date}.json"
     return JSONResponse(detail, headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+def _commands(steps: list[dict]) -> str:
+    return "\n".join(step.get("command") or step.get("tool", "") for step in steps)
+
+
+def _exported_pairs(detail: dict) -> list[dict]:
+    """Accepted tasks against the rejected drafts written for the same slot."""
+    pairs = preference_pairs(
+        [SyntheticTask.model_validate(task) for task in detail.get("tasks", [])],
+        [TaskRejection.model_validate(rejection) for rejection in detail.get("rejections", [])],
+    )
+    return [
+        {
+            "prompt": pair.task_prompt,
+            "preferred_response": _commands(pair.preferred["golden"]),
+            "dispreferred_response": _commands(pair.dispreferred["golden"]),
+            "metadata": {
+                "task_id": pair.preferred["id"],
+                "difficulty": pair.difficulty,
+                "rejection_reason": pair.rejection_reason,
+            },
+        }
+        for pair in pairs
+    ]
 
 
 @router.delete("/batches/{batch_id}", status_code=204)

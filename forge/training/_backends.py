@@ -48,132 +48,146 @@ class GRPOBackend:
 
     def train(self, base_model: str, examples: list, output_dir: Path, max_steps: int) -> str:
         _require_training_deps("transformers", "datasets", "torch")
-        import torch
-        import torch.nn.functional as functional
         from datasets import Dataset
-        from transformers import (
-            AutoModelForCausalLM,
-            AutoTokenizer,
-            Trainer,
-            TrainingArguments,
-        )
+        from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments
 
         output_dir = Path(output_dir)
-        model_dir = output_dir / "forge_policy"
         output_dir.mkdir(parents=True, exist_ok=True)
-
-        tokenizer = AutoTokenizer.from_pretrained(base_model)
-        if tokenizer.pad_token_id is None:
-            tokenizer.pad_token = tokenizer.eos_token
-
-        def tokenize(example: dict) -> dict:
-            prompt_ids = tokenizer(example["prompt"], add_special_tokens=True)["input_ids"]
-            completion_ids = tokenizer(
-                example["completion"], add_special_tokens=False
-            )["input_ids"]
-            if tokenizer.eos_token_id is not None:
-                completion_ids = [*completion_ids, tokenizer.eos_token_id]
-            return {
-                "input_ids": [*prompt_ids, *completion_ids],
-                "labels": [-100] * len(prompt_ids) + completion_ids,
-                "advantage": float(example["advantage"]),
-            }
-
+        tokenizer = _load_tokenizer(AutoTokenizer, base_model)
         rows = [
             {
-                "prompt": example.prompt,
-                "completion": example.completion,
-                "advantage": example.advantage,
+                **_tokenize_completion(tokenizer, example.prompt, example.completion),
+                "advantage": float(example.advantage),
             }
             for example in examples
         ]
         model = AutoModelForCausalLM.from_pretrained(base_model)
-        model.eval()
-        tokenized_rows = [tokenize(row) for row in rows]
-        # Freeze the exact behavior-policy likelihoods before Trainer performs
-        # any gradient update. They are the denominator in GRPO's policy ratio.
-        with torch.no_grad():
-            for row in tokenized_rows:
-                input_ids = torch.tensor(
-                    [row["input_ids"]], dtype=torch.long, device=model.device
-                )
-                labels = torch.tensor(
-                    [row["labels"]], dtype=torch.long, device=model.device
-                )
-                outputs = model(input_ids=input_ids)
-                row["old_logps"] = _selected_token_logps(
-                    functional, outputs.logits, labels
-                )[0].cpu().tolist()
-        dataset = Dataset.from_list(tokenized_rows)
-
-        class AdvantageCollator:
-            def __call__(self, features: list[dict]) -> dict:
-                labels = [feature["labels"] for feature in features]
-                advantages = [feature["advantage"] for feature in features]
-                old_logps = [feature["old_logps"] for feature in features]
-                model_inputs = [
-                    {"input_ids": feature["input_ids"]} for feature in features
-                ]
-                batch = tokenizer.pad(
-                    model_inputs, padding=True, return_tensors="pt"
-                )
-                width = batch["input_ids"].shape[1]
-                batch["labels"] = torch.tensor(
-                    [label + [-100] * (width - len(label)) for label in labels],
-                    dtype=torch.long,
-                )
-                batch["advantages"] = torch.tensor(advantages, dtype=torch.float32)
-                batch["old_logps"] = torch.tensor(
-                    [values + [0.0] * (width - 1 - len(values)) for values in old_logps],
-                    dtype=torch.float32,
-                )
-                return batch
-
-        class AdvantageTrainer(Trainer):
-            def compute_loss(self, model, inputs, return_outputs=False, **_kwargs):
-                advantages = inputs.pop("advantages")
-                old_logps = inputs.pop("old_logps")
-                labels = inputs["labels"]
-                outputs = model(**inputs)
-                shifted_labels = labels[:, 1:].contiguous()
-                mask = shifted_labels.ne(-100)
-                current_logps = _selected_token_logps(
-                    functional, outputs.logits, labels
-                )
-                old_logps = old_logps.to(current_logps.device)
-                advantages = advantages.to(current_logps.device).unsqueeze(1)
-                loss = _clipped_grpo_loss(
-                    torch,
-                    current_logps,
-                    old_logps,
-                    advantages,
-                    mask,
-                    clip_epsilon=GRPOBackend.clip_epsilon,
-                    kl_beta=GRPOBackend.kl_beta,
-                )
-                return (loss, outputs) if return_outputs else loss
-
+        _record_behavior_logps(model, rows)
         model.train()
-        arguments = TrainingArguments(
-            output_dir=str(output_dir / "trainer_state"),
-            max_steps=max_steps,
-            per_device_train_batch_size=1,
-            gradient_accumulation_steps=min(8, max(1, len(rows))),
-            logging_steps=1,
-            save_strategy="no",
-            report_to=[],
-            remove_unused_columns=False,
-        )
-        trainer = AdvantageTrainer(
+        trainer = _advantage_trainer_class()(
             model=model,
-            args=arguments,
-            train_dataset=dataset,
-            data_collator=AdvantageCollator(),
+            args=_training_arguments(TrainingArguments, output_dir, max_steps=max_steps, num_rows=len(rows)),
+            train_dataset=Dataset.from_list(rows),
+            data_collator=_AdvantageCollator(tokenizer),
         )
-        trainer.train()
-        trainer.save_model(str(model_dir))
-        tokenizer.save_pretrained(model_dir)
-        return str(model_dir)
+        return _train_and_save(trainer, tokenizer, output_dir)
+
+
+def _record_behavior_logps(model, rows: list[dict]) -> None:
+    """Freeze the behavior policy's token likelihoods before any gradient update.
+
+    They are the denominator in GRPO's policy ratio.
+    """
+    import torch
+    import torch.nn.functional as functional
+
+    model.eval()
+    with torch.no_grad():
+        for row in rows:
+            input_ids = torch.tensor([row["input_ids"]], dtype=torch.long, device=model.device)
+            labels = torch.tensor([row["labels"]], dtype=torch.long, device=model.device)
+            outputs = model(input_ids=input_ids)
+            row["old_logps"] = _selected_token_logps(
+                functional, outputs.logits, labels
+            )[0].cpu().tolist()
+
+
+class _AdvantageCollator:
+    """Pads a batch and carries each row's advantage and frozen log-probs."""
+
+    def __init__(self, tokenizer) -> None:
+        self._tokenizer = tokenizer
+
+    def __call__(self, features: list[dict]) -> dict:
+        import torch
+
+        labels = [feature["labels"] for feature in features]
+        old_logps = [feature["old_logps"] for feature in features]
+        batch = self._tokenizer.pad(
+            [{"input_ids": feature["input_ids"]} for feature in features],
+            padding=True, return_tensors="pt",
+        )
+        width = batch["input_ids"].shape[1]
+        batch["labels"] = torch.tensor(
+            [label + [-100] * (width - len(label)) for label in labels],
+            dtype=torch.long,
+        )
+        batch["advantages"] = torch.tensor(
+            [feature["advantage"] for feature in features], dtype=torch.float32
+        )
+        batch["old_logps"] = torch.tensor(
+            [values + [0.0] * (width - 1 - len(values)) for values in old_logps],
+            dtype=torch.float32,
+        )
+        return batch
+
+
+def _advantage_trainer_class():
+    """A Trainer whose loss is the clipped GRPO surrogate. Built lazily: transformers is optional."""
+    import torch
+    import torch.nn.functional as functional
+    from transformers import Trainer
+
+    class AdvantageTrainer(Trainer):
+        def compute_loss(self, model, inputs, return_outputs=False, **_kwargs):
+            advantages = inputs.pop("advantages")
+            old_logps = inputs.pop("old_logps")
+            labels = inputs["labels"]
+            outputs = model(**inputs)
+            mask = labels[:, 1:].contiguous().ne(-100)
+            current_logps = _selected_token_logps(functional, outputs.logits, labels)
+            loss = _clipped_grpo_loss(
+                torch,
+                current_logps,
+                old_logps.to(current_logps.device),
+                advantages.to(current_logps.device).unsqueeze(1),
+                mask,
+                clip_epsilon=GRPOBackend.clip_epsilon,
+                kl_beta=GRPOBackend.kl_beta,
+            )
+            return (loss, outputs) if return_outputs else loss
+
+    return AdvantageTrainer
+
+
+def _load_tokenizer(auto_tokenizer, base_model: str):
+    tokenizer = auto_tokenizer.from_pretrained(base_model)
+    if tokenizer.pad_token_id is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    return tokenizer
+
+
+def _tokenize_completion(tokenizer, prompt: str, completion: str) -> dict:
+    """Prompt and completion ids, with loss only on the completion and its EOS."""
+    prompt_ids = tokenizer(prompt, add_special_tokens=True)["input_ids"]
+    completion_ids = tokenizer(completion, add_special_tokens=False)["input_ids"]
+    if tokenizer.eos_token_id is not None:
+        completion_ids = [*completion_ids, tokenizer.eos_token_id]
+    return {
+        "input_ids": [*prompt_ids, *completion_ids],
+        "labels": [-100] * len(prompt_ids) + completion_ids,
+    }
+
+
+def _training_arguments(training_arguments, output_dir: Path, *, max_steps: int, num_rows: int):
+    return training_arguments(
+        output_dir=str(output_dir / "trainer_state"),
+        max_steps=max_steps,
+        per_device_train_batch_size=1,
+        gradient_accumulation_steps=min(8, max(1, num_rows)),
+        logging_steps=1,
+        save_strategy="no",
+        report_to=[],
+        remove_unused_columns=False,
+    )
+
+
+def _train_and_save(trainer, tokenizer, output_dir: Path) -> str:
+    model_dir = output_dir / "forge_policy"
+    trainer.train()
+    trainer.save_model(str(model_dir))
+    tokenizer.save_pretrained(model_dir)
+    return str(model_dir)
 
 
 def _selected_token_logps(functional, logits, labels):
@@ -221,7 +235,6 @@ class DPOBackend:
         from trl import DPOConfig, DPOTrainer
 
         output_dir = Path(output_dir)
-        model_dir = output_dir / "forge_policy"
         output_dir.mkdir(parents=True, exist_ok=True)
         dataset = Dataset.from_list(
             [
@@ -233,9 +246,7 @@ class DPOBackend:
                 for example in examples
             ]
         )
-        tokenizer = AutoTokenizer.from_pretrained(base_model)
-        if tokenizer.pad_token_id is None:
-            tokenizer.pad_token = tokenizer.eos_token
+        tokenizer = _load_tokenizer(AutoTokenizer, base_model)
         arguments = DPOConfig(
             output_dir=str(output_dir / "trainer_state"),
             max_steps=max_steps,
@@ -251,10 +262,7 @@ class DPOBackend:
             train_dataset=dataset,
             processing_class=tokenizer,
         )
-        trainer.train()
-        trainer.save_model(str(model_dir))
-        tokenizer.save_pretrained(model_dir)
-        return str(model_dir)
+        return _train_and_save(trainer, tokenizer, output_dir)
 
 
 class PPOBackend(GRPOBackend):
@@ -270,49 +278,15 @@ class SFTBackend:
     def train(self, base_model: str, examples: list, output_dir: Path, max_steps: int) -> str:
         _require_training_deps("transformers", "datasets", "torch")
         from datasets import Dataset
-        from transformers import (
-            AutoModelForCausalLM,
-            AutoTokenizer,
-            Trainer,
-            TrainingArguments,
-        )
+        from transformers import AutoModelForCausalLM, AutoTokenizer, Trainer, TrainingArguments
 
         output_dir = Path(output_dir)
-        model_dir = output_dir / "forge_policy"
         output_dir.mkdir(parents=True, exist_ok=True)
-        tokenizer = AutoTokenizer.from_pretrained(base_model)
-        if tokenizer.pad_token_id is None:
-            tokenizer.pad_token = tokenizer.eos_token
-
-        def tokenize(example: dict) -> dict:
-            prompt_ids = tokenizer(example["prompt"], add_special_tokens=True)["input_ids"]
-            completion_ids = tokenizer(
-                example["completion"], add_special_tokens=False
-            )["input_ids"]
-            if tokenizer.eos_token_id is not None:
-                completion_ids = [*completion_ids, tokenizer.eos_token_id]
-            return {
-                "input_ids": [*prompt_ids, *completion_ids],
-                "labels": [-100] * len(prompt_ids) + completion_ids,
-            }
-
-        rows = [{"prompt": ex.prompt, "completion": ex.completion} for ex in examples]
-        tokenized = [tokenize(r) for r in rows]
-        dataset = Dataset.from_list(tokenized)
-
-        model = AutoModelForCausalLM.from_pretrained(base_model)
-        arguments = TrainingArguments(
-            output_dir=str(output_dir / "trainer_state"),
-            max_steps=max_steps,
-            per_device_train_batch_size=1,
-            gradient_accumulation_steps=min(8, max(1, len(rows))),
-            logging_steps=1,
-            save_strategy="no",
-            report_to=[],
-            remove_unused_columns=False,
+        tokenizer = _load_tokenizer(AutoTokenizer, base_model)
+        rows = [_tokenize_completion(tokenizer, ex.prompt, ex.completion) for ex in examples]
+        trainer = Trainer(
+            model=AutoModelForCausalLM.from_pretrained(base_model),
+            args=_training_arguments(TrainingArguments, output_dir, max_steps=max_steps, num_rows=len(rows)),
+            train_dataset=Dataset.from_list(rows),
         )
-        trainer = Trainer(model=model, args=arguments, train_dataset=dataset)
-        trainer.train()
-        trainer.save_model(str(model_dir))
-        tokenizer.save_pretrained(model_dir)
-        return str(model_dir)
+        return _train_and_save(trainer, tokenizer, output_dir)

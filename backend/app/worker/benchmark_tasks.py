@@ -34,8 +34,6 @@ def run_benchmark_task(
       {"done": true}         — run complete
       {"error": "..."}       — run failed
     """
-    from functools import cache
-
     try:
         r = connect_progress_redis()
     except Exception as exc:
@@ -49,7 +47,6 @@ def run_benchmark_task(
 
     try:
         from forge.benchmark.data_collector import DataCollector, CollectionConfig, CollectionCheckpoint
-        from forge.benchmark.env_quality import compute_env_quality
         from forge.benchmark.report import BenchmarkReport, ReportConfig
 
         from backend.app.database import get_session_factory
@@ -67,10 +64,6 @@ def run_benchmark_task(
         collector = DataCollector(cfg, task_provider=task_provider)
         envs_root = generated_envs_root()
 
-        @cache
-        def manifest_for(domain: str):
-            return load_manifest(envs_root / domain)
-
         for domain in domains:
             if not task_provider.tasks_for(domain=domain, depth=depth):
                 publish({"log": f"  [skip] '{domain}' has no tasks at depth {depth} — compile/select an environment with tasks"})
@@ -81,55 +74,9 @@ def run_benchmark_task(
         publish({"total": total})
         publish({"log": f"[benchmark] {total} episodes pending"})
 
-        completed = 0
-
-        def run_episode(task, seed, jsonl_path):
-            nonlocal completed
-            from forge.envgen.episode_runner import ContainerEpisodeRunner, EpisodeConfig
-            from forge.envgen.agents.container_agent import make_container_agent
-            from forge.settings import experiment_seed
-            from forge.runtime.reliability import execute_reliable_episode, compute_environment_version
-
-            manifest = manifest_for(task.domain)
-            port_file = envs_root / task.domain / "port"
-            if not port_file.exists():
-                publish({"log": f"  [skip] no port file for domain '{task.domain}' — start that environment first"})
-                return
-
-            env_version = compute_environment_version(env_name=task.domain, env_dir=envs_root / task.domain)
-
-            def _benchmark_attempt(attempt: int, attempt_seed: int):
-                port = int(port_file.read_text().strip())
-                cfg_ep = EpisodeConfig(base_url=f"http://localhost:{port}", objective=task.objective)
-                agent = make_container_agent("random", seed=experiment_seed(attempt_seed))
-                with exclusive_environment(r, task.domain), \
-                        ContainerEpisodeRunner(cfg_ep, manifest=manifest) as runner:
-                    return runner.run_episode(agent, jsonl_path=jsonl_path, seed=attempt_seed)
-
-            with get_session_factory()() as db_bench:
-                result, _ = execute_reliable_episode(
-                    task_runner=_benchmark_attempt,
-                    task_id=task.name,
-                    env_name=task.domain,
-                    environment_version=env_version,
-                    seed=seed,
-                    db_session=db_bench,
-                    logger=logger,
-                )
-
-            completed += 1
-            publish({"log": f"  {task.name} seed={seed}  reward={result.total_reward:.3f}  reason={result.termination_reason}"})
-            publish({"progress": completed})
-
-        collector.collect(run_episode)
-
-        metrics = []
-        for domain in domains:
-            manifest = manifest_for(domain)
-            if manifest:
-                m = compute_env_quality(episode_dir=output_path / "data" / domain, manifest=manifest)
-                metrics.append(m)
-                publish({"log": f"  {domain}: coverage={m.state_coverage_score:.2f}  dead_end_rate={m.dead_end_rate:.2f}"})
+        episodes = _BenchmarkEpisodes(envs_root=envs_root, redis_client=r, publish=publish)
+        collector.collect(episodes)
+        metrics = _env_quality_metrics(domains, output_path / "data", episodes.manifest_for, publish)
 
         report = BenchmarkReport(ReportConfig(output_dir=output_path))
         report.write_env_quality(metrics)
@@ -155,6 +102,71 @@ def _harbor_command(config: dict, executable: str) -> tuple[list[str], Path]:
         command.extend(["--agent", agent])
     command.extend(["--model", str(config["harbor_model"])])
     return command, task_path.parent
+
+class _BenchmarkEpisodes:
+    """Runs one benchmark episode per (task, seed) with a random agent, under the env lock."""
+
+    def __init__(self, *, envs_root: Path, redis_client, publish) -> None:
+        self._envs_root = envs_root
+        self._redis = redis_client
+        self._publish = publish
+        self._manifests: dict[str, object] = {}
+        self.completed = 0
+
+    def manifest_for(self, domain: str):
+        if domain not in self._manifests:
+            self._manifests[domain] = load_manifest(self._envs_root / domain)
+        return self._manifests[domain]
+
+    def __call__(self, task, seed, jsonl_path) -> None:
+        from backend.app.database import get_session_factory
+        from forge.runtime.reliability import compute_environment_version, execute_reliable_episode
+
+        port_file = self._envs_root / task.domain / "port"
+        if not port_file.exists():
+            self._publish({"log": f"  [skip] no port file for domain '{task.domain}' — start that environment first"})
+            return
+        env_version = compute_environment_version(env_name=task.domain, env_dir=self._envs_root / task.domain)
+        with get_session_factory()() as db_bench:
+            result, _ = execute_reliable_episode(
+                task_runner=lambda attempt, attempt_seed: self._attempt(task, port_file, jsonl_path, attempt_seed),
+                task_id=task.name,
+                env_name=task.domain,
+                environment_version=env_version,
+                seed=seed,
+                db_session=db_bench,
+                logger=logger,
+            )
+        self.completed += 1
+        self._publish({"log": f"  {task.name} seed={seed}  reward={result.total_reward:.3f}  reason={result.termination_reason}"})
+        self._publish({"progress": self.completed})
+
+    def _attempt(self, task, port_file: Path, jsonl_path, attempt_seed: int):
+        from forge.envgen.agents.container_agent import make_container_agent
+        from forge.envgen.episode_runner import ContainerEpisodeRunner, EpisodeConfig
+        from forge.settings import experiment_seed
+
+        port = int(port_file.read_text().strip())
+        cfg_ep = EpisodeConfig(base_url=f"http://localhost:{port}", objective=task.objective)
+        agent = make_container_agent("random", seed=experiment_seed(attempt_seed))
+        with exclusive_environment(self._redis, task.domain), \
+                ContainerEpisodeRunner(cfg_ep, manifest=self.manifest_for(task.domain)) as runner:
+            return runner.run_episode(agent, jsonl_path=jsonl_path, seed=attempt_seed)
+
+
+def _env_quality_metrics(domains: list[str], data_dir: Path, manifest_for, publish) -> list:
+    """Env quality per domain that has a state manifest to measure coverage against."""
+    from forge.benchmark.env_quality import compute_env_quality
+
+    metrics = []
+    for domain in domains:
+        manifest = manifest_for(domain)
+        if manifest:
+            m = compute_env_quality(episode_dir=data_dir / domain, manifest=manifest)
+            metrics.append(m)
+            publish({"log": f"  {domain}: coverage={m.state_coverage_score:.2f}  dead_end_rate={m.dead_end_rate:.2f}"})
+    return metrics
+
 
 @celery.task(name="backend.app.worker.tasks.run_evaluation_task", ignore_result=True)
 def run_evaluation_task(run_id: str, engine: str, config: dict) -> None:

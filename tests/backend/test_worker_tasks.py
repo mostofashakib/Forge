@@ -197,7 +197,20 @@ def _rollout_state(job_id: str):
         ]
 
 
-def test_rollout_episode_crash_is_classified_and_completes_the_job(benchmark_db):
+def _env_declaring(*task_ids: str):
+    """A stand-in env builder whose task source declares `task_ids`."""
+    from forge.runtime.task_source import StaticTaskSource
+
+    env = SimpleNamespace(task_source=StaticTaskSource([{"id": t, "objective": f"do {t}"} for t in task_ids]))
+    return lambda env_name: (lambda: env)
+
+
+@pytest.fixture
+def declares_triage(monkeypatch):
+    monkeypatch.setattr(rollout_tasks, "forge_env_builder", _env_declaring("triage", "archive"))
+
+
+def test_rollout_episode_crash_is_classified_and_completes_the_job(benchmark_db, declares_triage):
     _add_rollout_job("rj_crash", num_episodes=1)
 
     with patch(
@@ -211,7 +224,7 @@ def test_rollout_episode_crash_is_classified_and_completes_the_job(benchmark_db)
     assert episodes == [("failed", "infrastructure", False)]
 
 
-def test_rollout_episode_that_hits_its_budget_is_truncated(benchmark_db):
+def test_rollout_episode_that_hits_its_budget_is_truncated(benchmark_db, declares_triage):
     _add_rollout_job("rj_budget", num_episodes=2)
     result = SimpleNamespace(termination_reason="max_steps")
 
@@ -223,7 +236,7 @@ def test_rollout_episode_that_hits_its_budget_is_truncated(benchmark_db):
     assert episodes == [("truncated", None, True)]
 
 
-def test_rollout_episode_that_submits_keeps_its_running_status(benchmark_db):
+def test_rollout_episode_that_submits_keeps_its_running_status(benchmark_db, declares_triage):
     # False-positive guard: only budget reasons truncate.
     _add_rollout_job("rj_done", num_episodes=1)
     result = SimpleNamespace(termination_reason="submitted")
@@ -371,3 +384,68 @@ def test_transfer_reports_the_injected_evaluators_result(benchmark_db):
     assert (seen[0].seeds, seen[0].max_train_steps, str(seen[0].data_dir)) == (2, 40, "d")
     assert seen[0].run_id == "bm_1"
     assert published[-1]["done"] is True
+
+
+def _rollout_failure(job_id: str):
+    from backend.app import database
+    from backend.app.models import Episode
+
+    with database.get_session_factory()() as db:
+        episode = db.query(Episode).filter_by(env_name="mail").one()
+        return episode.status, episode.failure_type, episode.failure_reason, episode.task_name
+
+
+def test_a_rollout_for_an_undeclared_task_fails_instead_of_running_another(benchmark_db, monkeypatch):
+    monkeypatch.setattr(rollout_tasks, "forge_env_builder", _env_declaring("archive", "reply"))
+    _add_rollout_job("rj_unknown", num_episodes=1)
+
+    with patch("forge.runtime.reliability.execute_reliable_episode") as execute:
+        tasks.run_episode_task.apply(args=["rj_unknown", 0, 1])
+
+    execute.assert_not_called()
+    status, failure_type, reason, task_name = _rollout_failure("rj_unknown")
+    assert (status, failure_type, task_name) == ("failed", "configuration", "triage")
+    assert "triage" in reason and "archive, reply" in reason
+    job, _ = _rollout_state("rj_unknown")
+    assert job == ("completed", 1)
+
+
+def test_a_declared_task_is_the_one_the_attempt_runs():
+    env = _env_declaring("triage", "archive")("mail")()
+
+    assert rollout_tasks._select_task(env, "archive").id == "archive"
+
+
+def test_selecting_an_undeclared_task_raises_rather_than_substituting():
+    env = _env_declaring("archive")("mail")()
+
+    with pytest.raises(rollout_tasks.UnknownTaskError, match="'triage'.*archive"):
+        rollout_tasks._select_task(env, "triage")
+
+
+def test_an_env_without_declared_tasks_runs_the_name_as_its_objective():
+    # Nothing is substituted: the episode runs exactly what was asked for.
+    env = _env_declaring()("mail")()
+
+    assert rollout_tasks._select_task(env, "file the report") == {
+        "id": "file the report", "objective": "file the report",
+    }
+
+
+def test_an_env_that_fails_to_build_is_still_classified_by_the_retry_path(benchmark_db, monkeypatch):
+    def broken_builder(env_name):
+        raise RuntimeError("Environment 'mail' violates network policy")
+
+    monkeypatch.setattr(rollout_tasks, "forge_env_builder", broken_builder)
+    _add_rollout_job("rj_broken", num_episodes=1)
+
+    with patch(
+        "forge.runtime.reliability.execute_reliable_episode",
+        side_effect=RuntimeError("connection refused"),
+    ) as execute:
+        tasks.run_episode_task.apply(args=["rj_broken", 0, 1])
+
+    execute.assert_called_once()
+    job, episodes = _rollout_state("rj_broken")
+    assert job == ("completed", 1)
+    assert episodes == [("failed", "infrastructure", False)]

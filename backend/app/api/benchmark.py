@@ -285,7 +285,7 @@ def download_benchmark_csv(run_id: str, db: Session = Depends(get_db)):
 
 
 class GenerateGraphsRequest(BaseModel):
-    trials: list[TaskTrial]
+    trials: list[TaskTrial] = Field(min_length=1)
     max_k: int | None = 10
     graph_type: Literal["all", "pass_curve", "agreement_bar", "risk_breakdown"] = "all"
 
@@ -302,48 +302,30 @@ def get_benchmark_graphs(
     if run is None or run.report_json is None:
         raise HTTPException(status_code=404, detail="Benchmark run or report not found")
 
-    raw_data = json.loads(run.report_json)
-    trials: list[TaskTrial] = []
-
-    if isinstance(raw_data, dict) and "trials" in raw_data:
-        trials = [TaskTrial(**t) for t in raw_data["trials"]]
-    elif isinstance(raw_data, list):
-        for idx, item in enumerate(raw_data):
-            num_episodes = max(1, item.get("num_episodes", 10))
-            reward_density = item.get("reward_density", 0.5)
-            coverage = item.get("state_coverage_score", 0.5)
-            diversity = item.get("action_diversity", 0.5)
-            passed = max(0, int(round(reward_density * num_episodes)))
-            para_passed = max(0, int(round(coverage * num_episodes)))
-            v_passes = [True] * passed + [False] * (num_episodes - passed)
-            gt_passes = [True] * para_passed + [False] * (num_episodes - para_passed)
-
-            trials.append(
-                TaskTrial(
-                    task_id=item.get("env_name", f"env_{idx}"),
-                    passed_samples=passed,
-                    total_samples=num_episodes,
-                    paraphrased_passed_samples=para_passed,
-                    paraphrased_total_samples=num_episodes,
-                    verifier_passes=v_passes,
-                    ground_truth_passes=gt_passes,
-                    ngram_overlap=max(0.0, min(1.0, 1.0 - diversity)),
-                )
-            )
-    elif isinstance(raw_data, dict):
-        trials.append(
-            TaskTrial(
-                task_id=raw_data.get("task_path", run_id),
-                passed_samples=1 if raw_data.get("status") == "completed" else 0,
-                total_samples=1,
-            )
+    trials = _measured_trials(json.loads(run.report_json))
+    if not trials:
+        raise HTTPException(
+            status_code=422,
+            detail="This run recorded no per-task pass/fail samples, so there is no pass@k to chart",
         )
-
     graph_data = generate_benchmark_graphs(trials, max_k=max_k)
     res = graph_data.model_dump()
     if graph_type != "all" and graph_type in res["chart_configs"]:
         res["chart_configs"] = {graph_type: res["chart_configs"][graph_type]}
     return res
+
+
+def _measured_trials(report) -> list[TaskTrial]:
+    """Per-task samples a run actually recorded. Summary metrics are not samples."""
+    if not isinstance(report, dict):
+        return []
+    if "trials" in report:
+        return [TaskTrial(**trial) for trial in report["trials"]]
+    return [
+        TaskTrial(task_id=task, passed_samples=counts["passed"], total_samples=counts["decided"])
+        for task, counts in report.get("task_pass_counts", {}).items()
+        if counts["decided"] > 0
+    ]
 
 
 @router.post("/graphs")

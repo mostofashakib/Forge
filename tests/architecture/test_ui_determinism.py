@@ -55,7 +55,9 @@ def test_browser_runner_disables_motion_on_pages():
 def test_browser_runner_episode_wires_in_motion_suppression():
     from forge.envgen.browser_runner import BrowserEpisodeRunner
 
-    assert "_disable_motion" in inspect.getsource(BrowserEpisodeRunner.run_episode)
+    # Every episode page comes from _fresh_page, which suppresses motion.
+    assert "self._fresh_page(" in inspect.getsource(BrowserEpisodeRunner.run_episode)
+    assert "_disable_motion" in inspect.getsource(BrowserEpisodeRunner._fresh_page)
 
 
 # ---------------------------------------------------------------------------
@@ -68,14 +70,21 @@ def test_premade_app_state_is_sqlite_backed(env_dir):
     assert 'sqlite:///' in app, f"{env_dir}/app.py must persist state in SQLite"
 
 
+def test_shared_forge_state_route_reads_from_a_db_session():
+    protocol = (ROOT / "docker/premade/_shared/forge_protocol.py").read_text()
+    state_fn = protocol[protocol.index("def forge_state"):]
+    state_fn = state_fn[: state_fn.index("\n    @")]  # body up to the next route
+    assert "with session_factory() as db:" in state_fn and "return state(db)" in state_fn, (
+        "/forge/state must read from the DB session — the DB is the single source of truth"
+    )
+
+
 @pytest.mark.parametrize("env_dir", PREMADE)
 def test_premade_forge_state_reads_from_db(env_dir):
     app = (ROOT / env_dir / "app.py").read_text()
-    state_fn = app[app.index("def forge_state"):]
-    state_fn = state_fn[: state_fn.index("\n@")]  # body up to the next route
-    assert "_get_state_dict(db)" in state_fn, (
-        f"{env_dir}: /forge/state must read from the DB session — "
-        "the DB is the single source of truth"
+    router = app[app.index("app.include_router(forge_router("):]
+    assert "state=_get_state_dict" in router[: router.index("\n))")], (
+        f"{env_dir}: /forge/state must serve the DB-backed state view"
     )
 
 

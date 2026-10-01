@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { driverChoices, isScriptedDriver } from "@/lib/personaDrivers";
 import { DEFAULT_TRAITS, TRAIT_COPY, type Traits } from "@/lib/personaTraits";
 
 export interface CastPersona {
@@ -29,23 +30,8 @@ export const EMPTY_CAST: CastConfig = {
   roster: [],
 };
 
-const DRIVERS = [
-  {
-    id: "scripted",
-    label: "Scripted",
-    hint: "Free and offline. People act at human-like times, but never say anything new.",
-  },
-  {
-    id: "anthropic:claude-sonnet-5",
-    label: "Claude Sonnet 5",
-    hint: "A model decides each person's turn, in character.",
-  },
-  {
-    id: "anthropic:claude-opus-5",
-    label: "Claude Opus 5",
-    hint: "A model decides each person's turn, in character.",
-  },
-];
+const SCRIPTED_HINT = "Free and offline. People act at human-like times, but never say anything new.";
+const MODEL_HINT = "A model decides each person's turn, in character.";
 
 function blankPerson(id: string): CastPersona {
   return {
@@ -345,13 +331,13 @@ export default function PersonaCastPicker({
               disabled={disabled}
               onChange={(e) => set({ driver: e.target.value })}
             >
-              {DRIVERS.map((d) => (
+              {driverChoices(value.driver).map((d) => (
                 <option key={d.id} value={d.id}>
                   {d.label}
                 </option>
               ))}
             </select>
-            <small>{DRIVERS.find((d) => d.id === value.driver)?.hint}</small>
+            <small>{isScriptedDriver(value.driver) ? SCRIPTED_HINT : MODEL_HINT}</small>
           </label>
           <label>
             <span>Speakers per step</span>

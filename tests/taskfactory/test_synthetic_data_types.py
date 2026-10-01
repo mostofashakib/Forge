@@ -86,7 +86,7 @@ def test_rl_task_properties():
 
 def test_pipeline_result_to_preference_pairs():
     task = _sample_task()
-    rejection = _sample_rejection()
+    rejection = _sample_rejection(slot=0)
     taxonomy = Taxonomy(categories=[TaxonomyCategory(name="core", description="", difficulties=[1])])
     result = PipelineResult(
         requested=1,
@@ -103,6 +103,40 @@ def test_pipeline_result_to_preference_pairs():
     assert pair.preferred["id"] == "task_1"
     assert "Sort emails unpredictably" in str(pair.dispreferred)
     assert pair.rejection_reason == "Nondeterministic output between runs"
+
+
+def _pairs(tasks, rejections):
+    taxonomy = Taxonomy(categories=[TaxonomyCategory(name="core", description="", difficulties=[1])])
+    return PipelineResult(
+        requested=len(tasks), taxonomy=taxonomy, tasks=tasks, rejections=rejections,
+    ).to_preference_pairs()
+
+
+def test_a_rejected_draft_from_another_slot_is_never_paired():
+    # Same category, different slot: the drafts answer different prompts.
+    assert _pairs([_sample_task()], [_sample_rejection(slot=1)]) == []
+
+
+def test_a_task_accepted_on_its_first_try_has_no_pair_to_invent():
+    assert _pairs([_sample_task()], []) == []
+
+
+def test_a_rejection_without_a_draft_yields_no_pair():
+    rejection = _sample_rejection(slot=0).model_copy(update={"draft": None})
+
+    assert _pairs([_sample_task()], [rejection]) == []
+
+
+def test_every_rejected_draft_for_the_slot_becomes_its_own_pair():
+    first = _sample_rejection(slot=0)
+    second = first.model_copy(update={"round": 2, "stage": "review", "reason": "unrealistic"})
+
+    pairs = _pairs([_sample_task()], [first, second])
+
+    assert [pair.rejection_reason for pair in pairs] == [
+        "Nondeterministic output between runs", "unrealistic",
+    ]
+    assert len({pair.id for pair in pairs}) == 2
 
 
 def test_pipeline_result_to_sft_items():
@@ -138,10 +172,13 @@ def test_pipeline_run_generates_preference_pairs_byproduct():
     )
 
     class FakeWriter:
+        rounds = 0
+
         def write(self, prof, taxonomy, slots, *, avoid_titles=(), feedback=None):
+            self.rounds += 1
             result = {}
             for s in slots:
-                title = "Good" if s.index == 0 else "Bad"
+                title = "Good" if s.index == 0 and self.rounds > 1 else f"Bad {self.rounds}"
                 result[s.index] = TaskDraft(
                     slot=s.index,
                     category="core",
@@ -205,10 +242,13 @@ def test_pipeline_run_generates_preference_pairs_byproduct():
     assert result.data_type == "preference_pairs"
     assert len(result.tasks) == 1
     assert len(result.rejections) >= 1
+    # Slot 0 was rejected once before its rewrite passed. Slot 1 never
+    # passed, so its rejections have nothing to be paired against.
     assert len(result.preference_pairs) == 1
     pair = result.preference_pairs[0]
     assert pair.preferred["title"] == "Good"
-    assert "Bad" in str(pair.dispreferred)
+    assert pair.dispreferred["title"] == "Bad 1"
+    assert pair.dispreferred["slot"] == 0
 
 
 def test_rejects_invalid_task_rejection_stage():

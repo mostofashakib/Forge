@@ -19,15 +19,18 @@ import json
 from datetime import datetime, timedelta
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy import (
-    Boolean, Column, Integer, String, Text, create_engine
+    Boolean, Column, String, Text, create_engine
 )
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
+from forge_protocol import (
+    BASELINE_SLOT, TIMESTAMP_FORMAT, Ledger, dump_ledger, forge_router, protocol_tables, restore_ledger, save_snapshot,
+)
 from gmail_seed import AUTO_REPLY_MAP, SEED_CONTACTS, SEED_EMAILS, SEED_LABELS
 
 # ---------------------------------------------------------------------------
@@ -78,28 +81,8 @@ class Label(Base):
     color = Column(String, default="#1a73e8")
 
 
-class SavedState(Base):
-    __tablename__ = "saved_states"
-
-    slot = Column(String, primary_key=True)
-    data = Column(Text, nullable=False)  # JSON blob
-
-
-class ActionLog(Base):
-    __tablename__ = "action_log"
-    id = Column(String, primary_key=True)
-    action_type = Column(String, nullable=False)
-    target_id = Column(String, nullable=True)
-    payload = Column(Text, default="{}")
-    timestamp = Column(String, nullable=False)
-
-
-class ForgeCounter(Base):
-    """The virtual clock and the id counters, stored with the data they number."""
-    __tablename__ = "forge_counters"
-    name = Column(String, primary_key=True)
-    value = Column(Integer, nullable=False)
-
+_TABLES = protocol_tables(Base)
+ActionLog = _TABLES.action_log
 
 Base.metadata.create_all(bind=engine)
 
@@ -120,31 +103,6 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-# Episodes must replay identically, so the app never reads the wall clock or
-# mints random ids. Time is a counter that moves one second per event, and ids
-# count up per prefix. Both live in SQLite, so they reset, snapshot, and
-# survive a restart together with the rows they describe.
-
-def _bump(db: Session, name: str) -> int:
-    counter = db.get(ForgeCounter, name)
-    if counter is None:
-        counter = ForgeCounter(name=name, value=0)
-        db.add(counter)
-        db.flush()  # later lookups in this session must find it
-    counter.value += 1
-    return counter.value
-
-
-def _now(db: Session) -> str:
-    moment = _CLOCK_EPOCH + timedelta(seconds=_bump(db, "clock"))
-    return moment.strftime(_TIMESTAMP_FORMAT)
-
-
-def _next_id(db: Session, prefix: str) -> str:
-    # The underscore keeps minted ids apart from seed ids like "e001".
-    return f"{prefix}_{_bump(db, f'id:{prefix}'):04d}"
-
 
 def _snippet(body: str) -> str:
     return body[:100].replace("\n", " ").strip()
@@ -175,16 +133,6 @@ def _contact_to_dict(c: Contact) -> dict:
 
 def _label_to_dict(lb: Label) -> dict:
     return {"id": lb.id, "name": lb.name, "color": lb.color}
-
-
-def _log_action(db: Session, action_type: str, target_id: str = None, payload: dict = None) -> None:
-    db.add(ActionLog(
-        id=_next_id(db, "a"),
-        action_type=action_type,
-        target_id=target_id,
-        payload=json.dumps(payload or {}),
-        timestamp=_now(db),
-    ))
 
 
 def _get_state_dict(db: Session) -> dict:
@@ -218,14 +166,7 @@ def _dump_full_db(db: Session) -> dict:
         "emails": [_email_to_dict(e) for e in db.query(Email).all()],
         "contacts": [_contact_to_dict(c) for c in db.query(Contact).all()],
         "labels": [_label_to_dict(lb) for lb in db.query(Label).all()],
-        "action_log": [
-            {"id": a.id, "action_type": a.action_type, "target_id": a.target_id,
-             "payload": a.payload, "timestamp": a.timestamp}
-            for a in db.query(ActionLog).order_by(ActionLog.timestamp).all()
-        ],
-        "forge_counters": {
-            c.name: c.value for c in db.query(ForgeCounter).order_by(ForgeCounter.name).all()
-        },
+        **dump_ledger(db, _TABLES),
     }
 
 
@@ -233,14 +174,7 @@ def _restore_from_dict(db: Session, data: dict) -> None:
     db.query(Email).delete()
     db.query(Contact).delete()
     db.query(Label).delete()
-    db.query(ActionLog).delete()
-    # A snapshot carries the clock and counters, so restoring it rewinds them
-    # too. State JSON without them leaves them running, which keeps new ids
-    # clear of the rows already there.
-    if "forge_counters" in data:
-        db.query(ForgeCounter).delete()
-        for name, value in data["forge_counters"].items():
-            db.add(ForgeCounter(name=name, value=value))
+    restore_ledger(db, _TABLES, data)
     for e in data.get("emails", []):
         db.add(Email(
             id=e["id"],
@@ -255,7 +189,7 @@ def _restore_from_dict(db: Session, data: dict) -> None:
             is_read=e.get("is_read", False),
             is_starred=e.get("is_starred", False),
             labels=json.dumps(e.get("labels", [])),
-            timestamp=e["timestamp"] if "timestamp" in e else _now(db),
+            timestamp=e["timestamp"] if "timestamp" in e else _ledger.now(db),
             has_attachment=e.get("has_attachment", False),
         ))
     for c in data.get("contacts", []):
@@ -266,9 +200,6 @@ def _restore_from_dict(db: Session, data: dict) -> None:
         ))
     for lb in data.get("labels", []):
         db.add(Label(id=lb["id"], name=lb["name"], color=lb.get("color", "#1a73e8")))
-    for a in data.get("action_log", []):
-        db.add(ActionLog(id=a["id"], action_type=a["action_type"], target_id=a.get("target_id"),
-                         payload=a.get("payload", "{}"), timestamp=a["timestamp"]))
     db.commit()
 
 
@@ -277,12 +208,11 @@ def _restore_from_dict(db: Session, data: dict) -> None:
 # ---------------------------------------------------------------------------
 
 
-_TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 # Virtual time starts a minute after the newest seed email, so anything created
 # during an episode sorts as the newest mail.
-_CLOCK_EPOCH = max(
-    datetime.strptime(e["timestamp"], _TIMESTAMP_FORMAT) for e in SEED_EMAILS
-) + timedelta(minutes=1)
+_ledger = Ledger(_TABLES, epoch=max(
+    datetime.strptime(e["timestamp"], TIMESTAMP_FORMAT) for e in SEED_EMAILS
+) + timedelta(minutes=1))
 
 
 def _seed_if_empty() -> None:
@@ -312,88 +242,17 @@ def _seed_if_empty() -> None:
         for lb in SEED_LABELS:
             db.add(Label(**lb))
         db.commit()
-    # Auto-save baseline snapshot after seeding
-    with SessionLocal() as snap_db:
-        data = _dump_full_db(snap_db)
-        snap_db.add(SavedState(slot="baseline", data=json.dumps(data)))
-        snap_db.commit()
+    with SessionLocal() as db:
+        save_snapshot(db, _TABLES, BASELINE_SLOT, _dump_full_db(db))
 
 
 _seed_if_empty()
 
-
-# ---------------------------------------------------------------------------
-# Forge protocol
-# ---------------------------------------------------------------------------
-
-@app.get("/forge/health")
-def health():
-    return {"status": "ok"}
-
-
-@app.get("/forge/state")
-def forge_state():
-    with SessionLocal() as db:
-        return _get_state_dict(db)
-
-
-@app.get("/forge/dump")
-def forge_dump():
-    """The full restorable state, in the shape /forge/restore-state takes."""
-    with SessionLocal() as db:
-        return _dump_full_db(db)
-
-
-@app.post("/forge/reset")
-def forge_reset():
-    with SessionLocal() as db:
-        db.query(Email).delete()
-        db.query(Contact).delete()
-        db.query(Label).delete()
-        db.query(ActionLog).delete()
-        db.query(SavedState).delete()
-        db.query(ForgeCounter).delete()
-        db.commit()
-    _seed_if_empty()
-    with SessionLocal() as db:
-        return {"status": "reset", "state": _get_state_dict(db)}
-
-
-class SnapshotRequest(BaseModel):
-    slot: str
-
-
-@app.post("/forge/snapshot")
-def forge_snapshot(req: SnapshotRequest):
-    with SessionLocal() as db:
-        data = _dump_full_db(db)
-        saved = db.query(SavedState).filter(SavedState.slot == req.slot).first()
-        if saved:
-            saved.data = json.dumps(data)
-        else:
-            db.add(SavedState(slot=req.slot, data=json.dumps(data)))
-        db.commit()
-    return {"status": "snapshot_saved", "slot": req.slot}
-
-
-@app.post("/forge/restore/{slot}")
-def forge_restore(slot: str):
-    with SessionLocal() as db:
-        saved = db.query(SavedState).filter(SavedState.slot == slot).first()
-        if not saved:
-            raise HTTPException(status_code=404, detail=f"Slot '{slot}' not found")
-        data = json.loads(saved.data)
-        _restore_from_dict(db, data)
-        state = _get_state_dict(db)
-    return {"status": "restored", "slot": slot, "state": state}
-
-
-@app.post("/forge/restore-state")
-def forge_restore_state(data: dict):
-    with SessionLocal() as db:
-        _restore_from_dict(db, data)
-        state = _get_state_dict(db)
-    return {"status": "restored", "state": state}
+app.include_router(forge_router(
+    SessionLocal, _TABLES,
+    state=_get_state_dict, dump=_dump_full_db, restore=_restore_from_dict,
+    domain_tables=(Email, Contact, Label), seed=_seed_if_empty,
+))
 
 
 # ---------------------------------------------------------------------------
@@ -491,7 +350,7 @@ class ReceiveRequest(BaseModel):
 def receive(req: ReceiveRequest):
     """Inject an incoming email into the inbox. Used by evaluators to simulate responses."""
     with SessionLocal() as db:
-        email_id = _next_id(db, "i")
+        email_id = _ledger.next_id(db, "i")
         db.add(Email(
             id=email_id,
             thread_id=req.thread_id,
@@ -505,10 +364,10 @@ def receive(req: ReceiveRequest):
             is_read=False,
             is_starred=False,
             labels=json.dumps(req.labels or []),
-            timestamp=_now(db),
+            timestamp=_ledger.now(db),
             has_attachment=False,
         ))
-        _log_action(db, "receive", email_id, {"from": req.from_addr, "subject": req.subject})
+        _ledger.log_action(db, "receive", email_id, {"from": req.from_addr, "subject": req.subject})
         db.commit()
         state = _get_state_dict(db)
     return {"status": "received", "email_id": email_id, "state": state}
@@ -517,8 +376,8 @@ def receive(req: ReceiveRequest):
 @app.post("/compose")
 def compose(req: ComposeRequest):
     with SessionLocal() as db:
-        draft_id = _next_id(db, "d")
-        ts = _now(db)
+        draft_id = _ledger.next_id(db, "d")
+        ts = _ledger.now(db)
         db.add(Email(
             id=draft_id,
             thread_id=None,
@@ -535,7 +394,7 @@ def compose(req: ComposeRequest):
             timestamp=ts,
             has_attachment=False,
         ))
-        _log_action(db, "compose", draft_id)
+        _ledger.log_action(db, "compose", draft_id)
         db.commit()
         state = _get_state_dict(db)
     return {"status": "draft_created", "draft_id": draft_id, "state": state}
@@ -549,8 +408,8 @@ def send(req: SendRequest):
             return {"status": "error", "message": f"Draft '{req.draft_id}' not found", "state": _get_state_dict(db)}
         to_addr = email.to_addr
         email.folder = "sent"
-        email.timestamp = _now(db)
-        _log_action(db, "send", req.draft_id, {"to": to_addr})
+        email.timestamp = _ledger.now(db)
+        _ledger.log_action(db, "send", req.draft_id, {"to": to_addr})
         db.commit()
         state = _get_state_dict(db)
     return {"status": "sent", "email_id": req.draft_id, "state": state}
@@ -562,7 +421,7 @@ def reply(req: ReplyRequest):
         original = db.query(Email).filter(Email.id == req.email_id).first()
         if not original:
             return {"status": "error", "message": f"Email '{req.email_id}' not found", "state": _get_state_dict(db)}
-        reply_id = _next_id(db, "r")
+        reply_id = _ledger.next_id(db, "r")
         orig_labels = original.labels or "[]"
         db.add(Email(
             id=reply_id,
@@ -577,13 +436,13 @@ def reply(req: ReplyRequest):
             is_read=True,
             is_starred=False,
             labels=orig_labels,
-            timestamp=_now(db),
+            timestamp=_ledger.now(db),
             has_attachment=False,
         ))
         original.is_read = True
         thread = original.thread_id or original.id
         orig_from = original.from_addr
-        _log_action(db, "reply", reply_id, {"to": orig_from})
+        _ledger.log_action(db, "reply", reply_id, {"to": orig_from})
         db.commit()
         # Auto-inject simulated response if configured and not already done
         if thread in AUTO_REPLY_MAP:
@@ -593,16 +452,16 @@ def reply(req: ReplyRequest):
             ).first()
             if not already:
                 r = AUTO_REPLY_MAP[thread]
-                resp_id = _next_id(db, "ar")
+                resp_id = _ledger.next_id(db, "ar")
                 db.add(Email(
                     id=resp_id, thread_id=thread, folder="inbox",
                     from_addr=r["from_addr"], to_addr="me@company.com", cc="",
                     subject=r["subject"], body=r["body"],
                     snippet=_snippet(r["body"]),
                     is_read=False, is_starred=False, labels='["work"]',
-                    timestamp=_now(db), has_attachment=False,
+                    timestamp=_ledger.now(db), has_attachment=False,
                 ))
-                _log_action(db, "auto_reply", thread, {"from": r["from_addr"]})
+                _ledger.log_action(db, "auto_reply", thread, {"from": r["from_addr"]})
                 db.commit()
         state = _get_state_dict(db)
     return {"status": "replied", "reply_id": reply_id, "state": state}
@@ -614,7 +473,7 @@ def forward(req: ForwardRequest):
         original = db.query(Email).filter(Email.id == req.email_id).first()
         if not original:
             return {"status": "error", "message": f"Email '{req.email_id}' not found", "state": _get_state_dict(db)}
-        fwd_id = _next_id(db, "f")
+        fwd_id = _ledger.next_id(db, "f")
         note_text = f"{req.note}\n\n" if req.note else ""
         fwd_body = (
             f"{note_text}"
@@ -636,10 +495,10 @@ def forward(req: ForwardRequest):
             is_read=True,
             is_starred=False,
             labels="[]",
-            timestamp=_now(db),
+            timestamp=_ledger.now(db),
             has_attachment=original.has_attachment,
         ))
-        _log_action(db, "forward", fwd_id, {"to": req.to})
+        _ledger.log_action(db, "forward", fwd_id, {"to": req.to})
         db.commit()
         state = _get_state_dict(db)
     return {"status": "forwarded", "forward_id": fwd_id, "state": state}
@@ -652,7 +511,7 @@ def archive(req: EmailIdRequest):
         if not email:
             return {"status": "error", "message": f"Email '{req.email_id}' not found", "state": _get_state_dict(db)}
         email.folder = "archive"
-        _log_action(db, "archive", req.email_id)
+        _ledger.log_action(db, "archive", req.email_id)
         db.commit()
         state = _get_state_dict(db)
     return {"status": "archived", "email_id": req.email_id, "state": state}
@@ -667,7 +526,7 @@ def delete(req: EmailIdRequest):
         was_starred = bool(email.is_starred)
         subject = email.subject
         email.folder = "trash"
-        _log_action(db, "delete", req.email_id, {"subject": subject, "was_starred": was_starred})
+        _ledger.log_action(db, "delete", req.email_id, {"subject": subject, "was_starred": was_starred})
         db.commit()
         state = _get_state_dict(db)
     return {"status": "deleted", "email_id": req.email_id, "state": state}
@@ -680,7 +539,7 @@ def mark_read(req: MarkReadRequest):
         if not email:
             return {"status": "error", "message": f"Email '{req.email_id}' not found", "state": _get_state_dict(db)}
         email.is_read = req.read
-        _log_action(db, "mark_read", req.email_id, {"read": req.read})
+        _ledger.log_action(db, "mark_read", req.email_id, {"read": req.read})
         db.commit()
         state = _get_state_dict(db)
     return {"status": "marked", "email_id": req.email_id, "read": req.read, "state": state}
@@ -693,7 +552,7 @@ def star(req: StarRequest):
         if not email:
             return {"status": "error", "message": f"Email '{req.email_id}' not found", "state": _get_state_dict(db)}
         email.is_starred = req.starred
-        _log_action(db, "star", req.email_id, {"starred": req.starred})
+        _ledger.log_action(db, "star", req.email_id, {"starred": req.starred})
         db.commit()
         state = _get_state_dict(db)
     return {"status": "starred", "email_id": req.email_id, "starred": req.starred, "state": state}
@@ -710,11 +569,11 @@ def label(req: LabelRequest):
             if req.label not in current:
                 current.append(req.label)
             if not db.query(Label).filter(Label.name == req.label).first():
-                db.add(Label(id=_next_id(db, "l"), name=req.label, color="#1a73e8"))
+                db.add(Label(id=_ledger.next_id(db, "l"), name=req.label, color="#1a73e8"))
         else:
             current = [l for l in current if l != req.label]
         email.labels = json.dumps(current)
-        _log_action(db, "label", req.email_id)
+        _ledger.log_action(db, "label", req.email_id)
         db.commit()
         state = _get_state_dict(db)
     return {"status": "labeled", "email_id": req.email_id, "label": req.label, "added": req.add, "state": state}
@@ -749,7 +608,7 @@ def move(req: MoveRequest):
         if not email:
             return {"status": "error", "message": f"Email '{req.email_id}' not found", "state": _get_state_dict(db)}
         email.folder = req.folder
-        _log_action(db, "move", req.email_id, {"folder": req.folder})
+        _ledger.log_action(db, "move", req.email_id, {"folder": req.folder})
         db.commit()
         state = _get_state_dict(db)
     return {"status": "moved", "email_id": req.email_id, "folder": req.folder, "state": state}
@@ -762,7 +621,7 @@ def bulk_archive(req: BulkArchiveRequest):
         archived = [eid for eid in req.email_ids if eid in found]
         for eid in archived:
             found[eid].folder = "archive"
-        _log_action(db, "bulk_archive", None, {"count": len(archived)})
+        _ledger.log_action(db, "bulk_archive", None, {"count": len(archived)})
         db.commit()
         state = _get_state_dict(db)
     return {"status": "bulk_archived", "archived": archived, "count": len(archived), "state": state}
@@ -774,9 +633,9 @@ def create_label(req: CreateLabelRequest):
         existing = db.query(Label).filter(Label.name == req.name).first()
         if existing:
             return {"status": "error", "message": f"Label '{req.name}' already exists", "state": _get_state_dict(db)}
-        lb_id = _next_id(db, "l")
+        lb_id = _ledger.next_id(db, "l")
         db.add(Label(id=lb_id, name=req.name, color=req.color))
-        _log_action(db, "create_label", None, {"name": req.name})
+        _ledger.log_action(db, "create_label", None, {"name": req.name})
         db.commit()
         state = _get_state_dict(db)
     return {"status": "created", "label_id": lb_id, "name": req.name, "state": state}
@@ -787,7 +646,7 @@ def empty_trash():
     with SessionLocal() as db:
         count = db.query(Email).filter(Email.folder == "trash").count()
         db.query(Email).filter(Email.folder == "trash").delete()
-        _log_action(db, "empty_trash", None, {"deleted_count": count})
+        _ledger.log_action(db, "empty_trash", None, {"deleted_count": count})
         db.commit()
         state = _get_state_dict(db)
     return {"status": "trash_emptied", "deleted_count": count, "state": state}

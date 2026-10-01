@@ -349,52 +349,17 @@ class BackendBuilderAgent(EnvGenAgent):
 
     async def run(self, ctx: EnvGenContext, bus: ArtifactBus) -> None:
         run_start = time.monotonic()
-
-        entity_summary = "\n".join(
-            f"  - {e.name}: fields={[f.name for f in e.fields]}"
-            for e in ctx.compiler_input.entities
+        app_context = with_correction(
+            bus, self.agent_id, _app_context(ctx, bus, request_label="Description", research_key="backend_research")
         )
-        action_summary = "\n".join(
-            f"  - {a.name}(params={[p.name for p in a.params]})"
-            for a in ctx.compiler_input.actions
-        )
-        app_context = (
-            f"Description: {ctx.description}\n"
-            f"Domain: {ctx.compiler_input.domain}\n\n"
-            f"Entities:\n{entity_summary}\n\n"
-            f"Actions:\n{action_summary}"
-        )
-        research = bus.get("backend_research")
-        if research is not None:
-            app_context += f"\n\nRESEARCHED PRODUCT CONTEXT:\n{research.as_prompt()}"
-        app_context = with_correction(bus, self.agent_id, app_context)
-
         await bus.log(
             f"[backend-builder] Starting — "
             f"{len(ctx.compiler_input.entities)} entities, "
             f"{len(ctx.compiler_input.actions)} actions"
         )
 
-        loop = asyncio.get_event_loop()
-
         # Phase 1: plan (sequential — everything depends on it)
-        t_plan = time.monotonic()
-        await bus.log("[backend-builder] Phase 1/2: planning backend files (sonnet)…")
-        plan: AppPlan = await loop.run_in_executor(
-            None,
-            lambda: self._client.extract(
-                system=AppGeneratorPrompts.BACKEND_PLAN,
-                user=app_context,
-                schema=AppPlan,
-            ),
-        )
-        backend_files = [f for f in plan.files if f.path.lower() != "ui.html"]
-        file_list = ", ".join(f.path for f in backend_files)
-        await bus.log(
-            f"[backend-builder] Plan done ({_fmt(time.monotonic() - t_plan)}) — "
-            f"{len(backend_files)} files: {file_list}"
-        )
-
+        backend_files = await self._plan(app_context, bus)
         plan_summary = "\n".join(
             f"  - {f.path}: {f.description}" for f in backend_files
         )
@@ -405,61 +370,11 @@ class BackendBuilderAgent(EnvGenAgent):
             f"[backend-builder] Phase 2/2: generating {total} files in parallel…"
         )
         t_gen = time.monotonic()
-
-        async def _gen_one(i: int, file_plan) -> tuple[str, str]:
-            is_simple = file_plan.path.lower() in _FAST_FILES
-            model_label = "haiku" if is_simple else "sonnet"
-            t_file = time.monotonic()
-            await bus.log(
-                f"[backend-builder] [{i}/{total}] {file_plan.path} — starting ({model_label})…"
-            )
-
-            if file_plan.path == "main.py":
-                user = (
-                    f"{app_context}\n\n"
-                    f"Application file plan:\n{plan_summary}\n\n"
-                    f"Generate file: main.py\n"
-                    f"Responsibility: {file_plan.description}"
-                )
-                content = await self._call(
-                    system=AppGeneratorPrompts.backend(with_ui=ctx.with_ui), user=user
-                )
-
-            elif file_plan.path.lower() == "dockerfile":
-                # Dockerfile uses a dedicated prompt that pins port 8000;
-                # post-build normalisation (`_normalise_dockerfile_port`)
-                # acts as a hard guardrail in case the LLM still drifts.
-                user = (
-                    f"{app_context}\n\n"
-                    f"Application file plan:\n{plan_summary}\n\n"
-                    f"Generate file: Dockerfile\n"
-                    f"Responsibility: {file_plan.description}"
-                )
-                content = await self._call(
-                    system=AppGeneratorPrompts.DOCKERFILE, user=user, fast=True
-                )
-
-            else:
-                user = (
-                    f"{app_context}\n\n"
-                    f"Application file plan:\n{plan_summary}\n\n"
-                    f"Generate file: {file_plan.path}\n"
-                    f"Responsibility: {file_plan.description}"
-                )
-                content = await self._call(
-                    system=AppGeneratorPrompts.GENERIC_FILE, user=user, fast=is_simple
-                )
-
-            elapsed = _fmt(time.monotonic() - t_file)
-            await bus.log(
-                f"[backend-builder] [{i}/{total}] {file_plan.path} ✓  "
-                f"({elapsed}, {len(content):,} chars)"
-            )
-            return file_plan.path, content
-
-        results = await asyncio.gather(
-            *[_gen_one(i, fp) for i, fp in enumerate(backend_files, 1)]
-        )
+        prompt_prefix = f"{app_context}\n\nApplication file plan:\n{plan_summary}\n\n"
+        results = await asyncio.gather(*[
+            self._generate_file(file_plan, prompt_prefix, with_ui=ctx.with_ui, bus=bus, progress=f"{i}/{total}")
+            for i, file_plan in enumerate(backend_files, 1)
+        ])
 
         files = dict(results)
         total_chars = sum(len(v) for v in files.values())
@@ -473,6 +388,54 @@ class BackendBuilderAgent(EnvGenAgent):
         )
 
         await bus.publish("backend_code", files)
+
+    async def _plan(self, app_context: str, bus: ArtifactBus) -> list:
+        """The backend files to write, everything but the UI page."""
+        t_plan = time.monotonic()
+        await bus.log("[backend-builder] Phase 1/2: planning backend files (sonnet)…")
+        plan: AppPlan = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: self._client.extract(
+                system=AppGeneratorPrompts.BACKEND_PLAN,
+                user=app_context,
+                schema=AppPlan,
+            ),
+        )
+        backend_files = [f for f in plan.files if f.path.lower() != "ui.html"]
+        await bus.log(
+            f"[backend-builder] Plan done ({_fmt(time.monotonic() - t_plan)}) — "
+            f"{len(backend_files)} files: {', '.join(f.path for f in backend_files)}"
+        )
+        return backend_files
+
+    async def _generate_file(
+        self, file_plan, prompt_prefix: str, *, with_ui: bool, bus: ArtifactBus, progress: str,
+    ) -> tuple[str, str]:
+        is_simple = file_plan.path.lower() in _FAST_FILES
+        t_file = time.monotonic()
+        await bus.log(
+            f"[backend-builder] [{progress}] {file_plan.path} — starting "
+            f"({'haiku' if is_simple else 'sonnet'})…"
+        )
+        if file_plan.path == "main.py":
+            name, system, fast = "main.py", AppGeneratorPrompts.backend(with_ui=with_ui), False
+        elif file_plan.path.lower() == "dockerfile":
+            # Dockerfile uses a dedicated prompt that pins port 8000;
+            # post-build normalisation (`_normalise_dockerfile_port`)
+            # acts as a hard guardrail in case the LLM still drifts.
+            name, system, fast = "Dockerfile", AppGeneratorPrompts.DOCKERFILE, True
+        else:
+            name, system, fast = file_plan.path, AppGeneratorPrompts.GENERIC_FILE, is_simple
+        content = await self._call(
+            system=system,
+            user=f"{prompt_prefix}Generate file: {name}\nResponsibility: {file_plan.description}",
+            fast=fast,
+        )
+        await bus.log(
+            f"[backend-builder] [{progress}] {file_plan.path} ✓  "
+            f"({_fmt(time.monotonic() - t_file)}, {len(content):,} chars)"
+        )
+        return file_plan.path, content
 
 
 class UIBuilderAgent(EnvGenAgent):
@@ -496,23 +459,9 @@ class UIBuilderAgent(EnvGenAgent):
         return result.content
 
     async def run(self, ctx: EnvGenContext, bus: ArtifactBus) -> None:
-        entity_summary = "\n".join(
-            f"  - {entity.name}: fields={[field.name for field in entity.fields]}"
-            for entity in ctx.compiler_input.entities
+        app_context = with_correction(
+            bus, self.agent_id, _app_context(ctx, bus, request_label="User request", research_key="ui_research")
         )
-        action_summary = "\n".join(
-            f"  - {action.name}(params={[param.name for param in action.params]})"
-            for action in ctx.compiler_input.actions
-        )
-        app_context = (
-            f"User request: {ctx.description}\n"
-            f"Domain: {ctx.compiler_input.domain}\n\n"
-            f"Entities:\n{entity_summary}\n\nActions:\n{action_summary}"
-        )
-        research = bus.get("ui_research")
-        if research is not None:
-            app_context += f"\n\nRESEARCHED PRODUCT CONTEXT:\n{research.as_prompt()}"
-        app_context = with_correction(bus, self.agent_id, app_context)
 
         await bus.log("[ui-builder] Pass 1/2: HTML structure and CSS…")
         html_css = await self._call(AppGeneratorPrompts.HTML_CSS, app_context)
@@ -533,6 +482,27 @@ class UIBuilderAgent(EnvGenAgent):
         else:
             complete_html = f"{html_css}\n<script>\n{javascript}\n</script>"
         await bus.publish("ui_code", {"ui.html": complete_html})
+
+
+def _app_context(ctx: EnvGenContext, bus: ArtifactBus, *, request_label: str, research_key: str) -> str:
+    """What the planner and every file writer are told about the app."""
+    entity_summary = "\n".join(
+        f"  - {entity.name}: fields={[field.name for field in entity.fields]}"
+        for entity in ctx.compiler_input.entities
+    )
+    action_summary = "\n".join(
+        f"  - {action.name}(params={[param.name for param in action.params]})"
+        for action in ctx.compiler_input.actions
+    )
+    app_context = (
+        f"{request_label}: {ctx.description}\n"
+        f"Domain: {ctx.compiler_input.domain}\n\n"
+        f"Entities:\n{entity_summary}\n\nActions:\n{action_summary}"
+    )
+    research = bus.get(research_key)
+    if research is not None:
+        app_context += f"\n\nRESEARCHED PRODUCT CONTEXT:\n{research.as_prompt()}"
+    return app_context
 
 
 class AppAssemblyAgent(EnvGenAgent):

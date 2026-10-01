@@ -369,95 +369,71 @@ class TieredRewardEngine:
         actual_steps = len(history)
         preset = reward_preset_spec(self._cfg.reward_preset)
 
-        if early_termination in ("loop_detected", "stuck_failing"):
+        def graded(**fields) -> TrajectoryGrade:
             return TrajectoryGrade(
-                final_reward=0.0,
-                test_pass_rate=0.0,
-                efficiency_factor=0.0,
-                partial_credit=0.0,
-                test_results=[],
-                reasoning=f"Episode killed early: {early_termination}.",
-                expected_steps=spec.expected_steps,
-                actual_steps=actual_steps,
+                expected_steps=spec.expected_steps, actual_steps=actual_steps,
+                **{"early_termination": None, **fields},
+            )
+
+        if early_termination in ("loop_detected", "stuck_failing"):
+            return graded(
+                final_reward=0.0, test_pass_rate=0.0, efficiency_factor=0.0, partial_credit=0.0,
+                test_results=[], reasoning=f"Episode killed early: {early_termination}.",
                 early_termination=early_termination,
             )
 
         if preset.judge_only:
-            judge_score = min(
-                1.0,
-                self._grade_partial_combined(objective, spec, history) / 0.4,
-            )
-            return TrajectoryGrade(
-                final_reward=judge_score,
-                test_pass_rate=0.0,
-                efficiency_factor=1.0,
-                partial_credit=judge_score,
-                test_results=[],
+            judge_score = min(1.0, self._grade_partial_combined(objective, spec, history) / 0.4)
+            return graded(
+                final_reward=judge_score, test_pass_rate=0.0, efficiency_factor=1.0,
+                partial_credit=judge_score, test_results=[],
                 reasoning=f"Judge-only score = {judge_score:.2f}.",
-                expected_steps=spec.expected_steps,
-                actual_steps=actual_steps,
-                early_termination=None,
             )
 
         # Run the assertions. If the LLM produced no assertions (planner
         # fallback), pass_rate stays 0 and we lean entirely on partial credit.
         test_results = self._run_assertions(spec.assertions, container_id)
-        passed = sum(1 for r in test_results if r.passed)
-        total = len(test_results) or 1
-        pass_rate = passed / total if test_results else 0.0
+        pass_rate = sum(1 for r in test_results if r.passed) / len(test_results) if test_results else 0.0
 
         if preset.binary_final_state:
             value = 1.0 if test_results and pass_rate == 1.0 else 0.0
-            return TrajectoryGrade(
-                final_reward=value,
-                test_pass_rate=pass_rate,
-                efficiency_factor=1.0,
-                partial_credit=0.0,
-                test_results=test_results,
+            return graded(
+                final_reward=value, test_pass_rate=pass_rate, efficiency_factor=1.0,
+                partial_credit=0.0, test_results=test_results,
                 reasoning="Binary final-state assertions passed." if value else "Binary final-state assertions failed.",
-                expected_steps=spec.expected_steps,
-                actual_steps=actual_steps,
-                early_termination=None,
             )
 
         efficiency = self._efficiency(spec.expected_steps, actual_steps)
-
-        # Decide on the reward source.
-        if test_results and pass_rate == 1.0:
-            base = 1.0
-            partial_credit = 0.0
-            reasoning = "All end-state assertions passed."
-        elif pass_rate > 0.0:
-            base = pass_rate
-            partial_credit = 0.0
-            reasoning = f"{passed}/{total} end-state assertions passed."
-        else:
-            # No tests passed — defer to the configured grader(s).
-            if self._cfg.llm_grade_when_zero_pass:
-                partial_credit = self._grade_partial_combined(objective, spec, history)
-                method_label = "+".join(self._cfg.partial_credit_methods)
-            else:
-                partial_credit = 0.0
-                method_label = "none"
-            base = partial_credit
-            reasoning = (
-                f"No assertions passed; {method_label} partial credit = {partial_credit:.2f}."
-                if test_results
-                else f"No assertions generated; {method_label} partial credit = {partial_credit:.2f}."
-            )
-
-        final = max(0.0, min(1.0, efficiency * base))
-        return TrajectoryGrade(
-            final_reward=final,
-            test_pass_rate=pass_rate,
-            efficiency_factor=efficiency,
-            partial_credit=partial_credit,
-            test_results=test_results,
-            reasoning=reasoning,
-            expected_steps=spec.expected_steps,
-            actual_steps=actual_steps,
-            early_termination=None,
+        base, partial_credit, reasoning = self._reward_source(objective, spec, history, test_results, pass_rate)
+        return graded(
+            final_reward=max(0.0, min(1.0, efficiency * base)), test_pass_rate=pass_rate,
+            efficiency_factor=efficiency, partial_credit=partial_credit,
+            test_results=test_results, reasoning=reasoning,
         )
+
+    def _reward_source(
+        self, objective: str, spec: EndStateSpec, history: Sequence[dict], test_results: list, pass_rate: float,
+    ) -> tuple[float, float, str]:
+        """(base reward, partial credit, reasoning): assertions first, graders only when none pass."""
+        passed = sum(1 for r in test_results if r.passed)
+        total = len(test_results) or 1
+        if test_results and pass_rate == 1.0:
+            return 1.0, 0.0, "All end-state assertions passed."
+        if pass_rate > 0.0:
+            return pass_rate, 0.0, f"{passed}/{total} end-state assertions passed."
+        # No tests passed — defer to the configured grader(s).
+        if self._cfg.llm_grade_when_zero_pass:
+            partial_credit = self._grade_partial_combined(objective, spec, history)
+            method_label = "+".join(self._cfg.partial_credit_methods)
+        else:
+            partial_credit = 0.0
+            method_label = "none"
+        reasoning = (
+            f"No assertions passed; {method_label} partial credit = {partial_credit:.2f}."
+            if test_results
+            else f"No assertions generated; {method_label} partial credit = {partial_credit:.2f}."
+        )
+        return partial_credit, partial_credit, reasoning
 
     # -- Helpers -----------------------------------------------------------
 

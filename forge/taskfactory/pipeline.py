@@ -73,40 +73,7 @@ class PipelineResult:
         return "complete" if self.shortfall == 0 else "short"
 
     def to_preference_pairs(self) -> list[PreferencePair]:
-        """Convert accepted tasks (preferred) and rejections (dispreferred) into preference pairs.
-
-        Reuses the natural output of the existing generation and filtering pipeline
-        without introducing a separate generation process.
-        """
-        pairs: list[PreferencePair] = []
-        rejected_drafts = [r for r in self.rejections if r.draft is not None]
-        for idx, task in enumerate(self.tasks):
-            matching_rejection = next(
-                (r for r in rejected_drafts if r.category == task.category),
-                rejected_drafts[idx % len(rejected_drafts)] if rejected_drafts else None,
-            )
-            dispreferred_dict = (
-                matching_rejection.draft.model_dump()
-                if matching_rejection and matching_rejection.draft
-                else {"objective": f"[Failed Draft] {task.objective}", "steps": []}
-            )
-            reason = (
-                matching_rejection.reason
-                if matching_rejection
-                else "failed filtering verification"
-            )
-            pairs.append(
-                PreferencePair(
-                    id=f"pref_{task.id}",
-                    task_prompt=task.objective,
-                    preferred=task.model_dump(),
-                    dispreferred=dispreferred_dict,
-                    rejection_reason=reason,
-                    category=task.category,
-                    difficulty=task.difficulty,
-                )
-            )
-        return pairs
+        return preference_pairs(self.tasks, self.rejections)
 
     def to_sft_items(self) -> list[SFTItem]:
         """Convert accepted tasks into SFT imitation learning examples."""
@@ -121,6 +88,34 @@ class PipelineResult:
             )
             for task in self.tasks
         ]
+
+
+def preference_pairs(
+    tasks: list[SyntheticTask], rejections: list[TaskRejection]
+) -> list[PreferencePair]:
+    """Pair each accepted task with every rejected draft written for its slot.
+
+    Both sides answer the same slot, so the pair is a real comparison of two
+    writer outputs. A slot accepted on its first try has nothing to compare
+    against and yields no pair.
+    """
+    drafts_by_slot: dict[int, list[TaskRejection]] = {}
+    for rejection in rejections:
+        if rejection.draft is not None:
+            drafts_by_slot.setdefault(rejection.slot, []).append(rejection)
+    return [
+        PreferencePair(
+            id=f"pref_{task.id}_r{rejection.round}",
+            task_prompt=task.objective,
+            preferred=task.model_dump(),
+            dispreferred=rejection.draft.model_dump(),
+            rejection_reason=rejection.reason,
+            category=task.category,
+            difficulty=task.difficulty,
+        )
+        for task in tasks
+        for rejection in drafts_by_slot.get(task.review.slot, [])
+    ]
 
 
 class TaskFactoryPipeline:

@@ -7,16 +7,16 @@ from tests.premade.conftest import count_selects
 
 def _add_channel(app, db, name: str, *, top_level: int, replies: int, pinned: int, unread: int):
     channel_id = f"C_{name}"
-    db.add(app.Channel(id=channel_id, name=name, created_at=app._now(db)))
+    db.add(app.Channel(id=channel_id, name=name, created_at=app._ledger.now(db)))
     for i in range(top_level):
         db.add(app.Message(
             id=f"{channel_id}_m{i}", channel_id=channel_id, user_name="ana",
-            text=f"{name} message {i}", timestamp=app._now(db), is_pinned=i < pinned,
+            text=f"{name} message {i}", timestamp=app._ledger.now(db), is_pinned=i < pinned,
         ))
     for i in range(replies):
         db.add(app.Message(
             id=f"{channel_id}_r{i}", channel_id=channel_id, user_name="bo",
-            text="reply", timestamp=app._now(db), thread_parent_id=f"{channel_id}_m0",
+            text="reply", timestamp=app._ledger.now(db), thread_parent_id=f"{channel_id}_m0",
         ))
     db.add(app.ChannelReadState(channel_id=channel_id, unread_count=unread))
     db.commit()
@@ -47,7 +47,7 @@ def test_state_channel_counts_match_the_data(load_premade):
 def test_channel_without_read_state_has_zero_unread(load_premade):
     app = load_premade("slack")
     with app.SessionLocal() as db:
-        db.add(app.Channel(id="C_new", name="new", created_at=app._now(db)))
+        db.add(app.Channel(id="C_new", name="new", created_at=app._ledger.now(db)))
         db.commit()
         channel = next(c for c in app._get_state_dict(db)["channels"] if c["name"] == "new")
     assert (channel["message_count"], channel["pinned_count"], channel["unread"]) == (0, 0, 0)
@@ -61,7 +61,7 @@ def test_message_listing_loads_reactions_in_one_query(load_premade):
         with app.SessionLocal() as db:
             db.query(app.Message).filter(app.Message.channel_id == "C_react").delete()
             db.query(app.Reaction).delete()
-            db.merge(app.Channel(id="C_react", name="react", created_at=app._now(db)))
+            db.merge(app.Channel(id="C_react", name="react", created_at=app._ledger.now(db)))
             for i in range(total):
                 db.add(app.Message(
                     id=f"rm{i}", channel_id="C_react", user_name="ana",

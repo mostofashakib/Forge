@@ -3,11 +3,14 @@ from __future__ import annotations
 
 import httpx
 
+from forge.contracts import MaxStepsTerminationPolicy
+
 from forge.envgen.episode_runner import (
     ContainerEpisodeRunner,
     EpisodeConfig,
     EpisodeResult,
     TerminationMonitor,
+    _EpisodeRun,
 )
 
 
@@ -52,14 +55,18 @@ def _runner(max_steps: int, scorer: _CountingScorer) -> ContainerEpisodeRunner:
     return runner
 
 
+def _loop(runner: ContainerEpisodeRunner, agent, result: EpisodeResult) -> _EpisodeRun:
+    return _EpisodeRun(
+        agent=agent, result=result, available_actions=runner._actions, writer=None,
+        dead_end=TerminationMonitor(runner._cfg),
+        max_steps=MaxStepsTerminationPolicy(runner._cfg.max_steps),
+    )
+
+
 def _run(max_steps: int, scorer: _CountingScorer) -> EpisodeResult:
     runner = _runner(max_steps, scorer)
-    config = runner._cfg
-    result = EpisodeResult(episode_id="cep_test", config=config)
-    runner._run_steps(
-        _FixedAgent(), config, result, TerminationMonitor(config),
-        runner._actions, "cep_test", None, {"n": 0},
-    )
+    result = EpisodeResult(episode_id="cep_test", config=runner._cfg)
+    runner._run_steps(_loop(runner, _FixedAgent(), result), {"n": 0})
     return result
 
 
@@ -107,10 +114,7 @@ def test_container_submit_is_intercepted_without_an_http_action():
     runner = _runner(5, scorer)
     result = EpisodeResult(episode_id="cep_submit", config=runner._cfg)
 
-    runner._run_steps(
-        _SubmitAgent(), runner._cfg, result, TerminationMonitor(runner._cfg),
-        runner._actions, "cep_submit", None, {"n": 0},
-    )
+    runner._run_steps(_loop(runner, _SubmitAgent(), result), {"n": 0})
 
     assert len(result.steps) == 1
     assert result.termination_reason == "submitted"

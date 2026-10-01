@@ -234,7 +234,10 @@ def execute_reliable_episode(
     )
     model_outputs: list[dict] = []
     invoke = _attempt_invoker(fn, seed=seed, env_version=env_ver, model_outputs=model_outputs)
-    attempts: list[AttemptRecord] = []
+    attempt_log = _AttemptLog(
+        recorder=recorder, log=target_log, episode_id=resolved_episode_id,
+        task_name=resolved_task, env_version=env_ver,
+    )
     last_crash_step = 0
 
     for attempt in range(settings.retry_cap + 1):
@@ -246,52 +249,75 @@ def execute_reliable_episode(
             result = invoke(plan)
         except DivergenceError as exc:
             last_crash_step = exc.step
-            log_infrastructure_failure(
-                target_log, episode_id=resolved_episode_id, attempt=attempt, step=exc.step,
-                environment_version=env_ver, error=exc,
-            )
-            attempts.append(AttemptRecord(
-                attempt=attempt, mode=plan.mode, resume_step=plan.resume_step,
-                replayed_steps=exc.step, error=str(exc), diverged=True,
-            ))
-            recorder.flag_version(f"Nondeterministic replay divergence at step {exc.step}")
+            attempt_log.diverged(attempt, plan, exc, final=out_of_retries)
             if out_of_retries:
-                recorder.quarantine(f"Divergence crash: {exc}")
-                recorder.finish(attempts, "failed", FAILURE_TYPE_INFRASTRUCTURE, "diverged")
                 raise
             continue
         except Exception as exc:
-            failure_type, failure_reason = classify_failure(exc)
             last_crash_step = getattr(exc, "step", last_crash_step)
-            if failure_type == FAILURE_TYPE_AGENT:
-                attempts.append(AttemptRecord(
-                    attempt=attempt, mode=plan.mode, resume_step=plan.resume_step,
-                    replayed_steps=0, error=str(exc),
-                ))
-                recorder.finish(attempts, "failed", FAILURE_TYPE_AGENT, failure_reason)
-                raise
-            log_infrastructure_failure(
-                target_log, episode_id=resolved_episode_id, attempt=attempt, step=last_crash_step,
-                environment_version=env_ver, error=exc,
-            )
-            attempts.append(AttemptRecord(
-                attempt=attempt, mode=plan.mode, resume_step=plan.resume_step,
-                replayed_steps=plan.replayed, error=str(exc),
-            ))
-            if out_of_retries:
-                recorder.quarantine(f"Crashed on all {attempt + 1} attempts: {failure_reason} ({exc})")
-                recorder.flag_version(f"Task {resolved_task} crashed on all attempts: {failure_reason}")
-                recorder.finish(attempts, "failed", FAILURE_TYPE_INFRASTRUCTURE, failure_reason)
+            if attempt_log.crashed(attempt, plan, exc, step=last_crash_step, final=out_of_retries):
                 raise
             continue
+        return attempt_log.succeeded(attempt, plan, result)
 
-        attempts.append(AttemptRecord(
+
+class _AttemptLog:
+    """Records each attempt's outcome and the flags and quarantines it triggers."""
+
+    def __init__(self, *, recorder: _EpisodeRecorder, log: logging.Logger, episode_id: str, task_name: str, env_version: str) -> None:
+        self._recorder = recorder
+        self._log = log
+        self._episode_id = episode_id
+        self._task_name = task_name
+        self._env_version = env_version
+        self.attempts: list[AttemptRecord] = []
+
+    def diverged(self, attempt: int, plan, exc: DivergenceError, *, final: bool) -> None:
+        log_infrastructure_failure(
+            self._log, episode_id=self._episode_id, attempt=attempt, step=exc.step,
+            environment_version=self._env_version, error=exc,
+        )
+        self.attempts.append(AttemptRecord(
+            attempt=attempt, mode=plan.mode, resume_step=plan.resume_step,
+            replayed_steps=exc.step, error=str(exc), diverged=True,
+        ))
+        self._recorder.flag_version(f"Nondeterministic replay divergence at step {exc.step}")
+        if final:
+            self._recorder.quarantine(f"Divergence crash: {exc}")
+            self._recorder.finish(self.attempts, "failed", FAILURE_TYPE_INFRASTRUCTURE, "diverged")
+
+    def crashed(self, attempt: int, plan, exc: Exception, *, step: int, final: bool) -> bool:
+        """Record a crash. True when it must propagate: an agent failure, or the last retry."""
+        failure_type, failure_reason = classify_failure(exc)
+        if failure_type == FAILURE_TYPE_AGENT:
+            self.attempts.append(AttemptRecord(
+                attempt=attempt, mode=plan.mode, resume_step=plan.resume_step,
+                replayed_steps=0, error=str(exc),
+            ))
+            self._recorder.finish(self.attempts, "failed", FAILURE_TYPE_AGENT, failure_reason)
+            return True
+        log_infrastructure_failure(
+            self._log, episode_id=self._episode_id, attempt=attempt, step=step,
+            environment_version=self._env_version, error=exc,
+        )
+        self.attempts.append(AttemptRecord(
+            attempt=attempt, mode=plan.mode, resume_step=plan.resume_step,
+            replayed_steps=plan.replayed, error=str(exc),
+        ))
+        if final:
+            self._recorder.quarantine(f"Crashed on all {attempt + 1} attempts: {failure_reason} ({exc})")
+            self._recorder.flag_version(f"Task {self._task_name} crashed on all attempts: {failure_reason}")
+            self._recorder.finish(self.attempts, "failed", FAILURE_TYPE_INFRASTRUCTURE, failure_reason)
+        return final
+
+    def succeeded(self, attempt: int, plan, result: Any) -> ReliableEpisodeExecution:
+        self.attempts.append(AttemptRecord(
             attempt=attempt, mode=plan.mode, resume_step=plan.resume_step,
             replayed_steps=plan.replayed, error=None,
         ))
-        recorder.finish(attempts, "truncated" if _is_truncated(result) else "completed")
+        self._recorder.finish(self.attempts, "truncated" if _is_truncated(result) else "completed")
         if hasattr(result, "environment_version"):
-            result.environment_version = env_ver
+            result.environment_version = self._env_version
         if hasattr(result, "attempts"):
-            result.attempts = [a.to_dict() for a in attempts]
-        return ReliableEpisodeExecution(result, attempts)
+            result.attempts = [a.to_dict() for a in self.attempts]
+        return ReliableEpisodeExecution(result, self.attempts)

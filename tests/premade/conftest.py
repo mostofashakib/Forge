@@ -17,7 +17,9 @@ def load_premade(tmp_path, monkeypatch):
 
     def _load(name: str):
         monkeypatch.chdir(tmp_path)
-        # The app imports its seed module from its own directory, as in the image.
+        # The app imports its seed module and the shared protocol as siblings,
+        # as the staged build context lays them out in the image.
+        monkeypatch.syspath_prepend(str(PREMADE_ROOT / "_shared"))
         monkeypatch.syspath_prepend(str(PREMADE_ROOT / name))
         spec = importlib.util.spec_from_file_location(
             f"premade_{name}_{tmp_path.name}", PREMADE_ROOT / name / "app.py"

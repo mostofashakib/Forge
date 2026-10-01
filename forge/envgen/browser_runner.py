@@ -3,6 +3,7 @@ import base64
 import hashlib
 import logging
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
 from datetime import datetime, timezone
@@ -164,113 +165,12 @@ class BrowserEpisodeRunner(EpisodeController):
                 result.write_jsonl(jsonl_path)
             return result
 
-        dead_end = DeadEndTerminationPolicy(self._cfg.dead_end_patience)
-        max_steps = MaxStepsTerminationPolicy(self._cfg.max_steps)
         # Persist each step as it happens so a crash mid-episode still leaves a
         # durable, replayable partial trace.
         writer = TrajectoryWriter(jsonl_path, result) if jsonl_path is not None else None
-
         try:
-            with sync_playwright() as pw:
-                browser = pw.chromium.connect_over_cdp(self._cfg.cdp_url)
-                # A fresh context per episode: the warm browser process is
-                # reused, but no cookies, storage, or tabs carry over from
-                # the last episode.
-                ctx = browser.new_context()
-                try:
-                    ctx.clock.set_fixed_time(BROWSER_FIXED_TIME)
-                    page = ctx.new_page()
-                    self._disable_motion(ctx, page)
-                    browser_use = self.browser_use_for(
-                        page, timeout_ms=self._cfg.settle_timeout_ms
-                    )
-
-                    for step_idx in range(self._cfg.max_steps):
-                        ss_before = self._screenshot(page)
-                        current_url = page.url
-
-                        try:
-                            action = agent.act(
-                                screenshot_b64=ss_before,
-                                objective=self._cfg.objective,
-                                action_history=[s["action"] for s in result.steps[-5:]],
-                            )
-                        except Exception as exc:
-                            logger.warning("[browser-ep] step %d: agent.act failed: %s", step_idx, exc)
-                            action = {"action_type": "noop", "reasoning": f"agent error: {exc}"}
-
-                        if is_submit_action(action):
-                            result.termination_reason = "submitted"
-                            score = self._finalize_result(result, ss_before, page.url)
-                            step_record = {
-                                "step_index": step_idx,
-                                "action": action,
-                                "screenshot_before": ss_before,
-                                "screenshot_after": ss_before,
-                                "url_before": current_url,
-                                "url_after": current_url,
-                                "objective_score": score,
-                                "reward": result.total_reward,
-                                "terminated": True,
-                                "truncated": False,
-                                "termination_reason": "submitted",
-                            }
-                            result.steps.append(step_record)
-                            if writer is not None:
-                                writer.record(step_record)
-                            break
-
-                        try:
-                            browser_use.execute(action)
-                            page.wait_for_load_state(
-                                "networkidle", timeout=self._cfg.settle_timeout_ms
-                            )
-                        except Exception as exc:
-                            logger.debug("[browser-ep] step %d: action failed: %s", step_idx, exc)
-
-                        ss_after = self._screenshot(page)
-                        step_record = {
-                            "step_index": step_idx,
-                            "action": action,
-                            "screenshot_before": ss_before,
-                            "screenshot_after": ss_after,
-                            "url_before": current_url,
-                            "url_after": page.url,
-                            "objective_score": 0.0,
-                            "reward": 0.0,
-                        }
-                        result.steps.append(step_record)
-                        logger.info(
-                            "[browser-ep] step %02d/%d  action=%s  url=%s",
-                            step_idx + 1, self._cfg.max_steps,
-                            action.get("action_type"), page.url[:60],
-                        )
-
-                        outcome = StepOutcome(
-                            step_index=step_idx,
-                            state_hash=hashlib.sha256(ss_after.encode()).hexdigest(),
-                        )
-                        decision = dead_end.check(outcome) or max_steps.check(outcome)
-                        if decision is not None:
-                            result.termination_reason = decision.reason
-                            score = self._finalize_result(result, ss_after, page.url)
-                            step_record.update({
-                                "objective_score": score,
-                                "reward": result.total_reward,
-                                "terminated": not decision.truncated,
-                                "truncated": decision.truncated,
-                                "termination_reason": decision.reason,
-                            })
-                            if writer is not None:
-                                writer.record(step_record)
-                            break
-                        if writer is not None:
-                            writer.record(step_record)
-                    else:
-                        result.termination_reason = "max_steps"
-                finally:
-                    ctx.close()
-
+            with self._fresh_page(sync_playwright) as page:
+                self._run_steps(agent, page, result, writer)
         except Exception as exc:
             logger.exception("[browser-ep] runner crashed: %s", exc)
             result.termination_reason = f"runner_error: {exc}"
@@ -279,6 +179,111 @@ class BrowserEpisodeRunner(EpisodeController):
         if writer is not None:
             writer.close()
         return result
+
+    @contextmanager
+    def _fresh_page(self, sync_playwright):
+        """A page in a new context on the warm browser, with frozen time and no motion."""
+        with sync_playwright() as pw:
+            browser = pw.chromium.connect_over_cdp(self._cfg.cdp_url)
+            # A fresh context per episode: the warm browser process is
+            # reused, but no cookies, storage, or tabs carry over from
+            # the last episode.
+            ctx = browser.new_context()
+            try:
+                ctx.clock.set_fixed_time(BROWSER_FIXED_TIME)
+                page = ctx.new_page()
+                self._disable_motion(ctx, page)
+                yield page
+            finally:
+                ctx.close()
+
+    def _run_steps(self, agent, page, result: BrowserEpisodeResult, writer) -> None:
+        dead_end = DeadEndTerminationPolicy(self._cfg.dead_end_patience)
+        max_steps = MaxStepsTerminationPolicy(self._cfg.max_steps)
+        browser_use = self.browser_use_for(page, timeout_ms=self._cfg.settle_timeout_ms)
+
+        for step_idx in range(self._cfg.max_steps):
+            ss_before = self._screenshot(page)
+            current_url = page.url
+            action = self._next_action(agent, ss_before, result, step_idx)
+
+            if is_submit_action(action):
+                result.termination_reason = "submitted"
+                score = self._finalize_result(result, ss_before, page.url)
+                step_record = {
+                    "step_index": step_idx,
+                    "action": action,
+                    "screenshot_before": ss_before,
+                    "screenshot_after": ss_before,
+                    "url_before": current_url,
+                    "url_after": current_url,
+                    "objective_score": score,
+                    "reward": result.total_reward,
+                    "terminated": True,
+                    "truncated": False,
+                    "termination_reason": "submitted",
+                }
+                result.steps.append(step_record)
+                if writer is not None:
+                    writer.record(step_record)
+                return
+
+            try:
+                browser_use.execute(action)
+                page.wait_for_load_state("networkidle", timeout=self._cfg.settle_timeout_ms)
+            except Exception as exc:
+                logger.debug("[browser-ep] step %d: action failed: %s", step_idx, exc)
+
+            ss_after = self._screenshot(page)
+            step_record = {
+                "step_index": step_idx,
+                "action": action,
+                "screenshot_before": ss_before,
+                "screenshot_after": ss_after,
+                "url_before": current_url,
+                "url_after": page.url,
+                "objective_score": 0.0,
+                "reward": 0.0,
+            }
+            result.steps.append(step_record)
+            logger.info(
+                "[browser-ep] step %02d/%d  action=%s  url=%s",
+                step_idx + 1, self._cfg.max_steps,
+                action.get("action_type"), page.url[:60],
+            )
+
+            outcome = StepOutcome(
+                step_index=step_idx,
+                state_hash=hashlib.sha256(ss_after.encode()).hexdigest(),
+            )
+            decision = dead_end.check(outcome) or max_steps.check(outcome)
+            if decision is not None:
+                result.termination_reason = decision.reason
+                score = self._finalize_result(result, ss_after, page.url)
+                step_record.update({
+                    "objective_score": score,
+                    "reward": result.total_reward,
+                    "terminated": not decision.truncated,
+                    "truncated": decision.truncated,
+                    "termination_reason": decision.reason,
+                })
+            if writer is not None:
+                writer.record(step_record)
+            if decision is not None:
+                return
+
+        result.termination_reason = "max_steps"
+
+    def _next_action(self, agent, screenshot: str, result: BrowserEpisodeResult, step_idx: int) -> dict:
+        try:
+            return agent.act(
+                screenshot_b64=screenshot,
+                objective=self._cfg.objective,
+                action_history=[s["action"] for s in result.steps[-5:]],
+            )
+        except Exception as exc:
+            logger.warning("[browser-ep] step %d: agent.act failed: %s", step_idx, exc)
+            return {"action_type": "noop", "reasoning": f"agent error: {exc}"}
 
     def _finalize_result(self, result, screenshot: str, url: str) -> float:
         """Issue the single authoritative visual verdict for the episode."""

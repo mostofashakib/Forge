@@ -60,29 +60,12 @@ def evaluate_on_suite(
     experiment_path = Path(suite)
     config = ExperimentConfig.load(experiment_path)
     checkpoint_dir, checkpoint = _load_checkpoint(model_path)
-
-    expected_config = config.model_dump(mode="json")
-    if not checkpoint.experiment_config:
-        raise ValueError(
-            "checkpoint has no experiment metadata; retrain with forge train --experiment"
-        )
-    if checkpoint.experiment_config != expected_config:
-        raise ValueError("checkpoint and evaluation experiment configs do not match")
-    if checkpoint.base_model != config.base_model:
-        raise ValueError("checkpoint base model does not match the experiment config")
+    _require_matching_checkpoint(checkpoint, config)
 
     selected_seed = _resolve_seed(seed, checkpoint, config)
     resolved_run_id = run_id or checkpoint.run_id or (
         f"{experiment_path.stem}-seed-{selected_seed}"
     )
-
-    if checkpoint.train_envs != config.train_envs:
-        raise ValueError("checkpoint training environments do not match the experiment config")
-    overlap = sorted(set(checkpoint.train_envs) & set(config.heldout_envs))
-    if overlap:
-        raise ValueError(
-            f"refusing held-out evaluation on checkpoint training envs: {overlap}"
-        )
 
     if task_provider is None:
         from backend.app.database import get_session_factory
@@ -95,79 +78,19 @@ def evaluate_on_suite(
             checkpoint_dir, config.reward_preset, verdict_jury=verdict_jury
         )
 
-    # Resolve who generated and who graded before spending any episodes: a
-    # contaminated grader invalidates the run, so fail before the work, not
-    # after. The runner is asked first because it knows what it will actually
-    # do — the reward preset only describes the verifier layers, and the
-    # container runner issues an LLM verdict on every step under any preset.
-    if llm_graded is None:
-        llm_graded = getattr(episode_runner, "issues_llm_verdicts", None)
-    if llm_graded is None:
-        llm_graded = reward_preset_spec(config.reward_preset).issues_llm_verdict
-    provenance = resolve_grading_provenance(llm_graded=llm_graded)
-    if config.require_grader_independence:
-        require_independent_grader(provenance)
-
-    outcomes: list[EpisodeOutcome] = []
-    reward_groups: list[list[float]] = []
-    task_pass_counts: dict[str, dict[str, int]] = {}
-    output_root = Path(runs_dir) / resolved_run_id / "eval"
-    for env_name in config.heldout_envs:
-        tasks = task_provider.tasks_for(domain=env_name, depth=depth)
-        if not tasks:
-            raise ValueError(f"held-out environment has no compiled tasks: {env_name}")
-        for task in tasks:
-            task_rewards: list[float] = []
-            counts = task_pass_counts.setdefault(
-                f"{env_name}/{task.name}", {"decided": 0, "passed": 0}
-            )
-            for repeat in range(config.determinism_repeats):
-                episode_path = (
-                    output_root / env_name / task.name
-                    / f"seed_{selected_seed}_repeat_{repeat}.jsonl"
-                )
-                outcome = episode_runner(task, selected_seed, episode_path)
-                if (
-                    reward_preset_spec(config.reward_preset).auditor_enabled
-                    and outcome.reward_hacking
-                ):
-                    outcome = EpisodeOutcome(
-                        passed=False, reward=0.0, reward_hacking=True
-                    )
-                outcomes.append(outcome)
-                task_rewards.append(outcome.reward)
-                if not outcome.indeterminate:
-                    counts["decided"] += 1
-                    counts["passed"] += outcome.passed
-            reward_groups.append(task_rewards)
-
-    if not outcomes:
-        raise ValueError("the held-out split produced no evaluation episodes")
-
-    abstention_rate = sum(o.indeterminate for o in outcomes) / len(outcomes)
-    if abstention_rate > config.max_abstention_rate:
-        # Refuse to publish a pass rate computed from what is left. A jury that
-        # cannot decide this share of its cases is a broken instrument, and the
-        # remaining episodes are a biased sample of the ones it found easy.
-        raise ValueError(
-            f"abstention rate {abstention_rate:.2f} exceeds the configured "
-            f"maximum {config.max_abstention_rate:.2f}; the verdict jury could "
-            "not decide enough episodes for the pass rate to mean anything"
-        )
-
-    decided = [outcome for outcome in outcomes if not outcome.indeterminate]
-    if not decided:
-        raise ValueError("every evaluated episode was indeterminate")
-
-    pass_rate = sum(outcome.passed for outcome in decided) / len(decided)
-    hacking_rate = sum(outcome.reward_hacking for outcome in decided) / len(decided)
-    task_variances = [pvariance(rewards) for rewards in reward_groups]
+    provenance = _grading_provenance(config, episode_runner, llm_graded)
+    episodes = _run_heldout(
+        config, task_provider, episode_runner, selected_seed,
+        output_root=Path(runs_dir) / resolved_run_id / "eval", depth=depth,
+    )
+    abstention_rate, pass_rate, hacking_rate = _rates(episodes.outcomes, config)
+    task_variances = [pvariance(rewards) for rewards in episodes.reward_groups]
     reward_variance = sum(task_variances) / len(task_variances)
 
     # Replace the declared grading mode with what the run actually did. This
     # raises rather than writing a record that understates model involvement.
     provenance = provenance.with_observed_verdicts(
-        sum(outcome.llm_verdicts for outcome in outcomes)
+        sum(outcome.llm_verdicts for outcome in episodes.outcomes)
     )
 
     result_record = RunResult(
@@ -185,13 +108,116 @@ def evaluate_on_suite(
         **result_record.model_dump(),
         "run_id": resolved_run_id,
         "result_path": str(result_path),
-        "num_eval_tasks": len(reward_groups),
-        "num_eval_episodes": len(outcomes),
+        "num_eval_tasks": len(episodes.reward_groups),
+        "num_eval_episodes": len(episodes.outcomes),
         # Per-task samples, so callers can estimate pass@k without rerunning.
-        "task_pass_counts": task_pass_counts,
+        "task_pass_counts": episodes.task_pass_counts,
         # Compatibility for existing report consumers.
         "task_completion_rate": pass_rate,
     }
+
+
+def _require_matching_checkpoint(checkpoint: PolicyCheckpoint, config: ExperimentConfig) -> None:
+    """Refuse a checkpoint trained under another experiment, or on held-out envs."""
+    if not checkpoint.experiment_config:
+        raise ValueError(
+            "checkpoint has no experiment metadata; retrain with forge train --experiment"
+        )
+    if checkpoint.experiment_config != config.model_dump(mode="json"):
+        raise ValueError("checkpoint and evaluation experiment configs do not match")
+    if checkpoint.base_model != config.base_model:
+        raise ValueError("checkpoint base model does not match the experiment config")
+    if checkpoint.train_envs != config.train_envs:
+        raise ValueError("checkpoint training environments do not match the experiment config")
+    overlap = sorted(set(checkpoint.train_envs) & set(config.heldout_envs))
+    if overlap:
+        raise ValueError(
+            f"refusing held-out evaluation on checkpoint training envs: {overlap}"
+        )
+
+
+def _grading_provenance(config: ExperimentConfig, episode_runner, llm_graded: bool | None):
+    """Resolve who generated and who graded before spending any episodes.
+
+    A contaminated grader invalidates the run, so fail before the work, not
+    after. The runner is asked first because it knows what it will actually
+    do — the reward preset only describes the verifier layers, and the
+    container runner issues an LLM verdict on every step under any preset.
+    """
+    if llm_graded is None:
+        llm_graded = getattr(episode_runner, "issues_llm_verdicts", None)
+    if llm_graded is None:
+        llm_graded = reward_preset_spec(config.reward_preset).issues_llm_verdict
+    provenance = resolve_grading_provenance(llm_graded=llm_graded)
+    if config.require_grader_independence:
+        require_independent_grader(provenance)
+    return provenance
+
+
+@dataclass
+class _HeldoutEpisodes:
+    outcomes: list[EpisodeOutcome]
+    reward_groups: list[list[float]]
+    task_pass_counts: dict[str, dict[str, int]]
+
+
+def _run_heldout(
+    config: ExperimentConfig, task_provider, episode_runner: EpisodeRunner, seed: int,
+    *, output_root: Path, depth: int,
+) -> _HeldoutEpisodes:
+    """Run every held-out task `determinism_repeats` times and record each outcome."""
+    auditor_enabled = reward_preset_spec(config.reward_preset).auditor_enabled
+    episodes = _HeldoutEpisodes(outcomes=[], reward_groups=[], task_pass_counts={})
+    for env_name in config.heldout_envs:
+        tasks = task_provider.tasks_for(domain=env_name, depth=depth)
+        if not tasks:
+            raise ValueError(f"held-out environment has no compiled tasks: {env_name}")
+        for task in tasks:
+            task_rewards: list[float] = []
+            counts = episodes.task_pass_counts.setdefault(
+                f"{env_name}/{task.name}", {"decided": 0, "passed": 0}
+            )
+            for repeat in range(config.determinism_repeats):
+                episode_path = (
+                    output_root / env_name / task.name
+                    / f"seed_{seed}_repeat_{repeat}.jsonl"
+                )
+                outcome = episode_runner(task, seed, episode_path)
+                if auditor_enabled and outcome.reward_hacking:
+                    outcome = EpisodeOutcome(
+                        passed=False, reward=0.0, reward_hacking=True
+                    )
+                episodes.outcomes.append(outcome)
+                task_rewards.append(outcome.reward)
+                if not outcome.indeterminate:
+                    counts["decided"] += 1
+                    counts["passed"] += outcome.passed
+            episodes.reward_groups.append(task_rewards)
+    if not episodes.outcomes:
+        raise ValueError("the held-out split produced no evaluation episodes")
+    return episodes
+
+
+def _rates(outcomes: list[EpisodeOutcome], config: ExperimentConfig) -> tuple[float, float, float]:
+    """(abstention, pass, reward-hacking) rates. Abstentions leave the other two denominators."""
+    abstention_rate = sum(o.indeterminate for o in outcomes) / len(outcomes)
+    if abstention_rate > config.max_abstention_rate:
+        # Refuse to publish a pass rate computed from what is left. A jury that
+        # cannot decide this share of its cases is a broken instrument, and the
+        # remaining episodes are a biased sample of the ones it found easy.
+        raise ValueError(
+            f"abstention rate {abstention_rate:.2f} exceeds the configured "
+            f"maximum {config.max_abstention_rate:.2f}; the verdict jury could "
+            "not decide enough episodes for the pass rate to mean anything"
+        )
+
+    decided = [outcome for outcome in outcomes if not outcome.indeterminate]
+    if not decided:
+        raise ValueError("every evaluated episode was indeterminate")
+
+    pass_rate = sum(outcome.passed for outcome in decided) / len(decided)
+    hacking_rate = sum(outcome.reward_hacking for outcome in decided) / len(decided)
+    return abstention_rate, pass_rate, hacking_rate
 
 
 def _load_checkpoint(model_path: str) -> tuple[Path, PolicyCheckpoint]:
