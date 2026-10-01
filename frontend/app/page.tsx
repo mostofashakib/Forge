@@ -184,33 +184,6 @@ export default function LandingPage() {
             train policies using <span className="font-mono font-medium text-foreground">RLVR</span> and preference alignment,
             and benchmark rollouts inside hardened <span className="font-mono font-medium text-foreground">Gymnasium</span> sandboxes.
           </p>
-
-          <div className="flex flex-wrap items-center gap-4 pt-2">
-            <Link
-              href="/generator"
-              className="forge-cta inline-flex items-center gap-3"
-            >
-              <Sparkles size={14} className="text-accent" />
-              <span>Launch Generator</span>
-              <ArrowRight size={14} />
-            </Link>
-
-            <Link
-              href="/training"
-              className="inline-flex items-center gap-2 border border-foreground/35 bg-foreground/5 px-5 py-3.5 font-mono text-[0.68rem] font-semibold uppercase tracking-[0.15em] transition-all hover:bg-foreground hover:text-background"
-            >
-              <Cpu size={14} />
-              <span>Model Training</span>
-            </Link>
-
-            <Link
-              href="/benchmark"
-              className="inline-flex items-center gap-2 border border-foreground/20 px-4 py-3.5 font-mono text-[0.68rem] uppercase tracking-[0.15em] text-muted-foreground hover:border-foreground/50 hover:text-foreground transition-colors"
-            >
-              <FlaskConical size={14} />
-              <span>Benchmarks</span>
-            </Link>
-          </div>
         </div>
       </section>
 
