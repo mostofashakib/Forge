@@ -109,7 +109,7 @@ def test_a_clean_batch_delivers_exactly_the_requested_tasks():
     result = _pipeline().run(count=4, k=3)
 
     assert result.status == "complete"
-    assert [t.id for t in result.tasks] == ["t-0001", "t-0002", "t-0003", "t-0004"]
+    assert [t.id for t in result.tasks] == ["t-00001", "t-00002", "t-00003", "t-00004"]
     assert all(t.step_budget == 2 for t in result.tasks)
     assert all(t.fingerprint == "fp" and t.round == 1 for t in result.tasks)
     assert result.rejections == []
@@ -124,7 +124,7 @@ def test_a_static_rejection_is_rewritten_with_its_reason():
     assert writer.calls[1]["slots"] == [1]
     assert "/nuke_inbox" in writer.calls[1]["feedback"][1]
     assert [r.stage for r in result.rejections] == ["static"]
-    assert next(t for t in result.tasks if t.id == "t-0002").round == 2
+    assert next(t for t in result.tasks if t.id == "t-00002").round == 2
 
 
 def test_rewrites_avoid_titles_already_accepted():
@@ -217,9 +217,45 @@ def test_progress_reports_each_rejection_with_its_reason():
     assert rejected[0]["stage"] == "static"
 
 
-def test_a_count_outside_one_to_one_hundred_is_rejected():
+def test_a_count_outside_one_to_twenty_thousand_is_rejected():
     with pytest.raises(ValueError):
-        _pipeline().run(count=101, k=1)
+        _pipeline().run(count=20_001, k=1)
+    with pytest.raises(ValueError):
+        _pipeline().run(count=0, k=1)
+
+
+def test_a_round_is_processed_in_chunks_each_under_its_own_lock():
+    # Agent runs on the environment get a turn between chunks, instead of
+    # waiting for a whole round of a large batch.
+    entered: list[int] = []
+
+    @contextmanager
+    def exclusive():
+        entered.append(1)
+        yield
+
+    writer = _Writer()
+    result = _pipeline(writer=writer, exclusive=exclusive).run(count=25, k=1)
+
+    assert result.status == "complete"
+    assert [len(call["slots"]) for call in writer.calls] == [10, 10, 5]
+    assert len(entered) == 3
+
+
+def test_a_draft_repeating_an_accepted_title_is_rejected():
+    writer = _Writer({1: {1: _draft(1, title="task 0 r1")}})
+
+    result = _pipeline(writer=writer).run(count=2, k=1)
+
+    assert any("duplicate" in r.reason for r in result.rejections)
+
+
+def test_the_writer_sees_a_bounded_list_of_titles_from_the_same_category():
+    writer = _Writer()
+
+    _pipeline(writer=writer).run(count=200, k=1)
+
+    assert max(len(call["titles"]) for call in writer.calls) <= 50
 
 
 def test_a_k_outside_one_to_ten_is_rejected():

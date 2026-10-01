@@ -48,6 +48,15 @@ def test_too_few_categories_is_rejected():
     assert any("4 to 12" in p for p in taxonomy_problems(taxonomy, PROFILE))
 
 
+def test_large_batches_allow_more_categories():
+    # Twelve categories cannot stay diverse across thousands of tasks.
+    many = [_category(f"c{i}", [1 + i % 5], f"unique work kind {i} {'x' * i}") for i in range(30)]
+    taxonomy = GOOD.model_copy(update={"categories": many})
+
+    assert not any("categories, got" in p for p in taxonomy_problems(taxonomy, PROFILE, count=20_000))
+    assert any("4 to 12" in p for p in taxonomy_problems(taxonomy, PROFILE, count=100))
+
+
 def test_covering_fewer_than_three_levels_is_rejected():
     taxonomy = GOOD.model_copy(update={"categories": [_category(n, [1, 2]) for n in ("a", "b", "c", "d")]})
 

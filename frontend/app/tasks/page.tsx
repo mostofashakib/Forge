@@ -12,6 +12,17 @@ import {
 
 type Phase = "idle" | "running" | "done" | "error";
 
+const MAX_TASKS = 20_000;
+
+/** The task count typed into the form, or an error saying why it is not one. */
+function parseCount(text: string): { count: number; error: string | null } {
+  const count = Number(text);
+  if (!text.trim() || !Number.isInteger(count) || count < 1 || count > MAX_TASKS) {
+    return { count: 0, error: `Enter a whole number from 1 to ${MAX_TASKS.toLocaleString()}.` };
+  }
+  return { count, error: null };
+}
+
 const STAGES = [
   { key: "taxonomy", label: "Taxonomy" },
   { key: "writing", label: "Writer" },
@@ -32,7 +43,8 @@ export default function TaskFactoryPage() {
   const [envsLoading, setEnvsLoading] = useState(true);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [envName, setEnvName] = useState("");
-  const [count, setCount] = useState(20);
+  const [countText, setCountText] = useState("20");
+  const { count, error: countError } = parseCount(countText);
   const [k, setK] = useState(3);
   const [phase, setPhase] = useState<Phase>("idle");
   const [stage, setStage] = useState<string | null>(null);
@@ -80,7 +92,7 @@ export default function TaskFactoryPage() {
 
   const selected = envs.find((e) => e.name === envName);
   const validator = settings?.task_validator;
-  const canStart = Boolean(selected?.ready && validator?.configured) && phase !== "running";
+  const canStart = Boolean(selected?.ready && validator?.configured && !countError) && phase !== "running";
 
   function appendLog(line: string) {
     setLogs((prev) => [...prev.slice(-498), line]);
@@ -147,7 +159,7 @@ export default function TaskFactoryPage() {
           </p>
         </div>
         <div className="benchmark-run__readout" aria-label="Batch configuration">
-          <div><span>Tasks</span><strong>{String(count).padStart(3, "0")}</strong></div>
+          <div><span>Tasks</span><strong>{count ? count.toLocaleString() : "—"}</strong></div>
           <div><span>pass^k</span><strong>{String(k).padStart(2, "0")}</strong></div>
           <div><span>Versions</span><strong>{String(batches.filter((b) => b.version).length).padStart(2, "0")}</strong></div>
           <div className={`benchmark-run__state benchmark-run__state--${phase}`}>
@@ -197,18 +209,19 @@ export default function TaskFactoryPage() {
             {selected && !selected.ready && <p className="tasks-hint tasks-hint--warn">{selected.reason}</p>}
           </div>
 
-          <div className="benchmark-field">
-            <div className="benchmark-field__label">
+          <label className="benchmark-field">
+            <span className="benchmark-field__label">
               <span>Number of tasks</span>
-              <strong>{count}</strong>
-            </div>
+              <small>1 to {MAX_TASKS.toLocaleString()}</small>
+            </span>
             <input
-              type="range" min={1} max={100} value={count} disabled={phase === "running"}
-              onChange={(e) => setCount(Number(e.target.value))}
-              className="benchmark-range"
+              type="number" inputMode="numeric" min={1} max={MAX_TASKS} step={1}
+              value={countText} disabled={phase === "running"}
+              onChange={(e) => setCountText(e.target.value)}
+              className="benchmark-input benchmark-input--mono"
             />
-            <div className="benchmark-range__legend"><span>1</span><span>100</span></div>
-          </div>
+            {countError && <p className="tasks-hint tasks-hint--warn">{countError}</p>}
+          </label>
 
           <div className="benchmark-field">
             <div className="benchmark-field__label">
@@ -248,7 +261,7 @@ export default function TaskFactoryPage() {
             </div>
           ) : (
             <button onClick={handleStart} disabled={!canStart} className="benchmark-launch">
-              <span>Create {count} tasks</span><span aria-hidden="true">↗</span>
+              <span>Create {count ? count.toLocaleString() : ""} tasks</span><span aria-hidden="true">↗</span>
             </button>
           )}
         </section>

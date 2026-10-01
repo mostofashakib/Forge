@@ -18,7 +18,13 @@ from forge.taskfactory.slots import Slot, plan_slots
 from forge.taskfactory.static_check import static_problems
 
 MAX_ROUNDS = 3
-MIN_COUNT, MAX_COUNT = 1, 100
+MIN_COUNT, MAX_COUNT = 1, 20_000
+# Slots written, run, and reviewed together. The environment lock is held
+# for one chunk's golden runs at a time.
+PROCESS_CHUNK = 10
+# Titles from the same categories the writer sees, to avoid repeats without
+# a prompt that grows with the batch.
+TITLE_CONTEXT = 50
 MIN_K, MAX_K = 1, 10
 
 Progress = Callable[[dict], None]
@@ -96,8 +102,22 @@ class TaskFactoryPipeline:
     def _round(
         self, round_number: int, slots: list[Slot], feedback: dict[int, str], k: int, result: PipelineResult
     ) -> tuple[list[Slot], dict[int, str]]:
+        """Run one round in chunks, so results land steadily and the lock is held briefly."""
+        self._emit("writing", f"Round {round_number}: {len(slots)} slots to fill", round_number)
         rejected: dict[int, str] = {}
+        for start in range(0, len(slots), PROCESS_CHUNK):
+            chunk = slots[start:start + PROCESS_CHUNK]
+            self._chunk(round_number, chunk, feedback, k, result, rejected)
+            self._emit(
+                "review", f"Round {round_number}: {len(result.tasks)} of {result.requested} tasks accepted",
+                round_number, accepted=len(result.tasks),
+            )
+        return [slot for slot in slots if slot.index in rejected], rejected
 
+    def _chunk(
+        self, round_number: int, slots: list[Slot], feedback: dict[int, str], k: int,
+        result: PipelineResult, rejected: dict[int, str],
+    ) -> None:
         def reject(slot: Slot, stage: str, reason: str, draft: TaskDraft | None) -> None:
             rejected[slot.index] = reason
             result.rejections.append(TaskRejection(
@@ -112,8 +132,10 @@ class TaskFactoryPipeline:
         self._emit("writing", f"Round {round_number}: writing {len(slots)} tasks", round_number)
         drafts = self._writer.write(
             self._profile, result.taxonomy, slots,
-            avoid_titles=[task.title for task in result.tasks], feedback=feedback,
+            avoid_titles=_recent_titles(result.tasks, {slot.category for slot in slots}),
+            feedback={slot.index: feedback[slot.index] for slot in slots if slot.index in feedback},
         )
+        taken = {_title_key(task.title) for task in result.tasks}
         survivors: list[tuple[Slot, TaskDraft]] = []
         for slot in slots:
             draft = drafts.get(slot.index)
@@ -121,10 +143,13 @@ class TaskFactoryPipeline:
                 reject(slot, "writer", "the writer returned no task for this slot", None)
                 continue
             problems = static_problems(draft, slot, self._profile)
+            if _title_key(draft.title) in taken:
+                problems.append(f"duplicate of an accepted task titled {draft.title!r}")
             if problems:
                 reject(slot, "static", "; ".join(problems), draft)
             else:
                 survivors.append((slot, draft))
+                taken.add(_title_key(draft.title))
         self._emit("static", f"Round {round_number}: {len(survivors)} of {len(slots)} passed the static check", round_number)
 
         fingerprints: dict[int, str] = {}
@@ -138,23 +163,18 @@ class TaskFactoryPipeline:
                     else:
                         reject(slot, "pass_k", outcome.reason, draft)
         executable = [(slot, draft) for slot, draft in survivors if slot.index in fingerprints]
-
-        if executable:
-            self._emit("review", f"Round {round_number}: reviewing {len(executable)} tasks", round_number)
-            verdicts = self._reviewer.review(self._profile, executable)
-            for slot, draft in executable:
-                verdict = verdicts.get(slot.index)
-                if verdict is None:
-                    reject(slot, "review", "the validator returned no verdict for this task", draft)
-                elif not verdict.accepted:
-                    reject(slot, "review", verdict.rejection_reason(), draft)
-                else:
-                    result.tasks.append(_accepted(slot, draft, verdict, round_number, fingerprints[slot.index]))
-        self._emit(
-            "review", f"Round {round_number}: {len(result.tasks)} of {result.requested} tasks accepted", round_number,
-            accepted=len(result.tasks),
-        )
-        return [slot for slot in slots if slot.index in rejected], rejected
+        if not executable:
+            return
+        self._emit("review", f"Round {round_number}: reviewing {len(executable)} tasks", round_number)
+        verdicts = self._reviewer.review(self._profile, executable)
+        for slot, draft in executable:
+            verdict = verdicts.get(slot.index)
+            if verdict is None:
+                reject(slot, "review", "the validator returned no verdict for this task", draft)
+            elif not verdict.accepted:
+                reject(slot, "review", verdict.rejection_reason(), draft)
+            else:
+                result.tasks.append(_accepted(slot, draft, verdict, round_number, fingerprints[slot.index]))
 
     def _emit(self, stage: str, log: str, round_number: int | None = None, **extra) -> None:
         event = {"stage": stage, "log": log, **extra}
@@ -163,9 +183,17 @@ class TaskFactoryPipeline:
         self._progress(event)
 
 
+def _title_key(title: str) -> str:
+    return " ".join(title.lower().split())
+
+
+def _recent_titles(tasks: list[SyntheticTask], categories: set[str]) -> list[str]:
+    return [task.title for task in tasks if task.category in categories][-TITLE_CONTEXT:]
+
+
 def _accepted(slot: Slot, draft: TaskDraft, verdict: ReviewVerdict, round_number: int, fingerprint: str) -> SyntheticTask:
     return SyntheticTask(
-        id=f"t-{slot.index + 1:04d}",
+        id=f"t-{slot.index + 1:05d}",
         category=slot.category,
         difficulty=slot.difficulty,
         title=draft.title,

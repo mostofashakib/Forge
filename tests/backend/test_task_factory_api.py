@@ -74,6 +74,12 @@ def test_starting_a_batch_queues_the_job(client, queued):
     assert batch["validator_model"] == "openai:gpt-5"
 
 
+def test_a_batch_of_twenty_thousand_is_accepted(client, queued):
+    resp = client.post("/api/task-factory/batches", json={"env_name": "mail", "count": 20_000, "k": 3})
+
+    assert resp.status_code == 202
+
+
 def test_a_stopped_environment_is_refused(client, queued):
     resp = client.post("/api/task-factory/batches", json={"env_name": "web", "count": 5, "k": 3})
 
@@ -109,7 +115,7 @@ def test_a_validator_sdk_that_is_not_installed_is_refused_before_queueing(client
     queued.delay.assert_not_called()
 
 
-@pytest.mark.parametrize("count, k", [(0, 3), (101, 3), (5, 0), (5, 11)])
+@pytest.mark.parametrize("count, k", [(0, 3), (20_001, 3), (5, 0), (5, 11)])
 def test_count_and_k_outside_their_limits_are_refused(client, queued, count, k):
     resp = client.post("/api/task-factory/batches", json={"env_name": "mail", "count": count, "k": k})
 
