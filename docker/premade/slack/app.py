@@ -760,6 +760,13 @@ def forge_state():
         return _get_state_dict(db)
 
 
+@app.get("/forge/dump")
+def forge_dump():
+    """The full restorable state, in the shape /forge/restore-state takes."""
+    with SessionLocal() as db:
+        return _dump_full_db(db)
+
+
 @app.post("/forge/reset")
 def forge_reset():
     with SessionLocal() as db:
