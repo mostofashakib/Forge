@@ -36,7 +36,6 @@ export default function BenchmarkLayout({
             <br />
             MARK
           </strong>
-          <p>Quality Control</p>
         </div>
         <nav className="benchmark-rail__nav" aria-label="Benchmark navigation">
           {SIDEBAR_ITEMS.map((item) => {
