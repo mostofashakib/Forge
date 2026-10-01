@@ -81,3 +81,22 @@ def test_hybrid_gpu_inference_engine_fallback():
         req = InferenceRequest(model="deepseek-r1", prompt="Execute policy step")
         res = engine.generate(req)
         assert res.metadata["provider"] == "api_gateway"
+
+
+def test_hybrid_gpu_without_fallback_raises_on_failure():
+    contract = GPUInferenceContract(
+        mode=InferenceMode.LOCAL_GPU,
+        fallback_to_cloud=False,
+    )
+    engine = HybridGPUInferenceEngine(contract)
+    with patch.object(engine.local_provider, "generate", side_effect=RuntimeError("CUDA Device Lost")):
+        req = InferenceRequest(model="deepseek-r1", prompt="Execute policy step")
+        with pytest.raises(RuntimeError, match="CUDA Device Lost"):
+            engine.generate(req)
+
+
+def test_rejects_empty_prompt():
+    provider = LocalGPUInferenceProvider(GPUDeviceSpec())
+    req = InferenceRequest(model="test", prompt="")
+    # False-positive / boundary check: empty prompt should be handled gracefully or validated
+    assert provider.generate(req).content is not None

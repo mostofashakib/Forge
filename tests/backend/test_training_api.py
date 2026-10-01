@@ -43,6 +43,7 @@ def test_create_and_get_training_run(client, tmp_path):
             "/api/training/runs",
             json={
                 "base_model": "meta-llama/Llama-3-8B-Instruct",
+                "training_mode": "offline",
                 "data_dir": "train_data",
                 "output_dir": "out_policy",
                 "objective": "grpo",
@@ -61,11 +62,13 @@ def test_create_and_get_training_run(client, tmp_path):
     assert len(runs) >= 1
     assert runs[0]["id"] == run_id
     assert runs[0]["objective"] == "grpo"
+    assert runs[0]["training_mode"] == "offline"
 
     # Get run details
     get_res = client.get(f"/api/training/runs/{run_id}")
     assert get_res.status_code == 200
     assert get_res.json()["base_model"] == "meta-llama/Llama-3-8B-Instruct"
+    assert get_res.json()["training_mode"] == "offline"
 
 
 def test_list_checkpoints(client, tmp_path):
@@ -75,6 +78,7 @@ def test_list_checkpoints(client, tmp_path):
     # Save a dummy checkpoint
     cp = PolicyCheckpoint(
         objective="grpo",
+        training_mode="offline",
         base_model="test-base",
         model_path="test-base",
         num_examples=100,
@@ -88,4 +92,5 @@ def test_list_checkpoints(client, tmp_path):
     data = res.json()
     assert len(data) >= 1
     assert data[0]["objective"] == "grpo"
+    assert data[0]["training_mode"] == "offline"
     assert data[0]["num_examples"] == 100

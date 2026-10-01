@@ -19,6 +19,7 @@ class PolicyCheckpoint(BaseModel):
     """Manifest describing a policy trained from graded rollouts."""
 
     objective: str            # "grpo" | "dpo"
+    training_mode: str = "online"  # "online" | "offline"
     base_model: str
     model_path: str           # what the runtime agent serves (local path or served name)
     num_examples: int

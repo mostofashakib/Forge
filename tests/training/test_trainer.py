@@ -132,7 +132,48 @@ def test_grpo_rejects_rollouts_from_a_different_behavior_policy(tmp_path):
             data_dir=data_dir,
             base_model="expected-model",
             output_dir=tmp_path / "out",
+            training_mode="online",
         ))
+
+
+def test_online_mode_allows_same_family_rollouts(tmp_path):
+    data_dir = tmp_path / "data"
+    rows = [_grpo_row("t", 0.0), _grpo_row("t", 1.0)]
+    for row in rows:
+        row["behavior_model"] = "vllm:Qwen/Qwen2.5-Coder-7B-Instruct"
+    _write_grpo(data_dir, rows)
+
+    backend = _FakeBackend()
+    out = tmp_path / "out"
+    result = PolicyTrainer(backend=backend).train(TrainingConfig(
+        data_dir=data_dir,
+        base_model="Qwen/Qwen2.5-Coder-14B-Instruct",
+        output_dir=out,
+        training_mode="online",
+    ))
+    assert backend.calls[0]["n"] == 2
+    ckpt = PolicyCheckpoint.load(out)
+    assert ckpt.training_mode == "online"
+
+
+def test_offline_mode_permits_different_behavior_policy(tmp_path):
+    data_dir = tmp_path / "data"
+    rows = [_grpo_row("t", 0.0), _grpo_row("t", 1.0)]
+    for row in rows:
+        row["behavior_model"] = "vllm:meta-llama/Llama-3-8B-Instruct"
+    _write_grpo(data_dir, rows)
+
+    backend = _FakeBackend()
+    out = tmp_path / "out"
+    result = PolicyTrainer(backend=backend).train(TrainingConfig(
+        data_dir=data_dir,
+        base_model="Qwen/Qwen2.5-Coder-7B-Instruct",
+        output_dir=out,
+        training_mode="offline",
+    ))
+    assert backend.calls[0]["n"] == 2
+    ckpt = PolicyCheckpoint.load(out)
+    assert ckpt.training_mode == "offline"
 
 
 def test_determinism_off_does_not_seed_training_libraries(tmp_path, monkeypatch):

@@ -34,6 +34,7 @@ class CreateTrainingRunRequest(BaseModel):
     data_dir: str = Field(..., min_length=1)
     output_dir: str = Field(default="forge_policy", min_length=1)
     objective: Literal["grpo", "dpo"] = "grpo"
+    training_mode: Literal["online", "offline"] = "online"
     max_steps: int = Field(default=500, ge=1, le=10000)
     seed: int | None = None
     train_envs: list[str] | None = None
@@ -120,6 +121,7 @@ def create_training_run(
         id=run_id,
         status="queued",
         objective=body.objective,
+        training_mode=body.training_mode,
         base_model=body.base_model,
         data_dir=str(data_dir),
         output_dir=str(output_dir),
@@ -135,6 +137,7 @@ def create_training_run(
         base_model=body.base_model,
         output_dir=output_dir,
         objective=TrainingObjective.GRPO if body.objective == "grpo" else TrainingObjective.DPO,
+        training_mode=body.training_mode,
         max_steps=body.max_steps,
         train_envs=body.train_envs,
         seed=body.seed,
@@ -187,6 +190,7 @@ def list_checkpoints(output_dir: str = "forge_policy") -> list[dict[str, Any]]:
             checkpoints.append({
                 "directory": str(d),
                 "objective": cp.objective,
+                "training_mode": getattr(cp, "training_mode", "online"),
                 "base_model": cp.base_model,
                 "num_examples": cp.num_examples,
                 "mean_reward": cp.mean_reward,
@@ -204,6 +208,7 @@ def _run_to_dict(run: TrainingRun) -> dict[str, Any]:
         "id": run.id,
         "status": run.status,
         "objective": run.objective,
+        "training_mode": getattr(run, "training_mode", "online"),
         "base_model": run.base_model,
         "data_dir": run.data_dir,
         "output_dir": run.output_dir,

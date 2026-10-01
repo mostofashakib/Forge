@@ -281,6 +281,7 @@ class TrainingRun(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True)
     status: Mapped[str] = mapped_column(String, default="queued")  # queued | running | completed | failed
     objective: Mapped[str] = mapped_column(String, default="grpo")  # grpo | dpo
+    training_mode: Mapped[str] = mapped_column(String, default="online")  # online | offline
     base_model: Mapped[str] = mapped_column(String)
     data_dir: Mapped[str] = mapped_column(String)
     output_dir: Mapped[str] = mapped_column(String)

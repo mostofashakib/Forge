@@ -9,6 +9,7 @@ interface TrainingRun {
   id: string;
   status: "queued" | "running" | "completed" | "failed";
   objective: "grpo" | "dpo";
+  training_mode?: "online" | "offline";
   base_model: string;
   data_dir: string;
   output_dir: string;
@@ -25,6 +26,7 @@ interface TrainingRun {
 interface Checkpoint {
   directory: string;
   objective: string;
+  training_mode?: "online" | "offline";
   base_model: string;
   num_examples: number;
   mean_reward: number;
@@ -54,6 +56,7 @@ export default function TrainingPage() {
 
   // Form State
   const [objective, setObjective] = useState<"grpo" | "dpo">("grpo");
+  const [trainingMode, setTrainingMode] = useState<"online" | "offline">("online");
   const [baseModel, setBaseModel] = useState("Qwen/Qwen2.5-Coder-7B-Instruct");
   const [dataDir, setDataDir] = useState("exports");
   const [outputDir, setOutputDir] = useState("forge_policy");
@@ -103,7 +106,7 @@ export default function TrainingPage() {
     setSubmitting(true);
     setError(null);
     setSuccessMsg(null);
-    appendLog(`[training] initiating ${objective.toUpperCase()} training with base model ${baseModel}...`);
+    appendLog(`[training] initiating ${objective.toUpperCase()} (${trainingMode.toUpperCase()} mode) training with base model ${baseModel}...`);
 
     try {
       const res = await fetch(`${API_BASE}/api/training/runs`, {
@@ -114,6 +117,7 @@ export default function TrainingPage() {
           data_dir: dataDir,
           output_dir: outputDir,
           objective,
+          training_mode: trainingMode,
           max_steps: Number(maxSteps),
           inference_mode: inferenceMode,
           api_gateway_url: inferenceMode === "api_gateway" ? apiGatewayUrl : undefined,
@@ -153,8 +157,8 @@ export default function TrainingPage() {
           </h1>
           <p>
             Train agents from graded rollouts and synthetic preference pairs. Optimize policies with
-            Group Relative Policy Optimization (GRPO) or Direct Preference Optimization (DPO) utilizing
-            local GPU hardware or cloud inference gateways.
+            Group Relative Policy Optimization (GRPO) or Direct Preference Optimization (DPO) in
+            either Online (same model family) or Offline (cross-model distillation) mode.
           </p>
         </div>
         <div className="benchmark-run__readout" aria-label="Training system overview">
@@ -165,6 +169,10 @@ export default function TrainingPage() {
           <div>
             <span>Objective</span>
             <strong>{objective.toUpperCase()}</strong>
+          </div>
+          <div>
+            <span>Mode</span>
+            <strong className="uppercase">{trainingMode}</strong>
           </div>
           <div>
             <span>Checkpoints</span>
@@ -189,7 +197,7 @@ export default function TrainingPage() {
               <span>01</span>
               <h2>Launch Run</h2>
             </div>
-            <p>Configure model, data, objective, and compute backend</p>
+            <p>Configure model, data, objective, training mode, and compute backend</p>
           </div>
 
           {/* Objective Selection */}
@@ -226,6 +234,45 @@ export default function TrainingPage() {
                 <span>
                   <strong>DPO</strong>
                   <small>Direct Preference Optimization (from pairs)</small>
+                </span>
+              </label>
+            </div>
+          </div>
+
+          {/* Training Mode: Online vs Offline */}
+          <div className="benchmark-field">
+            <div className="benchmark-field__label">
+              <span>Training Mode</span>
+              <small>Model & Data Parity</small>
+            </div>
+            <div className="benchmark-domain-grid" style={{ gridTemplateColumns: "repeat(2, 1fr)" }}>
+              <label className="benchmark-domain">
+                <input
+                  type="radio"
+                  name="training_mode"
+                  checked={trainingMode === "online"}
+                  onChange={() => setTrainingMode("online")}
+                  disabled={submitting}
+                />
+                <span className="benchmark-domain__check">✓</span>
+                <span>
+                  <strong>Online Mode</strong>
+                  <small>Same model / family used to generate data</small>
+                </span>
+              </label>
+
+              <label className="benchmark-domain">
+                <input
+                  type="radio"
+                  name="training_mode"
+                  checked={trainingMode === "offline"}
+                  onChange={() => setTrainingMode("offline")}
+                  disabled={submitting}
+                />
+                <span className="benchmark-domain__check">✓</span>
+                <span>
+                  <strong>Offline Mode</strong>
+                  <small>Cross-model / different family distillation</small>
                 </span>
               </label>
             </div>
@@ -565,6 +612,7 @@ export default function TrainingPage() {
                   <tr>
                     <th>Run ID</th>
                     <th>Objective</th>
+                    <th>Mode</th>
                     <th>Base Model</th>
                     <th>Compute</th>
                     <th>Status</th>
@@ -580,6 +628,17 @@ export default function TrainingPage() {
                       <td>
                         <span className="tasks-difficulty tasks-difficulty--1 uppercase font-semibold">
                           {r.objective}
+                        </span>
+                      </td>
+                      <td>
+                        <span
+                          className={`text-[11px] font-mono uppercase px-2 py-0.5 rounded border ${
+                            (r.training_mode || "online") === "online"
+                              ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20"
+                              : "bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/20"
+                          }`}
+                        >
+                          {r.training_mode || "online"}
                         </span>
                       </td>
                       <td className="font-mono text-xs">{r.base_model}</td>
@@ -622,6 +681,7 @@ export default function TrainingPage() {
                 <tr>
                   <th>Directory</th>
                   <th>Objective</th>
+                  <th>Mode</th>
                   <th>Base Model</th>
                   <th>Trained Examples</th>
                   <th>Mean Reward</th>
@@ -636,6 +696,17 @@ export default function TrainingPage() {
                     <td>
                       <span className="tasks-difficulty tasks-difficulty--2 uppercase font-semibold">
                         {cp.objective}
+                      </span>
+                    </td>
+                    <td>
+                      <span
+                        className={`text-[11px] font-mono uppercase px-2 py-0.5 rounded border ${
+                          (cp.training_mode || "online") === "online"
+                            ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20"
+                            : "bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/20"
+                        }`}
+                      >
+                        {cp.training_mode || "online"}
                       </span>
                     </td>
                     <td className="font-mono text-xs">{cp.base_model}</td>

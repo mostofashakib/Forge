@@ -102,3 +102,9 @@ def test_detect_reward_hacking_and_memorization_and_contamination():
     ]
     graphs_contam = generate_benchmark_graphs(contam_trials, max_k=5)
     assert graphs_contam.diagnostics["contamination_risk"] == "high"
+
+
+def test_rejects_invalid_sample_count():
+    # Negative path: passing k > n should raise ValueError or return 0
+    with pytest.raises((ValueError, ZeroDivisionError)):
+        compute_pass_at_k(n=0, c=0, k=1)

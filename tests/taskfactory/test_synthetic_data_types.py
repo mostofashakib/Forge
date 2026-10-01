@@ -209,3 +209,9 @@ def test_pipeline_run_generates_preference_pairs_byproduct():
     pair = result.preference_pairs[0]
     assert pair.preferred["title"] == "Good"
     assert "Bad" in str(pair.dispreferred)
+
+
+def test_rejects_invalid_task_rejection_stage():
+    with pytest.raises(Exception):
+        # Validation test for malformed rejection
+        TaskRejection(slot="invalid_type", category="core", difficulty=1, round=1, stage="unknown", reason="err")  # type: ignore

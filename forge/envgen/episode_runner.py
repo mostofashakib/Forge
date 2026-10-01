@@ -208,6 +208,7 @@ class ContainerEpisodeRunner(EpisodeController):
     # ------------------------------------------------------------------
 
     def _get_state(self) -> dict:
+        """Observe DB-backed state via "/forge/state" endpoint or environment state adapter."""
         state = self.environment.state.get()
         ctx = self._runtime_ctx or RuntimeContext(seed=0, deterministic=False)
         return self.environment.observations.encode(state, ctx).payload

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+import logging
 from pathlib import Path
 import random
 
@@ -21,6 +22,8 @@ from forge.training._backends import DPOBackend, GRPOBackend, TrainingBackend
 from forge.training.checkpoint import PolicyCheckpoint
 from forge.training.dataset import load_preferences, load_rollouts
 from forge.training.reward_mapping import dpo_examples, grpo_advantages
+
+logger = logging.getLogger(__name__)
 
 
 class TrainingObjective(str, Enum):
@@ -46,6 +49,7 @@ class TrainingConfig:
     base_model: str
     output_dir: Path
     objective: TrainingObjective = TrainingObjective.GRPO
+    training_mode: str = "online"  # "online" | "offline"
     max_steps: int = 500
     train_envs: list[str] | None = None
     experiment_config: dict | None = None
@@ -59,6 +63,7 @@ class TrainingResult:
     objective: str
     num_examples: int
     mean_reward: float
+    training_mode: str = "online"
 
 
 _ROLLOUTS_FILE = "grpo_rollouts.parquet"
@@ -83,7 +88,19 @@ class PolicyTrainer:
                 f"no {objective.value} training signal in {config.data_dir}: "
                 "the graded rollouts are empty, all-failing, or carry no relative signal"
             )
-        if objective is TrainingObjective.GRPO:
+
+        is_online = config.training_mode.lower() == "online"
+        if is_online and objective is TrainingObjective.GRPO:
+            # Online mode: training model / model family must match the behavior model / model family that generated the data
+            def _family_of(m: str) -> str:
+                clean = m.replace("vllm:", "").strip()
+                try:
+                    from forge.grading_provenance import model_family
+                    return model_family(clean)
+                except Exception:
+                    return clean.lower().split("/")[0]
+
+            base_fam = _family_of(config.base_model)
             mismatched = sorted({
                 example.behavior_model
                 for example in examples
@@ -92,12 +109,20 @@ class PolicyTrainer:
                     config.base_model,
                     f"vllm:{config.base_model}",
                 }
+                and _family_of(example.behavior_model) != base_fam
             })
             if mismatched:
                 raise BehaviorPolicyMismatchError(
-                    "batch GRPO requires rollouts sampled by base_model "
-                    f"{config.base_model!r}; found {mismatched}"
+                    f"online training requires base_model {config.base_model!r} "
+                    f"(family {base_fam!r}) to match data-generating model/family; "
+                    f"found {mismatched}. Switch to offline mode for cross-model training."
                 )
+        elif not is_online:
+            logger.info(
+                "[training] offline mode active: allowing cross-model training for %s with base_model %s",
+                objective.value,
+                config.base_model,
+            )
 
         backend = self._backend or self._default_backend(objective)
         from forge.settings import determinism_enabled
@@ -113,6 +138,7 @@ class PolicyTrainer:
 
         checkpoint = PolicyCheckpoint(
             objective=objective.value,
+            training_mode=config.training_mode,
             base_model=config.base_model,
             model_path=model_path,
             num_examples=len(examples),
@@ -126,6 +152,7 @@ class PolicyTrainer:
         return TrainingResult(
             checkpoint_path=str(config.output_dir),
             objective=objective.value,
+            training_mode=config.training_mode,
             num_examples=len(examples),
             mean_reward=mean_reward,
         )
