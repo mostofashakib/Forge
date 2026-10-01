@@ -71,7 +71,7 @@ def test_good_values_are_normalized(key, raw, saved):
         ("FORGE_LLM_PROVIDER", "mystery"),
         ("FORGE_CONTAINER_MEMORY", "lots"),
         ("FORGE_LLM_MODEL", ""),
-        ("FORGE_CLI_IMAGE", ""),
+        ("FORGE_CONTAINER_NANO_CPUS", "0"),
         ("OLLAMA_BASE_URL", "localhost:11434"),
     ],
 )

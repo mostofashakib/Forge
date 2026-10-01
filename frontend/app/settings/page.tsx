@@ -6,10 +6,16 @@ import { apiJson, type SettingGroup, type SettingRow, type Settings } from "@/li
 const GROUPS: { id: SettingGroup; title: string; note: string }[] = [
   { id: "models", title: "Models", note: "Generator, judge, quorum, task validator" },
   { id: "runtime", title: "Runtime", note: "Determinism and sandboxes" },
-  { id: "containers", title: "Containers", note: "Images and resource limits" },
+  { id: "containers", title: "Containers", note: "Resource limits and sandbox isolation" },
   { id: "budgets", title: "Generation budgets", note: "Token and context limits" },
   { id: "reliability", title: "Reliability & Retries", note: "Episode retries, snapshots, and replay" },
 ];
+
+const REDUNDANT_CONTAINER_SETTINGS = new Set([
+  "FORGE_PYTHON_BASE_IMAGE",
+  "FORGE_CLI_IMAGE",
+  "FORGE_BROWSER_IMAGE",
+]);
 
 // Each model field and the provider field that decides where it runs.
 const MODEL_PROVIDER: Record<string, string> = {
@@ -159,7 +165,9 @@ export default function SettingsPage() {
 
         {GROUPS.map((group, index) => {
           const isExpanded = expandedGroups.has(group.id);
-          const groupRows = rows.filter((row) => row.group === group.id);
+          const groupRows = rows.filter(
+            (row) => row.group === group.id && !REDUNDANT_CONTAINER_SETTINGS.has(row.key)
+          );
           const groupChanged = groupRows.filter((row) => draft[row.key] !== undefined && draft[row.key] !== row.value);
           const groupPending = groupRows.filter((row) => row.pending_restart);
 

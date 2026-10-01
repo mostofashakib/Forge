@@ -15,14 +15,11 @@ from dataclasses import dataclass, fields
 
 from forge.envgen.config import EnvGenConfig
 from forge.envgen.container import (
-    DEFAULT_BROWSER_IMAGE,
     DEFAULT_BROWSER_MEMORY,
-    DEFAULT_CLI_IMAGE,
     DEFAULT_CLI_MEMORY,
     DEFAULT_CONTAINER_MEMORY,
     DEFAULT_CONTAINER_NANO_CPUS,
     DEFAULT_CONTAINER_PIDS,
-    DEFAULT_PYTHON_BASE_IMAGE,
 )
 from forge.extraction.llm_client import _ANTHROPIC_CAPABLE, _ANTHROPIC_DEFAULT, _PROVIDER_DEFAULTS
 from forge.grading_provenance import model_family
@@ -105,9 +102,6 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("FORGE_SNAPSHOT_INTERVAL", "reliability", "Snapshot interval", "integer", "5",
             "Step interval between snapshots for long episode recovery.", minimum=1),
 
-    Setting("FORGE_PYTHON_BASE_IMAGE", "containers", "Python base image", "text", DEFAULT_PYTHON_BASE_IMAGE),
-    Setting("FORGE_CLI_IMAGE", "containers", "CLI image", "text", DEFAULT_CLI_IMAGE),
-    Setting("FORGE_BROWSER_IMAGE", "containers", "Browser image", "text", DEFAULT_BROWSER_IMAGE),
     Setting("FORGE_CONTAINER_MEMORY", "containers", "App memory", "memory", DEFAULT_CONTAINER_MEMORY,
             "Like 512m or 2g."),
     Setting("FORGE_BROWSER_MEMORY", "containers", "Browser memory", "memory", DEFAULT_BROWSER_MEMORY),
