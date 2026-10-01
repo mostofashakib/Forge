@@ -500,7 +500,7 @@ Generate training data without running live agents:
 
 ### Task Factory
 
-Create versioned batches of realistic, executable tasks for any environment, apart from environment building. Open **Tasks** (`/tasks`), pick an environment, choose how many tasks you want (1 to 20,000) and how many times each golden solution must pass (k, 1 to 10), and start a batch. Each batch runs four steps in a Celery job and streams progress to the page.
+Create versioned batches of realistic, executable tasks for any environment, apart from environment building. Open **Generator** (`/generator`, the synthetic data generator), pick an environment, choose how many tasks you want (1 to 20,000) and how many times each golden solution must pass (k, 1 to 10), and start a batch. Each batch runs four steps in a Celery job and streams progress to the page.
 
 1. **Taxonomy.** The writer model maps 4 to 12 categories of real work in this environment (up to 40 for large batches), across at least 3 difficulty levels. Code checks the spread (level coverage, duplicate names, overlapping descriptions, tools the environment lacks) and asks for one retry before failing the batch. Every batch builds a fresh taxonomy.
 2. **Writer.** Code turns the taxonomy into an exact slot plan, so 30 requested tasks means 30 slots spread evenly across levels and categories. Each round runs 10 slots at a time: write, check, run, review. Results land steadily, and the environment lock is held for one chunk's golden runs at a time. The writer fills five slots per call and sees the last 50 titles from the same categories, and a draft repeating an accepted title is rejected. Each task carries an objective, seed data, a golden solution, machine-checkable checks, and for difficulty 4 and 5, at least 3 reflection points where the agent has to stop and rethink.
@@ -524,9 +524,9 @@ Golden runs reuse the episode machinery: a fresh in-process environment, an app 
 
 A freshly compiled in-process environment has stub transitions that leave the state unchanged until `custom/transitions.py` overrides them (see [Environment Customization](#environment-customization)). The factory rejects every task for such an environment, because no golden solution changes anything.
 
-Each version page (`/tasks/<batch>`) shows the taxonomy, every task with its golden solution, checks, and the validator's reasons, and every rejection with its stage. **Export JSON** downloads the batch as `<env>-v<version>-<date>.json`. Agent runs and the benchmark do not draw from batches yet.
+Each version page (`/generator/<batch>`) shows the taxonomy, every task with its golden solution, checks, and the validator's reasons, and every rejection with its stage. **Export JSON** downloads the batch as `<env>-v<version>-<date>.json`. Agent runs and the benchmark do not draw from batches yet.
 
-**Settings** (`/settings`) sets the validator model. Picking Ollama lists every model the local server has pulled, with its family and size, disables the writer's family, and labels Ollama cloud models. Saving rewrites only the `FORGE_TASK_VALIDATOR_PROVIDER` and `FORGE_TASK_VALIDATOR_MODEL` lines in `backend/.env`, through a temporary file swapped into place, and refuses a model from the writer's family. Each batch reads those two lines when it starts, so a change needs no restart. API keys stay in `backend/.env`. The page shows only whether each provider has one.
+**Settings** (`/settings`) edits the platform settings in four groups: models (generator, judge, validation quorum, task validator, Ollama server), runtime, containers, and generation budgets. Any model field whose provider is Ollama lists every model the local server has pulled, with its family and size, disables the generator's family for the judge and validator, and labels Ollama cloud models. Saving checks every value and the model families together, refuses a judge, quorum member or validator from the generator's family, and rewrites only the changed lines in `backend/.env` through a temporary file swapped into place. The task validator applies to the next batch. Every other setting is read when the API and workers start, so the page marks it "restart pending" until you restart them. API keys, the database URL, file locations and container-internal values are not on the page. Keys stay in `backend/.env`.
 
 ### Dataset Export
 
@@ -881,6 +881,7 @@ backend/
     services/
       task_registry.py # Versioned task batches; task_factory_targets.py opens runners
       env_file.py      # Rewrites named keys in backend/.env for the Settings page
+      settings_registry.py # Every setting the Settings page edits, with its checks
       export_writers/  # sft_pairs, preference_pairs, grpo_rollouts, failure_dataset, ...
     worker/            # Celery tasks: build_sandbox, run_episode, run_rollout,
     │                  #   run_benchmark_task, cleanup_expired
@@ -894,9 +895,9 @@ frontend/
     violations/        # Global policy audit log (filterable by env / episode / severity)
     compiler-review/
       [job_id]/        # Inspect and edit LLM compiler output before build
-    tasks/             # Task factory: new batch, live progress, versions
+    generator/         # Synthetic data generator: new batch, live progress, versions
       [batchId]/       # One version: taxonomy, tasks, rejections, export
-    settings/          # Task validator model and provider key status
+    settings/          # Platform settings: models, runtime, containers, budgets
     benchmark/
       run/             # Launch benchmark: domain/depth/seed config + live log + progress bar
       report/          # Quality metrics table with colour coding + CSV download
