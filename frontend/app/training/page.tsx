@@ -176,10 +176,8 @@ export default function TrainingPage() {
         <div className="benchmark-run__hero-copy flex flex-col items-center text-center">
           <span className="benchmark-run__eyebrow">Policy Training & Alignment</span>
           <h1>FORGE THE <em>POLICY.</em></h1>
-          <p className="mx-auto">
-            Train agents from graded rollouts and synthetic preference pairs. Optimize policies with
-            Group Relative Policy Optimization (GRPO) or Direct Preference Optimization (DPO) in
-            either Online (same model family) or Offline (cross-model distillation) mode.
+          <p className="mx-auto max-w-5xl">
+            Train agents from graded rollouts and synthetic preference pairs. Optimize policies with Group Relative Policy Optimization (GRPO) or Direct Preference Optimization (DPO) in either Online (same model family) or Offline (cross-model distillation) mode.
           </p>
         </div>
       </header>

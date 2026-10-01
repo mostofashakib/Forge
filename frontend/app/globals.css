@@ -279,11 +279,6 @@
   .environment-hero__copy {
     @apply relative z-10 flex flex-col items-start justify-center p-7 sm:p-11 lg:p-14;
   }
-  .environment-hero__copy::after {
-    content: "ENVIRONMENT COMPILER / LOCAL";
-    writing-mode: vertical-rl;
-    @apply absolute right-4 top-10 hidden font-mono text-[0.5rem] tracking-[0.25em] text-foreground/25 lg:block;
-  }
   .environment-hero__eyebrow {
     @apply max-w-lg text-xs font-medium uppercase tracking-[0.2em] text-muted-foreground;
   }
