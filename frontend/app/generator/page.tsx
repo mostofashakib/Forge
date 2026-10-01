@@ -153,19 +153,10 @@ export default function TaskFactoryPage() {
       <header className="benchmark-run__hero">
         <div className="benchmark-run__hero-copy">
           <span className="benchmark-run__eyebrow">Synthetic data generator</span>
-          <h1>FORGE THE<br /><em>WORK.</em></h1>
+          <h1>FORGE THE <em>WORK.</em></h1>
           <p>
             Build a taxonomy, build synthetic datasets. Every batch is saved as a dated version.
           </p>
-        </div>
-        <div className="benchmark-run__readout" aria-label="Batch configuration">
-          <div><span>Tasks</span><strong>{count ? count.toLocaleString() : "—"}</strong></div>
-          <div><span>pass^k</span><strong>{String(k).padStart(2, "0")}</strong></div>
-          <div><span>Type</span><strong>{dataType === "rl_tasks" ? "RL" : dataType === "preference_pairs" ? "Pair" : "SFT"}</strong></div>
-          <div><span>Versions</span><strong>{String(batches.filter((b) => b.version).length).padStart(2, "0")}</strong></div>
-          <div className={`benchmark-run__state benchmark-run__state--${phase}`}>
-            <span>System state</span><strong><i />{phase}</strong>
-          </div>
         </div>
       </header>
 
