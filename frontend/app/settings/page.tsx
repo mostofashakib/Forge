@@ -1,5 +1,6 @@
 "use client";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { ChevronDown } from "lucide-react";
 import { apiJson, type SettingGroup, type SettingRow, type Settings } from "@/lib/taskFactory";
 
 const GROUPS: { id: SettingGroup; title: string; note: string }[] = [
@@ -28,6 +29,28 @@ export default function SettingsPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  // Initially, all sections are in the collapsed state
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => new Set());
+
+  const toggleGroup = useCallback((groupId: string) => {
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(groupId)) {
+        next.delete(groupId);
+      } else {
+        next.add(groupId);
+      }
+      return next;
+    });
+  }, []);
+
+  const expandAll = useCallback(() => {
+    setExpandedGroups(new Set(GROUPS.map((g) => g.id)));
+  }, []);
+
+  const collapseAll = useCallback(() => {
+    setExpandedGroups(new Set());
+  }, []);
 
   const load = useCallback((next: Settings) => {
     setSettings(next);
@@ -111,31 +134,98 @@ export default function SettingsPage() {
       )}
 
       <form className="settings-form" onSubmit={handleSave}>
-        {GROUPS.map((group, index) => (
-          <section key={group.id} className="benchmark-config">
-            <div className="benchmark-panel__heading">
-              <div><span>0{index + 1}</span><h2>{group.title}</h2></div>
-              <p>{group.note}</p>
-            </div>
-            <div className="settings-grid">
-              {rows.filter((row) => row.group === group.id).map((row) => (
-                <SettingField
-                  key={row.key}
-                  row={row}
-                  value={draft[row.key] ?? row.value}
-                  draft={draft}
-                  settings={settings!}
-                  refreshing={refreshing}
-                  onRefresh={refreshOllama}
-                  onChange={(value) => setDraft((current) => ({ ...current, [row.key]: value }))}
-                />
-              ))}
-            </div>
-            {group.id === "models" && validator && !validator.configured && validator.error && (
-              <p className="tasks-hint tasks-hint--warn settings-message">Task validator: {validator.error}</p>
-            )}
-          </section>
-        ))}
+        <div className="flex items-center justify-between pb-1 text-xs">
+          <span className="font-mono text-muted-foreground uppercase tracking-wider text-[11px]">
+            Configuration Sections ({GROUPS.length})
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={expandAll}
+              className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-4 decoration-dotted transition-colors"
+            >
+              Expand all
+            </button>
+            <span className="text-muted-foreground/30">•</span>
+            <button
+              type="button"
+              onClick={collapseAll}
+              className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-4 decoration-dotted transition-colors"
+            >
+              Collapse all
+            </button>
+          </div>
+        </div>
+
+        {GROUPS.map((group, index) => {
+          const isExpanded = expandedGroups.has(group.id);
+          const groupRows = rows.filter((row) => row.group === group.id);
+          const groupChanged = groupRows.filter((row) => draft[row.key] !== undefined && draft[row.key] !== row.value);
+          const groupPending = groupRows.filter((row) => row.pending_restart);
+
+          return (
+            <section key={group.id} className="benchmark-config overflow-hidden transition-all duration-200">
+              <button
+                type="button"
+                onClick={() => toggleGroup(group.id)}
+                aria-expanded={isExpanded}
+                aria-controls={`group-content-${group.id}`}
+                className={`benchmark-panel__heading w-full cursor-pointer text-left transition-colors hover:bg-muted/15 flex items-center justify-between px-5 py-4 ${
+                  isExpanded ? "border-b border-foreground/25" : "border-b-0"
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <span className="font-mono text-[0.58rem] text-primary">0{index + 1}</span>
+                  <h2 className="text-xs font-semibold uppercase tracking-[0.16em]">{group.title}</h2>
+                </div>
+                <div className="flex items-center gap-3">
+                  <p className="hidden font-mono text-[0.5rem] uppercase tracking-wider text-muted-foreground md:block">
+                    {group.note}
+                  </p>
+                  {groupChanged.length > 0 && (
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-primary/10 text-primary border border-primary/20 font-semibold">
+                      {groupChanged.length} changed
+                    </span>
+                  )}
+                  {groupPending.length > 0 && (
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-500/10 text-amber-500 border border-amber-500/20 font-semibold">
+                      {groupPending.length} restart pending
+                    </span>
+                  )}
+                  <ChevronDown
+                    size={16}
+                    className={`text-muted-foreground transition-transform duration-200 shrink-0 ${
+                      isExpanded ? "rotate-180" : ""
+                    }`}
+                    aria-hidden="true"
+                  />
+                </div>
+              </button>
+
+              {isExpanded && (
+                <div id={`group-content-${group.id}`} className="transition-all duration-200">
+                  <div className="settings-grid">
+                    {groupRows.map((row) => (
+                      <SettingField
+                        key={row.key}
+                        row={row}
+                        value={draft[row.key] ?? row.value}
+                        draft={draft}
+                        settings={settings!}
+                        refreshing={refreshing}
+                        onRefresh={refreshOllama}
+                        onChange={(value) => setDraft((current) => ({ ...current, [row.key]: value }))}
+                      />
+                    ))}
+                  </div>
+                  {group.id === "models" && validator && !validator.configured && validator.error && (
+                    <p className="tasks-hint tasks-hint--warn settings-message">Task validator: {validator.error}</p>
+                  )}
+                </div>
+              )}
+            </section>
+          );
+        })}
 
         <div className="settings-savebar">
           <span>
