@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { apiJson, type Settings } from "@/lib/taskFactory";
 
 export default function SettingsPage() {
@@ -9,6 +9,7 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -23,6 +24,18 @@ export default function SettingsPage() {
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  // Pulls the Ollama model list again, for models pulled since the page opened.
+  const refreshOllama = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      setSettings(await apiJson<Settings>("/api/settings"));
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setRefreshing(false);
+    }
   }, []);
 
   async function handleSave(e: React.FormEvent) {
@@ -44,6 +57,8 @@ export default function SettingsPage() {
   }
 
   const validator = settings?.task_validator;
+  const ollamaModels = settings?.ollama.models ?? [];
+  const writerFamily = settings?.writer.family;
   const providerKey = settings?.providers.find((p) => p.name === provider);
 
   return (
@@ -88,13 +103,39 @@ export default function SettingsPage() {
           </label>
           <label className="benchmark-field">
             <span className="benchmark-field__label"><span>Model</span><small>FORGE_TASK_VALIDATOR_MODEL</small></span>
-            <input
-              className="benchmark-input benchmark-input--mono"
-              value={model}
-              onChange={(e) => setModel(e.target.value)}
-              placeholder="gpt-5"
-              required
-            />
+            {provider === "ollama" && ollamaModels.length > 0 ? (
+              <div className="settings-model-row">
+                <select className="benchmark-input benchmark-input--mono" value={model} onChange={(e) => setModel(e.target.value)} required>
+                  <option value="" disabled>Pick a pulled model</option>
+                  {ollamaModels.map((m) => (
+                    <option key={m.name} value={m.name} disabled={m.family === writerFamily}>
+                      {m.name}{m.parameters ? ` · ${m.parameters}` : ""} · {m.family}{m.cloud ? " · Ollama cloud" : ""}
+                      {m.family === writerFamily ? " (writer's family)" : ""}
+                    </option>
+                  ))}
+                </select>
+                <button type="button" className="tasks-button tasks-button--ghost" onClick={refreshOllama} disabled={refreshing}>
+                  {refreshing ? "…" : "Refresh"}
+                </button>
+              </div>
+            ) : (
+              <input
+                className="benchmark-input benchmark-input--mono"
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                placeholder={provider === "ollama" ? "qwen3:32b" : "gpt-5"}
+                required
+              />
+            )}
+            {provider === "ollama" && (
+              <p className="tasks-hint">
+                {settings?.ollama.error
+                  ? <>Could not reach Ollama: {settings.ollama.error}. Type a model name, or start Ollama and <button type="button" className="settings-link" onClick={refreshOllama}>refresh</button>.</>
+                  : ollamaModels.length === 0
+                    ? <>Ollama has no models pulled. Run <code>ollama pull &lt;model&gt;</code>, then <button type="button" className="settings-link" onClick={refreshOllama}>refresh</button>.</>
+                    : `${ollamaModels.filter((m) => !m.cloud).length} local and ${ollamaModels.filter((m) => m.cloud).length} Ollama cloud models available.`}
+              </p>
+            )}
             <p className="tasks-hint">
               Must come from a different family than the writer ({settings?.writer.family ?? "…"}). A cheaper tier of
               the same vendor counts as the same family.

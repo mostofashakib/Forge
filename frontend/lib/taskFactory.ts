@@ -14,7 +14,10 @@ export type Settings = {
   writer: ModelView;
   task_validator: ModelView & { configured: boolean; error: string | null };
   providers: { name: string; needs_key: boolean; key_set: boolean }[];
+  ollama: { models: OllamaModel[]; error: string | null };
 };
+
+export type OllamaModel = { name: string; family: string; parameters: string | null; cloud: boolean };
 
 export type BatchSummary = {
   id: string;

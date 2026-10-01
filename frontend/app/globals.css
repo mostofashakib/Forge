@@ -536,6 +536,10 @@
   .settings-keys li { @apply flex items-center justify-between px-5 py-3.5 text-sm; }
   .settings-keys strong { @apply font-mono text-xs font-medium; }
   .settings-note { @apply px-5 pb-5; }
+  .settings-model-row { @apply flex gap-2; }
+  .settings-model-row select { @apply min-w-0 flex-1; }
+  .settings-link { @apply font-medium text-primary underline underline-offset-2; }
+  .tasks-hint code { @apply bg-muted px-1 font-mono text-[0.65rem]; }
 
   .new-env-page { @apply mx-auto max-w-6xl space-y-7; }
   .new-env-hero {

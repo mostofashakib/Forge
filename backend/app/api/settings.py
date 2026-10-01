@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from backend.app.services import env_file
+from backend.app.services.ollama_catalog import OllamaUnavailable, list_ollama_models
 from forge.taskfactory.model_settings import (
     SUPPORTED_PROVIDERS,
     VALIDATOR_MODEL_VAR,
@@ -25,6 +26,9 @@ from forge.taskfactory.model_settings import (
 )
 
 router = APIRouter(prefix="/api/settings")
+
+# The same default the Ollama client uses.
+DEFAULT_OLLAMA_URL = "http://localhost:11434"
 
 # Any one of these variables holding a value means the provider has a key.
 PROVIDER_KEY_VARS: dict[str, tuple[str, ...]] = {
@@ -68,6 +72,13 @@ def _providers(env: dict[str, str]) -> list[dict]:
     ]
 
 
+def _ollama(env: dict[str, str]) -> dict:
+    try:
+        return {"models": list_ollama_models(env.get("OLLAMA_BASE_URL") or DEFAULT_OLLAMA_URL), "error": None}
+    except OllamaUnavailable as exc:
+        return {"models": [], "error": str(exc)}
+
+
 def _settings_body() -> dict:
     key_vars = [var for names in PROVIDER_KEY_VARS.values() for var in names]
     env = env_file.environ_with_saved([*VALIDATOR_VARS, *key_vars])
@@ -75,6 +86,7 @@ def _settings_body() -> dict:
         "writer": _spec_view(writer_spec(env)),
         "task_validator": _validator_view(env),
         "providers": _providers(env),
+        "ollama": _ollama(env),
     }
 
 

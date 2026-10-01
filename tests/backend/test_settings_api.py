@@ -15,6 +15,14 @@ def sdks_installed(monkeypatch):
     monkeypatch.setattr(settings, "_installed", lambda module: True)
 
 
+@pytest.fixture(autouse=True)
+def ollama_models(monkeypatch):
+    """No real Ollama server in tests. Tests replace the list they need."""
+    models: list[dict] = []
+    monkeypatch.setattr("backend.app.api.settings.list_ollama_models", lambda base_url: list(models))
+    return models
+
+
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     path = tmp_path / ".env"
@@ -103,3 +111,26 @@ def test_a_model_name_that_could_inject_a_line_is_refused(client):
 
     assert resp.status_code == 422
     assert client.env_path.read_text() == "ANTHROPIC_API_KEY=sk-ant-secret\n"
+
+
+def test_settings_list_the_pulled_ollama_models(client, ollama_models):
+    ollama_models.append({"name": "qwen3:32b", "family": "qwen", "parameters": "32.8B", "cloud": False})
+
+    ollama = client.get("/api/settings").json()["ollama"]
+
+    assert ollama == {"models": [{"name": "qwen3:32b", "family": "qwen", "parameters": "32.8B", "cloud": False}], "error": None}
+
+
+def test_an_unreachable_ollama_server_is_reported_not_raised(client, monkeypatch):
+    from backend.app.services.ollama_catalog import OllamaUnavailable
+
+    def down(base_url):
+        raise OllamaUnavailable(f"could not list models from {base_url}/api/tags")
+
+    monkeypatch.setattr("backend.app.api.settings.list_ollama_models", down)
+
+    body = client.get("/api/settings")
+
+    assert body.status_code == 200
+    assert body.json()["ollama"]["models"] == []
+    assert "api/tags" in body.json()["ollama"]["error"]
