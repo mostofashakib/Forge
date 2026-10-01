@@ -74,9 +74,9 @@
   100% { transform: translateX(200%); }
 }
 
-@keyframes forge-enter {
-  from { opacity: 0; transform: translateY(14px); }
-  to { opacity: 1; transform: translateY(0); }
+@keyframes route-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 @keyframes grid-drift {
@@ -88,9 +88,18 @@
   --animate-progress-slide: progress-slide 1.4s ease-in-out infinite;
 }
 
+/* The one page width. The header, every page and the footer share it. */
+@utility app-width {
+  @apply mx-auto w-full max-w-[88rem] px-5 sm:px-8;
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
+  }
+  html {
+    /* Reserve the scrollbar's space on every page, so tall and short pages line up. */
+    scrollbar-gutter: stable;
   }
   body {
     @apply bg-background text-foreground antialiased;
@@ -125,22 +134,22 @@
     @apply absolute bottom-0 left-0 h-[3px] w-full;
     background: linear-gradient(90deg, var(--primary) 0 22%, var(--accent) 22% 29%, transparent 29%);
   }
-  .app-header__rail {
-    @apply mx-auto flex h-[4.75rem] max-w-[88rem] items-center gap-6 px-5 sm:px-8;
-  }
+  .app-header__rail { @apply app-width flex h-[4.75rem] items-center gap-6; }
   .forge-mark {
     @apply flex shrink-0 items-center gap-3 text-white;
   }
   .forge-mark__icon {
-    @apply grid size-10 place-items-center bg-primary text-white transition-transform duration-300;
+    @apply grid size-10 place-items-center border-2 border-primary bg-background transition-transform duration-300;
     box-shadow: 4px 4px 0 oklch(0.89 0.19 116);
   }
   .forge-mark:hover .forge-mark__icon { transform: rotate(-4deg) scale(1.04); }
-  .forge-mark__icon svg { @apply size-6; }
+  .forge-mark:hover .forge-mark__icon svg path:nth-child(2) { @apply animate-pulse; }
+  .forge-mark__icon svg { @apply size-7; }
   .forge-mark__word {
-    @apply block text-sm font-semibold leading-none tracking-[0.28em];
+    @apply block text-base font-black leading-none tracking-[0.32em];
   }
   .app-nav { @apply ml-auto flex h-full items-stretch; }
+  .app-nav__label { @apply sr-only sm:not-sr-only; }
   .app-nav__link {
     @apply relative flex items-center gap-2 px-3 text-[0.7rem] font-medium uppercase tracking-[0.12em] text-white/55 transition-colors sm:px-5;
   }
@@ -152,9 +161,9 @@
   .app-nav__link--active { @apply bg-white/[0.06] text-white; }
   .app-nav__link--active::after { @apply w-full; }
   .app-nav__index { @apply hidden font-mono text-[0.55rem] text-primary sm:block; }
-  .app-main { @apply mx-auto w-full max-w-[88rem] flex-1 px-5 py-9 sm:px-8 sm:py-12; }
+  .app-main { @apply app-width flex-1 py-9 sm:py-12; }
   .app-footer {
-    @apply mx-auto mt-auto flex w-full max-w-[88rem] items-center justify-between border-t border-foreground/20 px-5 py-5 font-mono text-[0.62rem] uppercase tracking-[0.13em] text-muted-foreground sm:px-8;
+    @apply app-width mt-auto flex items-center justify-between border-t border-foreground/20 py-5 font-mono text-[0.62rem] uppercase tracking-[0.13em] text-muted-foreground sm:px-8;
   }
   .app-footer p { @apply flex items-center; }
 
@@ -458,7 +467,105 @@
   .benchmark-notice--success { @apply border-emerald-700/40 bg-emerald-50 text-emerald-900; }
   .benchmark-notice--error { @apply border-red-700/40 bg-red-50 text-red-900; }
 
-  .new-env-page { @apply mx-auto max-w-6xl space-y-7; }
+  .tasks-page .benchmark-run__eyebrow a { @apply underline-offset-4 hover:underline; }
+  .tasks-domain--idle { @apply opacity-60; }
+  .tasks-hint { @apply mt-3 text-xs leading-5 text-muted-foreground; }
+  .tasks-hint a { @apply font-medium text-primary underline underline-offset-2; }
+  .tasks-hint--warn { @apply border-l-2 border-primary bg-primary/10 px-3 py-2 text-foreground; }
+  .tasks-hint--ok { @apply border-l-2 border-emerald-600 bg-emerald-50 px-3 py-2 text-emerald-900; }
+  .tasks-models { @apply grid grid-cols-2 gap-3; }
+  .tasks-models > div { @apply border border-foreground/20 bg-background/40 p-3; }
+  .tasks-models span { @apply block font-mono text-[0.5rem] uppercase tracking-[0.16em] text-muted-foreground; }
+  .tasks-models strong { @apply mt-2 block truncate font-mono text-xs font-medium; }
+  .tasks-models small { @apply mt-1 block font-mono text-[0.5rem] uppercase tracking-wider text-primary; }
+  .tasks-models .tasks-hint { @apply col-span-2 mt-0; }
+  .tasks-stages { @apply grid grid-cols-3 border-b border-background/15 sm:grid-cols-6; }
+  .tasks-stages li { @apply flex flex-col gap-1 border-r border-background/10 px-3 py-3 font-mono text-[0.55rem] uppercase tracking-wider text-background/35 last:border-r-0; }
+  .tasks-stages li span { @apply text-background/25; }
+  .tasks-stages .tasks-stage--active { @apply bg-primary/20 text-background; }
+  .tasks-stages .tasks-stage--active span { @apply animate-pulse text-primary; }
+  .tasks-stages .tasks-stage--done { @apply text-accent; }
+  .tasks-stages .tasks-stage--done span { @apply text-accent/60; }
+  .tasks-empty { @apply p-5 text-xs text-muted-foreground; }
+  .tasks-table-wrap { @apply overflow-x-auto; }
+  .tasks-table { @apply w-full min-w-[40rem] border-collapse text-left text-xs; }
+  .tasks-table th { @apply border-b border-foreground/25 px-5 py-3 font-mono text-[0.5rem] font-normal uppercase tracking-[0.16em] text-muted-foreground; }
+  .tasks-table td { @apply border-b border-foreground/10 px-5 py-3 align-top; }
+  .tasks-table tr:last-child td { @apply border-b-0; }
+  .tasks-table a { @apply font-semibold text-primary underline-offset-4 hover:underline; }
+  .tasks-table__version { @apply font-mono text-sm font-semibold; }
+  .tasks-table__mono { @apply font-mono text-[0.65rem]; }
+  .tasks-table__reason { @apply max-w-xl leading-5 text-muted-foreground; }
+  .tasks-status { @apply inline-block border px-2 py-0.5 font-mono text-[0.55rem] uppercase tracking-wider; }
+  .tasks-status--complete { @apply border-emerald-700/40 bg-emerald-50 text-emerald-800; }
+  .tasks-status--short { @apply border-amber-700/40 bg-amber-50 text-amber-800; }
+  .tasks-status--failed { @apply border-red-700/40 bg-red-50 text-red-800; }
+  .tasks-status--queued, .tasks-status--running { @apply border-foreground/30 bg-muted text-foreground; }
+  .tasks-actions { @apply relative z-10 mt-6 flex flex-wrap gap-3; }
+  .tasks-button { @apply inline-flex items-center bg-primary px-4 py-2.5 text-[0.65rem] font-semibold uppercase tracking-[0.14em] text-primary-foreground transition-all disabled:opacity-40; box-shadow: 3px 3px 0 var(--foreground); }
+  .tasks-button:hover:not(:disabled) { @apply -translate-y-0.5 bg-foreground text-background; }
+  .tasks-button--ghost { @apply border border-foreground/40 bg-transparent text-foreground; box-shadow: none; }
+  .tasks-taxonomy { @apply grid gap-px bg-foreground/15 sm:grid-cols-2 xl:grid-cols-3; }
+  .tasks-taxonomy__item { @apply bg-card p-5; }
+  .tasks-taxonomy__item strong { @apply text-sm font-semibold; }
+  .tasks-taxonomy__item p { @apply mt-2 text-xs leading-5 text-muted-foreground; }
+  .tasks-taxonomy__item > div { @apply mt-3 flex gap-1; }
+  .tasks-difficulty { @apply inline-grid h-5 min-w-7 place-items-center border px-1 font-mono text-[0.55rem] font-semibold; }
+  .tasks-difficulty--1 { @apply border-foreground/25 bg-background text-foreground; }
+  .tasks-difficulty--2 { @apply border-foreground/30 bg-secondary text-foreground; }
+  .tasks-difficulty--3 { @apply border-accent bg-accent/60 text-accent-foreground; }
+  .tasks-difficulty--4 { @apply border-primary bg-primary/80 text-primary-foreground; }
+  .tasks-difficulty--5 { @apply border-foreground bg-foreground text-background; }
+  .tasks-difficulty--off { @apply border-dashed border-foreground/15 text-foreground/25; }
+  .tasks-rubric { @apply grid border-t border-foreground/20 sm:grid-cols-3; }
+  .tasks-rubric > div { @apply border-b border-foreground/10 p-4 sm:border-b-0 sm:border-r last:border-r-0; }
+  .tasks-rubric dt { @apply font-mono text-[0.6rem] font-semibold text-primary; }
+  .tasks-rubric dd { @apply mt-1 text-xs leading-5 text-muted-foreground; }
+  .tasks-list { @apply divide-y divide-foreground/10; }
+  .tasks-card__head { @apply grid w-full grid-cols-[4.5rem_2.5rem_1fr_1rem] items-center gap-3 px-5 py-3.5 text-left transition-colors hover:bg-muted/40; }
+  .tasks-card--open .tasks-card__head { @apply bg-muted/50; }
+  .tasks-card__id { @apply font-mono text-[0.6rem] text-muted-foreground; }
+  .tasks-card__title strong { @apply block text-sm font-medium; }
+  .tasks-card__title small { @apply mt-0.5 block font-mono text-[0.55rem] uppercase tracking-wider text-muted-foreground; }
+  .tasks-card__body { @apply border-t border-foreground/10 bg-background/40 px-5 py-5; }
+  .tasks-card__objective { @apply max-w-3xl border-l-2 border-primary pl-4 text-sm leading-6; }
+  .tasks-card__grid { @apply mt-5 grid gap-6 lg:grid-cols-2; }
+  .tasks-card__grid h4 { @apply mb-2 mt-4 font-mono text-[0.55rem] uppercase tracking-[0.16em] text-muted-foreground first:mt-0; }
+  .tasks-golden { @apply max-h-96 list-decimal space-y-1.5 overflow-y-auto pl-6 font-mono text-[0.65rem] marker:text-muted-foreground; }
+  .tasks-golden code { @apply font-semibold text-foreground; }
+  .tasks-golden span { @apply ml-2 break-all text-muted-foreground; }
+  .tasks-golden em { @apply mt-1 block border-l-2 border-accent bg-accent/15 px-2 py-1 not-italic text-foreground; }
+  .tasks-checks { @apply space-y-1.5 text-xs leading-5; }
+  .tasks-checks code { @apply mr-1 bg-muted px-1 font-mono text-[0.6rem]; }
+  .tasks-muted { @apply text-xs text-muted-foreground; }
+  .tasks-card__fingerprint { @apply mt-4 font-mono text-[0.55rem]; }
+  .settings-model { @apply text-base leading-snug [overflow-wrap:anywhere] sm:text-lg; }
+  .settings-message { @apply mx-5; }
+  .settings-banner { @apply mt-0; }
+  .settings-form { @apply space-y-5 pb-24; }
+  .settings-grid { @apply grid md:grid-cols-2; }
+  .settings-grid .settings-field { @apply md:odd:border-r; }
+  .settings-field { @apply relative transition-colors; }
+  .settings-field--changed { @apply bg-primary/5; }
+  .settings-field--changed::before { @apply absolute inset-y-0 left-0 w-0.5 bg-primary content-['']; }
+  .settings-field .benchmark-field__label { @apply mb-1; }
+  .settings-key { @apply mb-3 block break-all font-mono text-[0.55rem] uppercase tracking-wider text-muted-foreground; }
+  .settings-tags { @apply flex gap-1.5; }
+  .settings-tag { @apply border border-foreground/25 px-1.5 py-0.5 font-mono text-[0.5rem] not-italic uppercase tracking-wider text-muted-foreground; }
+  .settings-tag--live { @apply border-emerald-700/40 bg-emerald-50 text-emerald-800; }
+  .settings-tag--pending { @apply border-amber-700/40 bg-amber-50 text-amber-800; }
+  .settings-reset { @apply mt-2 text-[0.65rem]; }
+  .settings-savebar { @apply sticky bottom-4 z-20 flex flex-wrap items-center justify-between gap-3 border border-foreground bg-foreground px-5 py-3 text-xs text-background; box-shadow: 4px 4px 0 var(--primary); }
+  .settings-savebar > span { @apply min-w-0 flex-1 truncate font-mono text-[0.65rem]; }
+  .settings-savebar > div { @apply flex gap-2; }
+  .settings-savebar__error { @apply text-amber-300; }
+  .settings-savebar .tasks-button--ghost { @apply border-background/40 text-background; }
+  .settings-model-row { @apply flex gap-2; }
+  .settings-model-row select { @apply min-w-0 flex-1; }
+  .settings-link { @apply font-medium text-primary underline underline-offset-2; }
+  .tasks-hint code { @apply bg-muted px-1 font-mono text-[0.65rem]; }
+
+  .new-env-page { @apply space-y-7; }
   .new-env-hero {
     @apply grid overflow-hidden border border-foreground/80 bg-foreground text-background lg:grid-cols-[1fr_18rem];
     box-shadow: 8px 8px 0 var(--accent), 0 24px 50px oklch(0.12 0.015 65 / 0.13);
@@ -526,7 +633,7 @@
   .new-env-modal__submit { @apply bg-primary px-5 py-3 text-xs font-semibold uppercase tracking-wider text-primary-foreground transition-all hover:-translate-y-0.5 disabled:opacity-40; box-shadow: 3px 3px 0 var(--accent); }
   .new-env-modal__cancel { @apply text-xs text-background/45 hover:text-background; }
 
-  .custom-builder { @apply mx-auto max-w-6xl space-y-6; }
+  .custom-builder { @apply space-y-6; }
   .custom-builder__hero {
     @apply grid overflow-hidden border border-foreground/80 bg-foreground text-background lg:grid-cols-[1fr_17rem];
     box-shadow: 8px 8px 0 var(--primary), 0 24px 50px oklch(0.12 0.015 65 / 0.14);
@@ -685,7 +792,7 @@
       0 2px 8px oklch(0.12 0.018 265 / 0.06);
   }
 
-  .forge-enter { animation: forge-enter 420ms cubic-bezier(.2,.8,.2,1) both; }
+  .route-fade { animation: route-fade 180ms ease-out both; }
   .signal-chip {
     @apply inline-flex items-center gap-2 border border-foreground/70 bg-accent px-2.5 py-1 font-mono text-[0.62rem] font-semibold uppercase tracking-[0.17em] text-accent-foreground;
     box-shadow: 2px 2px 0 var(--foreground);
@@ -814,14 +921,13 @@
 }
 
 @media (max-width: 640px) {
-  .app-header__rail { @apply h-[4.25rem] gap-2 px-4; }
+  .app-header__rail { @apply h-[4.25rem] gap-2; }
   .app-nav__link { @apply gap-1.5 px-2.5 text-[0.6rem]; }
   .forge-mark__word { @apply text-xs; }
   .forge-mark__icon { @apply size-9; }
   .environment-hero__title {
     text-shadow: 3px 3px 0 var(--foreground);
   }
-  .app-footer { @apply px-5; }
   .benchmark-run__readout > div { @apply min-h-20; }
   .benchmark-field-row .benchmark-field:first-child { @apply border-r-0; }
   .benchmark-notice { @apply items-start gap-5; }

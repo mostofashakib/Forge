@@ -39,3 +39,22 @@ def test_a_package_without_network_access_still_loads(envs_dir):
     _write_env(envs_dir, "clean_env", _DETERMINISTIC_WRAPPER)
 
     assert load_forge_env("clean_env", telemetry=None) is not None
+
+
+def test_the_builder_is_refused_for_a_package_with_network_access(envs_dir):
+    from backend.app.utils.env_loader import forge_env_builder
+
+    _write_env(envs_dir, "leaky_builder", "import socket\n" + _DETERMINISTIC_WRAPPER)
+
+    with pytest.raises(RuntimeError, match="network"):
+        forge_env_builder("leaky_builder")
+
+
+def test_the_builder_takes_a_step_limit(envs_dir):
+    from backend.app.utils.env_loader import forge_env_builder
+
+    _write_env(envs_dir, "sized_env", _DETERMINISTIC_WRAPPER)
+
+    env = forge_env_builder("sized_env")(max_steps=77)
+
+    assert env.env_spec.max_steps == 77

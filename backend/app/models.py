@@ -191,3 +191,47 @@ class BenchmarkRun(Base):
     kind: Mapped[str] = mapped_column(String, default="benchmark")
     engine: Mapped[str] = mapped_column(String, default="forge")
     config_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class TaskBatch(Base):
+    """One versioned batch of synthetic tasks for an environment.
+
+    Never changes after it is saved. A failed batch keeps its error and gets
+    no version. Deleting is a soft delete, so a version number is never reused.
+    """
+
+    __tablename__ = "task_batches"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    env_name: Mapped[str] = mapped_column(String, index=True)
+    version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(String, default="queued")
+    requested: Mapped[int] = mapped_column(Integer)
+    delivered: Mapped[int] = mapped_column(Integer, default=0)
+    pass_k: Mapped[int] = mapped_column(Integer)
+    writer_model: Mapped[str] = mapped_column(String)
+    validator_model: Mapped[str] = mapped_column(String)
+    taxonomy_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc)
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class GeneratedTask(Base):
+    __tablename__ = "generated_tasks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    batch_id: Mapped[str] = mapped_column(String, ForeignKey("task_batches.id"), index=True)
+    task_id: Mapped[str] = mapped_column(String)
+    task_json: Mapped[str] = mapped_column(Text)
+
+
+class TaskRejectionRecord(Base):
+    __tablename__ = "task_rejections"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    batch_id: Mapped[str] = mapped_column(String, ForeignKey("task_batches.id"), index=True)
+    rejection_json: Mapped[str] = mapped_column(Text)

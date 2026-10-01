@@ -14,7 +14,7 @@ celery = Celery(
     "forge",
     broker=os.environ.get("CELERY_BROKER_URL", default_redis_url),
     backend=os.environ.get("CELERY_RESULT_BACKEND", default_redis_url),
-    include=["backend.app.worker.tasks"],
+    include=["backend.app.worker.tasks", "backend.app.worker.task_factory"],
 )
 
 celery.conf.update(

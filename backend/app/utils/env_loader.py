@@ -9,6 +9,16 @@ from forge.settings import determinism_enabled, generated_envs_root
 
 def load_forge_env(env_name: str, telemetry):
     """Dynamically import a generated ForgeEnv, verify determinism, inject telemetry."""
+    env = forge_env_builder(env_name)()
+    # Verify before telemetry injection so check steps are never recorded.
+    if determinism_enabled():
+        run_determinism_check(env)
+    env._telemetry = telemetry
+    return env
+
+
+def forge_env_builder(env_name: str):
+    """Import a generated package's `build_<name>_env(max_steps=...)` function."""
     envs_root = generated_envs_root()
     parent = str(envs_root.parent.resolve())
     if parent not in sys.path:
@@ -21,10 +31,4 @@ def load_forge_env(env_name: str, telemetry):
         details = ", ".join(f"{v.filename}: {v.import_line}" for v in violations)
         raise RuntimeError(f"Environment {env_name!r} violates network policy: {details}")
     module = importlib.import_module(f"generated_envs.{env_name}.gym_wrapper")
-    build_fn = getattr(module, f"build_{env_name}_env")
-    env = build_fn()
-    # Verify before telemetry injection so check steps are never recorded.
-    if determinism_enabled():
-        run_determinism_check(env)
-    env._telemetry = telemetry
-    return env
+    return getattr(module, f"build_{env_name}_env")

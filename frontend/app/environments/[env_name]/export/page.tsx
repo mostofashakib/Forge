@@ -288,7 +288,7 @@ export default function ExportPage() {
   const selectedCount = selected.size;
 
   return (
-    <div className="space-y-7 max-w-2xl">
+    <div className="space-y-7">
       {/* Header */}
       <div className="flex items-start justify-between gap-4">
         <div>

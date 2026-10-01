@@ -101,7 +101,7 @@ export default function RootLayout({
         <div className="min-h-screen flex flex-col">
           <AppHeader />
 
-          <main className="app-main forge-enter">{children}</main>
+          <main className="app-main">{children}</main>
 
           <footer className="app-footer">
             <p>

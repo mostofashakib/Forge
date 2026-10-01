@@ -26,19 +26,17 @@ from forge.settings import redis_url
 #
 # Every image is pinned by digest. A tag moves when upstream republishes it,
 # so the same environment would otherwise build on different bytes each week.
-FORGE_PYTHON_BASE = os.environ.get(
-    "FORGE_PYTHON_BASE_IMAGE",
-    "python:3.12-slim@sha256:f77ac9e44ae96ef2c90b8053ea08c31f8be030f824196b0ae4db6d462c84e51f",
+DEFAULT_PYTHON_BASE_IMAGE = (
+    "python:3.12-slim@sha256:f77ac9e44ae96ef2c90b8053ea08c31f8be030f824196b0ae4db6d462c84e51f"
 )
-FORGE_CLI_IMAGE = os.environ.get(
-    "FORGE_CLI_IMAGE",
-    "ubuntu:22.04@sha256:b8b6ee6aa931ecd9d0d952abc34dc0e5f7c6a30c6bb71b079fe399fde0329c02",
-)
-FORGE_BROWSER_IMAGE = os.environ.get(
-    "FORGE_BROWSER_IMAGE",
+DEFAULT_CLI_IMAGE = "ubuntu:22.04@sha256:b8b6ee6aa931ecd9d0d952abc34dc0e5f7c6a30c6bb71b079fe399fde0329c02"
+DEFAULT_BROWSER_IMAGE = (
     "lscr.io/linuxserver/chromium:latest"
-    "@sha256:cf6200ccdcb224feaf5d3bde4ce45b3783c926a7496c98059cae1e0db78e5b2f",
+    "@sha256:cf6200ccdcb224feaf5d3bde4ce45b3783c926a7496c98059cae1e0db78e5b2f"
 )
+FORGE_PYTHON_BASE = os.environ.get("FORGE_PYTHON_BASE_IMAGE", DEFAULT_PYTHON_BASE_IMAGE)
+FORGE_CLI_IMAGE = os.environ.get("FORGE_CLI_IMAGE", DEFAULT_CLI_IMAGE)
+FORGE_BROWSER_IMAGE = os.environ.get("FORGE_BROWSER_IMAGE", DEFAULT_BROWSER_IMAGE)
 
 # App and browser containers each sit on their own `internal` network, which
 # has no route out, so nothing inside can reach the internet or another
@@ -139,11 +137,16 @@ _BROWSER_CDP_RELAY_PORT = 9223
 
 # Runtime limits are intentionally conservative defaults for generated code.
 # They can be overridden for larger local experiments without changing code.
-_GENERAL_MEMORY_LIMIT = os.environ.get("FORGE_CONTAINER_MEMORY", "1g")
-_BROWSER_MEMORY_LIMIT = os.environ.get("FORGE_BROWSER_MEMORY", "2g")
-_CLI_MEMORY_LIMIT = os.environ.get("FORGE_CLI_MEMORY", "1g")
-_CPU_LIMIT = int(os.environ.get("FORGE_CONTAINER_NANO_CPUS", "1000000000"))
-_PID_LIMIT = int(os.environ.get("FORGE_CONTAINER_PIDS", "256"))
+DEFAULT_CONTAINER_MEMORY = "1g"
+DEFAULT_BROWSER_MEMORY = "2g"
+DEFAULT_CLI_MEMORY = "1g"
+DEFAULT_CONTAINER_NANO_CPUS = 1_000_000_000
+DEFAULT_CONTAINER_PIDS = 256
+_GENERAL_MEMORY_LIMIT = os.environ.get("FORGE_CONTAINER_MEMORY", DEFAULT_CONTAINER_MEMORY)
+_BROWSER_MEMORY_LIMIT = os.environ.get("FORGE_BROWSER_MEMORY", DEFAULT_BROWSER_MEMORY)
+_CLI_MEMORY_LIMIT = os.environ.get("FORGE_CLI_MEMORY", DEFAULT_CLI_MEMORY)
+_CPU_LIMIT = int(os.environ.get("FORGE_CONTAINER_NANO_CPUS", str(DEFAULT_CONTAINER_NANO_CPUS)))
+_PID_LIMIT = int(os.environ.get("FORGE_CONTAINER_PIDS", str(DEFAULT_CONTAINER_PIDS)))
 
 
 # Python salts str hashes per process, so set iteration order changes on every

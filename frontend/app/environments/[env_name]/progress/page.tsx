@@ -245,7 +245,7 @@ export default function ProgressPage({
     : `${fmtTime(remaining)} remaining`;
 
   return (
-    <div className="max-w-2xl mx-auto space-y-6 py-8">
+    <div className="space-y-6 py-8">
       <div>
         <Link href="/environments" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
           ← All environments

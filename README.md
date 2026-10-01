@@ -498,6 +498,36 @@ Generate training data without running live agents:
 - **Edge case injection** — inject `boundary_conditions`, `permission_errors`, `missing_deps`, `conflicting_state`, or `recovery` scenarios into generated trajectories
 - **Replay manifest** — saved to `generated_envs/<env>/synthetic_replay.json`; active epochs replace live LLM inference in agent runs
 
+### Task Factory
+
+Create versioned batches of realistic, executable tasks for any environment, apart from environment building. Open **Generator** (`/generator`, the synthetic data generator), pick an environment, choose how many tasks you want (1 to 20,000) and how many times each golden solution must pass (k, 1 to 10), and start a batch. Each batch runs four steps in a Celery job and streams progress to the page.
+
+1. **Taxonomy.** The writer model maps 4 to 12 categories of real work in this environment (up to 40 for large batches), across at least 3 difficulty levels. Code checks the spread (level coverage, duplicate names, overlapping descriptions, tools the environment lacks) and asks for one retry before failing the batch. Every batch builds a fresh taxonomy.
+2. **Writer.** Code turns the taxonomy into an exact slot plan, so 30 requested tasks means 30 slots spread evenly across levels and categories. Each round runs 10 slots at a time: write, check, run, review. Results land steadily, and the environment lock is held for one chunk's golden runs at a time. The writer fills five slots per call and sees the last 50 titles from the same categories, and a draft repeating an accepted title is rejected. Each task carries an objective, seed data, a golden solution, machine-checkable checks, and for difficulty 4 and 5, at least 3 reflection points where the agent has to stop and rethink.
+3. **Validation**, in three layers:
+   - A static check in code: the task fits its schema, names only real tools and state, and its golden solution fits the difficulty (1: 1 to 5 steps, 2: 5 to 12, 3: 12 to 30, 4 and 5: 30 or more).
+   - Golden pass^k: the golden solution runs k times, each from a fresh seeded start. Before it runs, at least one outcome check must fail, so no task starts solved. After it runs, every check must pass, and every run must end in the same final state.
+   - LLM review by a model from a different family than the writer, judging each task realistic, fair, and sensible. The job refuses to start, before any LLM call, if the two models share a family or a provider's Python package is missing (`openai` and `google-genai` are not installed by default).
+
+   A draft whose only problem is its golden solution's length goes back to the writer in the same round, with the draft and a target length, to widen or narrow its scope without padding. Other rejected slots go back to the writer with the reason, for up to 3 rounds. A batch that still falls short is saved as `short` with every rejection reason, never padded.
+4. **Registry.** One transaction saves the batch as the next version for its environment, with its creation date, the models that ran it, the accepted tasks, every rejection, and its own copy of the taxonomy. A saved batch never changes. Deleting one keeps its version number retired.
+
+What a task's seed, golden solution, and checks look like depends on the environment:
+
+| Environment | Seed | Golden steps | Checks |
+|---|---|---|---|
+| In-process, custom apps, premade apps | Rows merged by id into the reset state | Actions with arguments | Row exists, row absent, row count, value at a path, actions called (optionally in order), actions never called |
+| CLI | Setup shell commands | Shell commands that exit 0 | Shell assertions, run in the networkless grading sandbox |
+| Browser | 1 to 3 static HTML pages and a start page | goto, click, fill, select, press, check | DOM text, value, or attribute, element exists or absent, page path |
+
+Golden runs reuse the episode machinery: a fresh in-process environment, an app reset in place, a CLI fork from a snapshot taken for the round, or a fresh browser context. Browser tasks need no server. Playwright answers requests to `http://task.local` from the task's stored pages and aborts everything else. Seeds merge into, and checks read, an app's full restorable state. Premade apps expose it at `GET /forge/dump`, because their `/forge/state` is a view that hides archived and sent mail. A round holds the environment's lock, so agent runs on that environment wait until it finishes. An app's state is saved before each round and restored after it.
+
+A freshly compiled in-process environment has stub transitions that leave the state unchanged until `custom/transitions.py` overrides them (see [Environment Customization](#environment-customization)). The factory rejects every task for such an environment, because no golden solution changes anything.
+
+Each version page (`/generator/<batch>`) shows the taxonomy, every task with its golden solution, checks, and the validator's reasons, and every rejection with its stage. **Export JSON** downloads the batch as `<env>-v<version>-<date>.json`. Agent runs and the benchmark do not draw from batches yet.
+
+**Settings** (`/settings`) edits the platform settings in four groups: models (generator, judge, validation quorum, task validator, Ollama server), runtime, containers, and generation budgets. Any model field whose provider is Ollama lists every model the local server has pulled, with its family and size, disables the generator's family for the judge and validator, and labels Ollama cloud models. Saving checks every value and the model families together, refuses a judge, quorum member or validator from the generator's family, and rewrites only the changed lines in `backend/.env` through a temporary file swapped into place. The task validator applies to the next batch. Every other setting is read when the API and workers start, so the page marks it "restart pending" until you restart them. API keys, the database URL, file locations and container-internal values are not on the page. Keys stay in `backend/.env`.
+
 ### Dataset Export
 
 Seven export formats from the per-environment **Export Dataset** page:
@@ -828,6 +858,14 @@ forge/
   personas/            # Simulated humans: population, scheduler, guardrails, drivers, engine
   schema/              # StateSchemaManifest and related schemas
   validation/          # Verdict quorum, jury, and statistical trajectory detectors
+  taskfactory/         # Versioned synthetic task batches: taxonomy, writer, validation, top-up
+    schemas.py         # Task, check, seed, golden step, verdict, and difficulty rules
+    taxonomy.py        # TaxonomyBuilder + spread check; slots.py plans exact slots
+    writer.py          # TaskWriter; review.py: cross-family TaskReviewer
+    static_check.py    # Rejects drafts that cannot run; state_checks.py seeds and checks state
+    pass_k.py          # Golden solution must pass k fresh runs with one fingerprint
+    pipeline.py        # Rounds, top-up, rejections; registry is the caller's
+    runners/           # in_process, container_app, cli, browser task runners
   settings.py          # Process-wide settings: determinism mode, seeds, paths, URLs
   reward_presets.py    # Canonical reward-ablation presets shared by every reward path
   grading_provenance.py  # Generator/grader independence: model families, enforcement, record
@@ -839,11 +877,15 @@ backend/
   app/
     api/               # FastAPI routers: sandbox, envs, personas, episodes, agent_runs,
     │                  #   synthetic, evaluate, exports, audit, rollouts, detect, compile,
-    │                  #   benchmark
+    │                  #   benchmark, task_factory, settings
     services/
+      task_registry.py # Versioned task batches; task_factory_targets.py opens runners
+      env_file.py      # Rewrites named keys in backend/.env for the Settings page
+      settings_registry.py # Every setting the Settings page edits, with its checks
       export_writers/  # sft_pairs, preference_pairs, grpo_rollouts, failure_dataset, ...
     worker/            # Celery tasks: build_sandbox, run_episode, run_rollout,
     │                  #   run_benchmark_task, cleanup_expired
+    │                  #   task_factory.py: create_task_batch_task
     models.py          # SQLAlchemy models: SandboxEnvironment, Episode, AgentRun,
                        #   AuditLog, BenchmarkRun, ...
 frontend/
@@ -853,6 +895,9 @@ frontend/
     violations/        # Global policy audit log (filterable by env / episode / severity)
     compiler-review/
       [job_id]/        # Inspect and edit LLM compiler output before build
+    generator/         # Synthetic data generator: new batch, live progress, versions
+      [batchId]/       # One version: taxonomy, tasks, rejections, export
+    settings/          # Platform settings: models, runtime, containers, budgets
     benchmark/
       run/             # Launch benchmark: domain/depth/seed config + live log + progress bar
       report/          # Quality metrics table with colour coding + CSV download
@@ -999,6 +1044,8 @@ All LLM calls go through a single `get_client()` factory — swap providers or m
 | `VLLM_BASE_URL` | `http://localhost:8000/v1` | OpenAI-compatible endpoint for the `vllm:<model>` agent adapter |
 | `FORGE_JUDGE_PROVIDER` | falls back to `FORGE_LLM_PROVIDER` | Provider used for LLM **grading** only |
 | `FORGE_JUDGE_MODEL` | falls back to `FORGE_LLM_MODEL` | Model used for LLM **grading** only. Set this to a model outside the generating family to make LLM-graded runs independent — see [Verification Independence](#verification-independence) |
+| `FORGE_TASK_VALIDATOR_PROVIDER` | — | Provider for the task factory's validator (`anthropic`, `openai`, `gemini`, `ollama`). Required to create tasks. Set it here or on the Settings page |
+| `FORGE_TASK_VALIDATOR_MODEL` | — | Task factory validator model. Must come from a different family than `FORGE_LLM_MODEL_CAPABLE`, the task writer |
 
 **Run fully locally with Ollama:**
 ```bash
