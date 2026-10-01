@@ -1,22 +1,27 @@
 # Forge
 
-**Sandbox environments for training AI agents on real-world apps.**
+**AI training infrastructure for agents that work in real-world apps.**
 
-Forge lets you spin up isolated, observable app environments — Gmail-like email clients, Slack-like messaging, custom LLM-generated apps, raw Linux shells, or live browser sessions — and run RL agents inside them. Every action is logged, every state transition is verifiable, and every episode is exportable as a training dataset.
+Forge covers the whole training loop in one platform. It generates environments from a plain-English description, synthesizes validated task datasets, runs agents in isolated sandboxes, grades every episode, exports training data, trains policies, and benchmarks them on environments they never saw.
+
+Environments range from Gmail and Slack replicas to custom LLM-generated apps, Linux shells, and live browser sessions. Every action is logged, every state transition is verifiable, and every result traces back to the data and grader that produced it.
 
 ---
 
 ## What Forge Does
 
-1. **Creates sandboxed app environments** — Docker containers running real apps (or realistic replicas) with full state access
-2. **Runs agents inside them** — Random, scripted, or LLM-powered agents interact with the app via a clean API
-3. **Records every step and grades each episode once** — Policy enforcement and state changes are written durably as they happen; one post-rollout evaluation produces the authoritative verifier verdict and reward
-4. **Exports training data** — SFT pairs, DPO preference pairs, GRPO rollouts, failure datasets, and more
-5. **Trains a policy on its own experience** — `forge train` turns graded rollouts into a GRPO or DPO update and writes a checkpoint the runtime agents can load back
-6. **Measures held-out generalization** — Trains on an explicit environment split, evaluates only unseen environments, and records reproducible per-seed outcomes
+| Stage | What you get | Where |
+|---|---|---|
+| **Environment generation** | Docker sandboxes for premade apps, LLM-generated apps, shells, and browsers, each with full state access, snapshots, and a Gymnasium-compatible API | [Environment Types](#environment-types), [Custom Generation Pipeline](#custom-generation-pipeline) |
+| **Synthetic data** | Versioned task batches with golden solutions that must pass k fresh runs, reviewed by a model from a different family; exported as RL tasks, SFT data, or preference pairs | [Task Factory](#task-factory), [Synthetic Data Engine](#synthetic-data-engine) |
+| **Agent runs** | Random, scripted, or LLM agents acting through the app's own API, with every step written durably as it happens | [Agent Runs & Data Collection](#agent-runs--data-collection) |
+| **Grading** | One authoritative verdict per episode from layered verifiers, with reward-hacking audits and generator/grader independence checks | [Reward Engine](#reward-engine), [Verifiers](#verifiers) |
+| **Dataset export** | SFT pairs, preference pairs, GRPO rollouts, failure datasets, and raw trajectories in one shared rollout shape | [Dataset Export](#dataset-export) |
+| **Training** | `forge train` runs GRPO, DPO, SFT, or PPO on graded data and writes a checkpoint the runtime agents load back | [Policy Training](#policy-training) |
+| **Benchmarking** | Environment quality metrics, held-out evaluation, and a transfer benchmark that reports pass@1 and pass@3 on environments the policy never trained on | [Benchmark](#benchmark) |
 
-The loop closes: generate environments → run agents → grade → export → train → evaluate
-on environments the policy never trained on → reload the checkpoint and collect again.
+The loop closes: generate environments, synthesize tasks, run agents, grade, export,
+train, evaluate on held-out environments, then reload the checkpoint and collect again.
 
 ## Example RL Tasks
 
@@ -94,6 +99,8 @@ Premade environments ship with realistic seed data that resembles real products.
 - **12 DMs** with realistic back-and-forth
 - Per-channel auto-responders simulate realistic team activity when the agent posts
 - Post, reply, react, DM, pin — all functional
+
+Both apps serve the same Forge protocol (`/forge/health`, `/forge/state`, `/forge/dump`, `/forge/reset`, `/forge/snapshot`, `/forge/restore/{slot}`, `/forge/restore-state`) from one shared module, `docker/premade/_shared/forge_protocol.py`, along with the virtual clock and deterministic ids. Each build copies the app's folder and that module into a temporary build context, so building never modifies the tracked files.
 
 ---
 
@@ -203,7 +210,7 @@ Agent execution and data collection are separate layers. Runtime agents choose a
 - **Trajectory recording** — every step's state, action, and reward persisted to JSONL and DB
 - **Post-episode objective scoring** — container and browser runners call `ObjectiveScorer` once on the final state; CLI uses its final tiered grader. Cheap state-hash and loop monitors may stop stuck runs without exposing grader feedback to the agent
 - **Cross-run episode selection** — pick episodes from multiple runs, export as a single merged dataset
-- **Parallel rollouts** — launch batched episode rollouts across any compiled environment from the global Rollouts page; `ParallelRolloutRunner` runs the same task across many isolated env copies concurrently (one fresh instance per rollout, millisecond start/teardown) and classifies each outcome as success, failure, partial success, or edge case so a single batch yields diverse training scenarios
+- **Parallel rollouts** — launch batched episode rollouts across any compiled environment from the global Rollouts page; `ParallelRolloutRunner` runs the same task across many isolated env copies concurrently (one fresh instance per rollout, millisecond start/teardown) and classifies each outcome as success, failure, partial success, or edge case so a single batch yields diverse training scenarios. A rollout always runs the task it names: if the environment does not declare that task, each episode fails with failure type `configuration` and lists the declared tasks, instead of running a different one
 - **Per-environment dashboard** — pass rate, average reward, step efficiency, termination-reason breakdown
 
 ### Observability & Replay
@@ -524,7 +531,7 @@ Golden runs reuse the episode machinery: a fresh in-process environment, an app 
 
 A freshly compiled in-process environment has stub transitions that leave the state unchanged until `custom/transitions.py` overrides them (see [Environment Customization](#environment-customization)). The factory rejects every task for such an environment, because no golden solution changes anything.
 
-Each version page (`/generator/<batch>`) shows the taxonomy, every task with its golden solution, checks, and the validator's reasons, and every rejection with its stage. **Export JSON** downloads the batch as `<env>-v<version>-<date>.json`. Agent runs and the benchmark do not draw from batches yet.
+Each version page (`/generator/<batch>`) shows the taxonomy, every task with its golden solution, checks, and the validator's reasons, and every rejection with its stage. **Export JSON** downloads the batch as `<env>-v<version>-<date>.json`. An SFT batch adds each task's objective and golden commands as a prompt and completion. A preference-pair batch pairs each accepted task with the drafts rejected for the same slot, with the rejection reason attached. A task accepted on its first try has nothing to compare against, so it yields no pair rather than an invented one. Agent runs and the benchmark do not draw from batches yet.
 
 **Settings** (`/settings`) edits the platform settings in four groups: models (generator, judge, validation quorum, task validator, Ollama server), runtime, containers, and generation budgets. Any model field whose provider is Ollama lists every model the local server has pulled, with its family and size, disables the generator's family for the judge and validator, and labels Ollama cloud models. Saving checks every value and the model families together, refuses a judge, quorum member or validator from the generator's family, and rewrites only the changed lines in `backend/.env` through a temporary file swapped into place. The task validator applies to the next batch. Every other setting is read when the API and workers start, so the page marks it "restart pending" until you restart them. API keys, the database URL, file locations and container-internal values are not on the page. Keys stay in `backend/.env`.
 
@@ -555,6 +562,8 @@ Closing the RL loop, `forge train` turns Forge's *own* graded experience into a 
 
 - **Clipped batch-GRPO update** over `grpo_rollouts.parquet` — rewards become group-relative advantages `(r − mean) / (std + eps)`, behavior-policy token log-probabilities are frozen before the update, and training applies the clipped current/old policy ratio with a sampled KL penalty
 - **TRL DPO** over `preference_pairs.jsonl` — chosen/rejected labels are kept only where the chosen trajectory was graded strictly higher and trained with `DPOTrainer`
+- **SFT** over demonstrations: `sft_pairs.jsonl`, a Task Factory batch export, or the passing rows of `grpo_rollouts.parquet`. Loss covers only the completion tokens.
+- **PPO** reuses the clipped batch update over the same rollouts, with a larger KL penalty
 
 The reward→signal mapping is a deterministic function of the grades already assigned, and a graded set with **no relative signal** (all rollouts scored the same, or every preference pair a tie) raises `NoTrainingSignalError` and writes no checkpoint — the training backend is never invoked. Install the optional GPU stack with `uv sync --extra training`. A finished run writes a `policy_checkpoint.json` manifest that runtime agents load via `forge.runtime.policy_loader.load_policy_agent`, so the same policy can collect → grade → export → train → reload.
 
@@ -570,7 +579,7 @@ forge train \
   --experiment experiments/internal_heldout.yaml \
   --seed 0 \
   --output policy_checkpoint \
-  --objective grpo                  # grpo | dpo
+  --objective grpo                  # grpo | dpo | sft | ppo
 ```
 
 Experiment files declare `{train_envs, heldout_envs, reward_preset, base_model, seeds}`
@@ -637,6 +646,34 @@ forge benchmark eval \
 The evaluator requires each held-out environment to be running and to have compiled
 tasks. It rejects checkpoints missing experiment metadata, checkpoints produced from
 a different config, undeclared seeds, and any train/held-out leakage.
+
+### Transfer Benchmark
+
+`forge benchmark transfer` (and **Benchmark → Transfer**) measures whether training on
+one set of environments helps on others. It reads the same experiment YAML, then:
+
+1. Checks the request before any training: the base model must match the experiment
+   (leave it blank to use the experiment's), the seeds must be declared, and each task
+   needs at least 3 samples so pass@3 is a real estimate.
+2. Fine-tunes once on demonstrations from `train_envs` only. Rows from held-out
+   environments are dropped.
+3. Evaluates the checkpoint on `heldout_envs` once per seed, writing one result record
+   per seed.
+4. Pools each task's decided samples across seeds and reports task completion rate,
+   pass@1, and pass@3. Abstentions are left out, and passes the reward-hacking audit
+   flags count as failures.
+
+```bash
+forge benchmark transfer \
+  --data ./sft_data \
+  --experiment experiments/internal_heldout.yaml \
+  --seeds 2 \
+  --max-steps 500
+```
+
+A run with no training data or a misconfigured split fails with a clear error and
+reports no numbers. The API confines the experiment, data, and output paths to the
+project directory.
 
 ### Policy Evaluation Metrics
 
@@ -705,8 +742,8 @@ The responsive Next.js control surface uses an industrial foundry visual system 
 | **Generator** | Synthesize task taxonomies and datasets with automated golden pass^k validation and dated batch versioning |
 | **Training** | Configure and run Online/Offline policy training (GRPO, DPO, PPO, SFT) with live terminal execution streaming |
 | **Run** | Select which active environments to benchmark, max difficulty (1–5), seeds per task, inference target, and output dir; launch with live log streaming and progress |
-| **Report** | Table of quality metrics per environment for the most recent completed run; CSV download |
-| **Transfer** | Configure cross-distribution transfer benchmark runs with hardware inference routing and live execution streaming |
+| **Report** | Table of quality metrics per environment for the most recent completed run; CSV download. pass@k and agreement charts appear only for runs that recorded per-task pass/fail samples |
+| **Transfer** | Fine-tune on the experiment's training environments, then measure task completion, pass@1, and pass@3 on its held-out environments, with live log streaming |
 | **Eval** | Evaluate a policy checkpoint on the declarative internal held-out split |
 
 ### CLI
@@ -722,6 +759,10 @@ forge benchmark report --output benchmark_results
 
 forge benchmark eval \
   --checkpoint ./policy_checkpoint \
+  --experiment experiments/internal_heldout.yaml
+
+forge benchmark transfer \
+  --data ./sft_data \
   --experiment experiments/internal_heldout.yaml
 ```
 
@@ -816,6 +857,7 @@ forge/
     agent_logger.py    # Unified per-run trace (LLM calls + actions + state changes)
     loss_analysis.py   # Per-run failure-mode taxonomy + cross-run aggregation
     reward_hacking.py  # RewardHackingAuditor
+    reliability/       # Retries, snapshots, replay, quarantine, env versioning, failure types
     clustering.py      # FailureClusterer
   extraction/          # LLM pipeline, PII redactor, schemas
   compiler/
@@ -834,7 +876,9 @@ forge/
     error_handling.py  # GenerationErrorHandler: normalized specialist failures
     episode_runner.py  # Container episode loop; cli_runner.py / browser_runner.py
     telemetry/         # Telemetry client and collectors
-    container.py       # Docker build, run, start/stop, normalisation, mirror fallback
+    container.py       # ContainerRuntime lifecycle; docker_cli.py, docker_images.py,
+    │                  #   dockerfile.py, container_specs.py, sandbox_network.py,
+    │                  #   episode_snapshots.py hold the injected collaborators
     tiered_reward.py   # TieredRewardEngine with partial credit and multi-method scoring
     ml_reward.py       # SentenceEmbeddingScorer, NGramScorer (ROUGE-L / BLEU)
   benchmark/
@@ -847,12 +891,12 @@ forge/
     _eval.py           # checkpoint-backed internal held-out evaluation + result records
   experiments.py       # declarative experiment and per-run result contracts
   training/            # Close the RL loop: train a policy from graded rollouts
-    dataset.py         # Load grpo_rollouts.parquet / preference_pairs.jsonl exports
+    dataset.py         # Load rollouts, preference pairs, and SFT demonstrations
     reward_mapping.py  # Reward → GRPO advantage / DPO label (deterministic, no-signal guard)
     trainer.py         # PolicyTrainer: prepare signal → backend → PolicyCheckpoint
     checkpoint.py      # Serializable PolicyCheckpoint manifest
     loop.py            # Collect → train → reload → recollect policy iteration
-    _backends.py       # Offline GRPO and TRL DPO gradient updates (GPU node)
+    _backends.py       # GRPO, PPO, SFT, and TRL DPO gradient updates (GPU node)
   customization/       # Per-env overrides: decorator hooks, EnvConfig, loader
   personas/            # Simulated humans: population, scheduler, guardrails, drivers, engine
   schema/              # StateSchemaManifest and related schemas
@@ -871,7 +915,9 @@ forge/
   logging_utils.py     # Credential-safe redaction for logs
   paths.py             # Confined-path helpers for generated-env file access
   cli/
-    main.py            # forge CLI: compile, validate, run, replay, diagnose, benchmark *
+    main.py            # forge CLI: compile, validate, run, replay, diagnose, train
+    benchmark.py       # forge benchmark run / transfer / report / eval
+    diagnosis.py       # forge diagnose; replay_render.py renders forge replay
 backend/
   app/
     api/               # FastAPI routers: sandbox, envs, personas, episodes, agent_runs,
@@ -882,9 +928,9 @@ backend/
       env_file.py      # Rewrites named keys in backend/.env for the Settings page
       settings_registry.py # Every setting the Settings page edits, with its checks
       export_writers/  # sft_pairs, preference_pairs, grpo_rollouts, failure_dataset, ...
-    worker/            # Celery tasks: build_sandbox, run_episode, run_rollout,
-    │                  #   run_benchmark_task, cleanup_expired
-    │                  #   task_factory.py: create_task_batch_task
+    worker/            # Celery tasks, one module per job; tasks.py re-exports them
+    │                  #   sandbox_build_tasks.py, rollout_tasks.py, agent_run_tasks.py,
+    │                  #   benchmark_tasks.py, task_factory.py
     models.py          # SQLAlchemy models: SandboxEnvironment, Episode, AgentRun,
                        #   AuditLog, BenchmarkRun, ...
 frontend/
@@ -925,6 +971,7 @@ examples/
   gmail_env/           # Reference in-process environment built on the contracts
 docker/
   premade/
+    _shared/           # forge_protocol.py: /forge/* routes, virtual clock, ids, snapshots
     gmail/             # Gmail-like environment (seeded with 42 emails, 19 contacts)
     slack/             # Slack-like environment (seeded with 7 channels, 88 thread replies)
 tests/
@@ -1065,11 +1112,11 @@ forge replay <episode_id> [--json]   # Replay a recorded episode (ep_* gym or ce
 forge diagnose <env_name> [--json]   # Analyse episode quality across all runs
 
 forge train \
-  --data <export_dir> \              # dir with grpo_rollouts.parquet / preference_pairs.jsonl
+  --data <export_dir> \              # graded exports: rollouts, preference pairs, or SFT data
   --experiment experiments/internal_heldout.yaml \
   --seed 0 \
   --output policy_checkpoint \
-  --objective grpo                   # grpo | dpo — train a policy from graded rollouts
+  --objective grpo                   # grpo | dpo | sft | ppo
 
 forge benchmark run \
   --domains my_env,other_env \       # comma-separated generated environment names
