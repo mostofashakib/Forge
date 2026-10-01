@@ -305,18 +305,39 @@ def _benchmark_run(run_id: str):
         return run.status, run.error, run.report_json
 
 
-def test_production_transfer_fails_instead_of_inventing_metrics(benchmark_db):
+def test_production_transfer_without_training_data_fails_without_metrics(benchmark_db, tmp_path):
+    experiment = tmp_path / "experiment.yaml"
+    experiment.write_text(
+        "train_envs: [train_a]\nheldout_envs: [held_a]\n"
+        "reward_preset: full_layered_partial\nbase_model: m\nseeds: [0, 1]\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "data").mkdir()
     redis_client = MagicMock()
     with patch("redis.from_url", return_value=redis_client):
-        tasks.run_transfer_task("bm_1", {"base_model": "m", "seeds": 3})
+        tasks.run_transfer_task("bm_1", {
+            "base_model": "m", "seeds": 2, "eval_suite": str(experiment),
+            "data_dir": str(tmp_path / "data"), "output_dir": str(tmp_path / "out"),
+        })
 
     status, error, report = _benchmark_run("bm_1")
     assert status == "failed"
-    assert "deferred" in error
+    assert "no sft training signal" in error
     assert report is None
     published = [json.loads(c.args[1]) for c in redis_client.publish.call_args_list]
     assert not any("result" in m for m in published)
-    assert any("deferred" in m.get("error", "") for m in published)
+    assert any("no sft training signal" in m.get("error", "") for m in published)
+
+
+def test_production_transfer_rejects_a_suite_that_is_not_an_experiment(benchmark_db, tmp_path):
+    redis_client = MagicMock()
+    with patch("redis.from_url", return_value=redis_client):
+        tasks.run_transfer_task("bm_1", {"base_model": "m", "eval_suite": str(tmp_path / "missing.yaml")})
+
+    status, error, report = _benchmark_run("bm_1")
+    assert status == "failed"
+    assert "experiment config not found" in error
+    assert report is None
 
 
 def test_transfer_reports_the_injected_evaluators_result(benchmark_db):
@@ -348,4 +369,5 @@ def test_transfer_reports_the_injected_evaluators_result(benchmark_db):
         "inference_mode": "auto", "device": "Apple Silicon MPS (Metal)",
     }
     assert (seen[0].seeds, seen[0].max_train_steps, str(seen[0].data_dir)) == (2, 40, "d")
+    assert seen[0].run_id == "bm_1"
     assert published[-1]["done"] is True

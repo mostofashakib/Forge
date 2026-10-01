@@ -75,20 +75,27 @@ def benchmark_run(
 
 @benchmark_app.command("transfer")
 def benchmark_transfer(
-    data: Path = typer.Option(..., "--data", help="Path to benchmark_results/data"),
-    base_model: str = typer.Option("meta-llama/Llama-3.1-8B", "--base-model"),
-    output: Path = typer.Option(Path("benchmark_results"), "--output", "-o"),
+    data: Path = typer.Option(..., "--data", help="Directory with SFT demonstrations or graded rollouts"),
+    experiment: Path = typer.Option(Path("experiments/internal_heldout.yaml"), "--experiment", help="Experiment YAML with the train/held-out split"),
+    base_model: str | None = typer.Option(None, "--base-model", help="Must match the experiment; defaults to its base_model"),
+    seeds: int = typer.Option(3, "--seeds", help="How many of the experiment's seeds to evaluate"),
+    max_steps: int = typer.Option(1000, "--max-steps", help="Training step budget"),
+    output: Path = typer.Option(Path("benchmark_results/transfer"), "--output", "-o"),
 ) -> None:
-    """Reserved for a future external transfer benchmark. Requires GPU."""
-    from forge.benchmark.transfer_pipeline import TransferConfig, run_transfer_pipeline
-    cfg = TransferConfig(data_dir=data, base_model=base_model, output_dir=output)
-    typer.echo(f"[benchmark] fine-tuning {base_model} on {data}…")
+    """Fine-tune on the experiment's training envs, then measure pass@k on its held-out envs."""
+    from forge.benchmark import transfer_pipeline
+
+    cfg = transfer_pipeline.TransferConfig(
+        data_dir=data, base_model=base_model, output_dir=output,
+        eval_suite=str(experiment), max_train_steps=max_steps, seeds=seeds,
+    )
+    typer.echo(f"[benchmark] fine-tuning on {data}, evaluating held-out envs from {experiment}…")
     try:
-        result = run_transfer_pipeline(cfg)
-    except NotImplementedError as exc:
+        result = transfer_pipeline.run_transfer_pipeline(cfg)
+    except (FileNotFoundError, ValueError, RuntimeError) as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(1)
-    typer.echo(f"✓ Eval on {result.eval_suite}:")
+    typer.echo(f"✓ Eval on {result.eval_suite} ({result.num_eval_tasks} tasks), checkpoint {result.model_path}:")
     typer.echo(f"   task_completion_rate = {result.task_completion_rate:.3f}")
     typer.echo(f"   success@1 = {result.success_at_1:.3f}")
     typer.echo(f"   success@3 = {result.success_at_3:.3f}")

@@ -40,10 +40,12 @@ class CreateBenchmarkRunRequest(BaseModel):
 
 
 class CreateTransferRequest(BaseModel):
-    base_model: str = Field(default="meta-llama/Llama-3.1-8B", min_length=1)
+    # None trains the base model the experiment declares.
+    base_model: str | None = Field(default=None, min_length=1)
     data_dir: str = Field(default="benchmark_results/data", min_length=1)
     output_dir: str = Field(default="benchmark_results/transfer", min_length=1)
-    eval_suite: str = Field(default="held-out-transfer", min_length=1)
+    # Experiment YAML whose train/held-out split the transfer run follows.
+    eval_suite: str = Field(default="experiments/internal_heldout.yaml", min_length=1)
     max_steps: int = Field(default=500, ge=1, le=5000)
     seeds: int = Field(default=3, ge=1, le=20)
     inference_mode: Literal["auto", "local_gpu", "api_gateway"] = "auto"
@@ -199,15 +201,23 @@ def get_evaluation(run_id: str, db: Session = Depends(get_db)):
 
 @router.post("/transfer", status_code=202)
 def create_transfer_run(body: CreateTransferRequest, db: Session = Depends(get_db)):
-    run_id = f"transfer_{uuid.uuid4().hex[:12]}"
     config = body.model_dump()
+    try:
+        for field_name in ("eval_suite", "data_dir", "output_dir"):
+            config[field_name] = str(confined_relative_path(Path.cwd(), config[field_name]))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if not Path(config["eval_suite"]).is_file():
+        raise HTTPException(status_code=422, detail="eval_suite does not exist")
+
+    run_id = f"transfer_{uuid.uuid4().hex[:12]}"
     run = BenchmarkRun(
         id=run_id,
         status="queued",
         domains=body.eval_suite,
         depth=body.max_steps,
         seeds=body.seeds,
-        output_dir=body.output_dir,
+        output_dir=config["output_dir"],
         created_at=datetime.now(timezone.utc),
         kind="transfer",
         engine="forge-transfer",

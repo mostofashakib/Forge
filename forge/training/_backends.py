@@ -1,8 +1,7 @@
 """Heavy training backends — the actual gradient updates.
 
-Kept separate from the orchestration (mirroring `forge/benchmark/_fine_tune.py`)
-so the trainer's data loading, reward mapping, gating, and checkpoint contract
-are testable without a GPU. Each backend gates on its optional GPU dependencies
+Kept separate from the orchestration so the trainer's data loading, reward
+mapping, gating, and checkpoint contract are testable without a GPU. Each backend gates on its optional GPU dependencies
 and imports them only when training starts.
 
 These backends train Forge's own policy from graded experience via GRPO / DPO;

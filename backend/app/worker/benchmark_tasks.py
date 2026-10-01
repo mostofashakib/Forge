@@ -261,16 +261,17 @@ def execute_transfer_run(run_id: str, config: dict, *, evaluate, publish) -> Non
     update_benchmark_run(run_id, "running")
     transfer_config = TransferConfig(
         data_dir=Path(config.get("data_dir", "benchmark_results/data")),
-        base_model=config.get("base_model", "meta-llama/Llama-3.1-8B"),
+        base_model=config.get("base_model"),
         output_dir=Path(config.get("output_dir", "benchmark_results/transfer")),
-        eval_suite=config.get("eval_suite", "held-out-transfer"),
+        eval_suite=config.get("eval_suite", "experiments/internal_heldout.yaml"),
         max_train_steps=config.get("max_steps", 500),
         seeds=config.get("seeds", 3),
+        run_id=run_id,
     )
     inference_mode = config.get("inference_mode", "auto")
     device = _detected_device()
     publish({"log": f"[transfer] starting transfer benchmark {run_id}"})
-    publish({"log": f"[transfer] base model: {transfer_config.base_model}"})
+    publish({"log": f"[transfer] base model: {transfer_config.base_model or 'from experiment'}"})
     publish({"log": f"[transfer] transfer dataset: {transfer_config.data_dir}"})
     publish({"log": f"[transfer] target suite: {transfer_config.eval_suite}"})
     publish({"log": f"[transfer] inference configuration: {inference_mode}"})

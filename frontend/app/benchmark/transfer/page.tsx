@@ -18,6 +18,10 @@ interface TransferResult {
   [key: string]: string | number | boolean | null | undefined;
 }
 
+function percent(value: number | undefined): string {
+  return value == null ? "—" : `${(value * 100).toFixed(1)}%`;
+}
+
 const PRESET_MODELS = [
   "meta-llama/Llama-3.1-8B",
   "Qwen/Qwen2.5-7B-Instruct",
@@ -25,9 +29,9 @@ const PRESET_MODELS = [
 ];
 
 export default function BenchmarkTransferPage() {
-  const [baseModel, setBaseModel] = useState("meta-llama/Llama-3.1-8B");
+  const [baseModel, setBaseModel] = useState("");
   const [dataDir, setDataDir] = useState("benchmark_results/data");
-  const [evalSuite, setEvalSuite] = useState("held-out-transfer");
+  const [evalSuite, setEvalSuite] = useState("experiments/internal_heldout.yaml");
   const [outputDir, setOutputDir] = useState("benchmark_results/transfer");
   const [maxSteps, setMaxSteps] = useState(500);
   const [seeds, setSeeds] = useState(3);
@@ -64,7 +68,7 @@ export default function BenchmarkTransferPage() {
     setError(null);
 
     const payload = {
-      base_model: baseModel,
+      base_model: baseModel.trim() || null,
       data_dir: dataDir,
       output_dir: outputDir,
       eval_suite: evalSuite,
@@ -127,7 +131,7 @@ export default function BenchmarkTransferPage() {
           <span className="benchmark-run__eyebrow">Transfer benchmark / 03</span>
           <h1>EVALUATE THE <em>TRANSFER.</em></h1>
           <p className="mx-auto">
-            Measure cross-distribution generalization on held-out tasks and external benchmark environments.
+            Fine-tune on your training environments, then measure pass@k on held-out environments the policy never saw.
           </p>
         </div>
       </header>
@@ -150,7 +154,7 @@ export default function BenchmarkTransferPage() {
           <div className="benchmark-field">
             <div className="benchmark-field__label">
               <span>Base Model / Policy Checkpoint</span>
-              <small>HuggingFace ID or local path</small>
+              <small>blank uses the experiment&apos;s base model</small>
             </div>
             <input
               type="text"
@@ -158,7 +162,7 @@ export default function BenchmarkTransferPage() {
               onChange={(e) => setBaseModel(e.target.value)}
               disabled={isRunning}
               className="benchmark-input benchmark-input--mono"
-              placeholder="e.g. meta-llama/Llama-3.1-8B"
+              placeholder="from experiment"
             />
             <div className="mt-1 flex flex-wrap gap-1">
               {PRESET_MODELS.map((preset) => (
@@ -193,8 +197,8 @@ export default function BenchmarkTransferPage() {
 
             <label className="benchmark-field">
               <span className="benchmark-field__label">
-                <span>Evaluation suite</span>
-                <small>target benchmark</small>
+                <span>Experiment</span>
+                <small>train / held-out split</small>
               </span>
               <input
                 type="text"
@@ -210,7 +214,7 @@ export default function BenchmarkTransferPage() {
           <div className="benchmark-field-row">
             <label className="benchmark-field">
               <span className="benchmark-field__label">
-                <span>Max eval steps</span>
+                <span>Max train steps</span>
               </span>
               <input
                 type="number"
@@ -225,7 +229,7 @@ export default function BenchmarkTransferPage() {
 
             <label className="benchmark-field">
               <span className="benchmark-field__label">
-                <span>Seeds per task</span>
+                <span>Seeds</span>
               </span>
               <input
                 type="number"
@@ -252,7 +256,7 @@ export default function BenchmarkTransferPage() {
               <span className="benchmark-active-state__pulse" />
               <span>
                 <strong>Transfer benchmark in progress</strong>
-                <small>Evaluating policy across target tasks</small>
+                <small>Training, then evaluating held-out tasks</small>
               </span>
             </div>
           )}
@@ -286,15 +290,15 @@ export default function BenchmarkTransferPage() {
             <div className="benchmark-eval-result">
               <div>
                 <span>Task completion</span>
-                <strong>{result.task_completion_rate ? `${(result.task_completion_rate * 100).toFixed(1)}%` : "—"}</strong>
+                <strong>{percent(result.task_completion_rate)}</strong>
               </div>
               <div>
                 <span>Pass@1</span>
-                <strong>{result.pass_at_1 ? `${(result.pass_at_1 * 100).toFixed(1)}%` : "—"}</strong>
+                <strong>{percent(result.pass_at_1)}</strong>
               </div>
               <div>
                 <span>Pass@3</span>
-                <strong>{result.pass_at_3 ? `${(result.pass_at_3 * 100).toFixed(1)}%` : "—"}</strong>
+                <strong>{percent(result.pass_at_3)}</strong>
               </div>
               <div>
                 <span>Evaluated tasks</span>
@@ -318,7 +322,7 @@ export default function BenchmarkTransferPage() {
         <div className="benchmark-notice benchmark-notice--success">
           <div>
             <p>Transfer benchmark complete</p>
-            <span>Evaluation metrics recorded successfully across target distribution.</span>
+            <span>Held-out metrics recorded.</span>
           </div>
         </div>
       )}

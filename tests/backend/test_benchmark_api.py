@@ -259,3 +259,45 @@ def test_progress_socket_sees_a_run_that_finishes_while_subscribing(api_client):
     with patch("redis.asyncio.from_url", return_value=redis_client):
         with api_client.websocket_connect("/api/benchmark/ws/progress/bm_race") as ws:
             assert ws.receive_json() == {"done": True}
+
+
+def _transfer_project(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "experiments").mkdir()
+    (tmp_path / "experiments" / "internal_heldout.yaml").write_text("heldout_envs: []\n")
+
+
+def test_create_transfer_run_queues_confined_paths_and_the_experiments_model(api_client, tmp_path, monkeypatch):
+    _transfer_project(tmp_path, monkeypatch)
+
+    with patch("backend.app.api.benchmark.run_transfer_task") as mock_task:
+        response = api_client.post("/api/benchmark/transfer", json={})
+
+    assert response.status_code == 202
+    config = mock_task.delay.call_args.kwargs["config"]
+    assert config["base_model"] is None
+    assert config["eval_suite"] == str(tmp_path / "experiments" / "internal_heldout.yaml")
+    assert config["data_dir"] == str(tmp_path / "benchmark_results" / "data")
+    assert config["output_dir"] == str(tmp_path / "benchmark_results" / "transfer")
+
+
+@pytest.mark.parametrize("field", ["eval_suite", "data_dir", "output_dir"])
+def test_create_transfer_run_rejects_paths_outside_forge(api_client, tmp_path, monkeypatch, field):
+    _transfer_project(tmp_path, monkeypatch)
+
+    with patch("backend.app.api.benchmark.run_transfer_task") as mock_task:
+        response = api_client.post("/api/benchmark/transfer", json={field: "../escape"})
+
+    assert response.status_code == 422
+    mock_task.delay.assert_not_called()
+
+
+def test_create_transfer_run_rejects_a_missing_experiment(api_client, tmp_path, monkeypatch):
+    _transfer_project(tmp_path, monkeypatch)
+
+    with patch("backend.app.api.benchmark.run_transfer_task") as mock_task:
+        response = api_client.post("/api/benchmark/transfer", json={"eval_suite": "experiments/none.yaml"})
+
+    assert response.status_code == 422
+    assert "eval_suite does not exist" in response.text
+    mock_task.delay.assert_not_called()

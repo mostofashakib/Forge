@@ -429,6 +429,56 @@ def test_indeterminate_episodes_leave_the_pass_rate_denominator(tmp_path):
     assert result["abstention_rate"] == 0.5
 
 
+def test_task_pass_counts_record_each_tasks_decided_and_passed_episodes(tmp_path):
+    config_path = tmp_path / "experiment.yaml"
+    _experiment(config_path)
+    checkpoint_dir = _checkpoint(tmp_path, _config_dict())
+
+    result = evaluate_on_suite(
+        str(checkpoint_dir), str(config_path), runs_dir=tmp_path / "runs",
+        task_provider=_Provider(),
+        episode_runner=_outcomes(
+            EpisodeOutcome(passed=True, reward=1.0),
+            EpisodeOutcome(passed=False, reward=0.0),
+            EpisodeOutcome(passed=False, reward=0.0),
+            EpisodeOutcome(passed=False, reward=0.0),
+        ),
+    )
+
+    assert result["task_pass_counts"] == {
+        "held_a/held_a_task": {"decided": 2, "passed": 1},
+        "held_b/held_b_task": {"decided": 2, "passed": 0},
+    }
+
+
+def test_task_pass_counts_drop_abstentions_and_audited_passes(tmp_path):
+    config_path = tmp_path / "experiment.yaml"
+    config_path.write_text(
+        "train_envs: [train_a]\nheldout_envs: [held_a]\n"
+        "reward_preset: full_layered_partial\nbase_model: base\nseeds: [7]\n"
+        "determinism_repeats: 3\nmax_abstention_rate: 0.5\n",
+        encoding="utf-8",
+    )
+    config = _config_dict(heldout=["held_a"])
+    config["determinism_repeats"] = 3
+    config["max_abstention_rate"] = 0.5
+    checkpoint_dir = _checkpoint(tmp_path, config)
+
+    result = evaluate_on_suite(
+        str(checkpoint_dir), str(config_path), runs_dir=tmp_path / "runs",
+        task_provider=_Provider(),
+        episode_runner=_outcomes(
+            EpisodeOutcome(passed=True, reward=1.0),
+            # An apparent pass the auditor flags is a failure, not a pass.
+            EpisodeOutcome(passed=True, reward=1.0, reward_hacking=True),
+            # Undecided is neither a pass nor a sample.
+            EpisodeOutcome(passed=False, reward=0.0, indeterminate=True),
+        ),
+    )
+
+    assert result["task_pass_counts"] == {"held_a/held_a_task": {"decided": 2, "passed": 1}}
+
+
 def test_a_run_with_no_abstentions_reports_a_zero_rate(tmp_path):
     config_path = tmp_path / "experiment.yaml"
     _experiment(config_path, heldout=["held_a"])

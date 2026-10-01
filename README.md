@@ -729,14 +729,12 @@ forge benchmark eval \
 
 ## Status & Known Gaps
 
-Everything documented above is implemented and covered by the test suite. Three
-things are deliberately *not* — they are wired end to end but raise
-`NotImplementedError` rather than silently degrading:
+Everything documented above is implemented and covered by the test suite. Two
+things are deliberately *not* built yet:
 
 | Gap | Where | Why it matters |
 |---|---|---|
-| **External transfer benchmark** | `forge/benchmark/transfer_pipeline.py`, `_fine_tune.py` | Generalization is currently measured only on Forge's own held-out environments. Transfer to an independent harness (WebArena / WorkArena) is the claim that would separate "the split held" from "the training actually taught the policy something about real apps" |
-| **SFT fine-tuning entry point** | `forge/benchmark/_fine_tune.py` | `forge train` supports GRPO and DPO; the SFT path that the transfer pipeline needs is still a stub |
+| **External transfer benchmark** | `forge/benchmark/transfer_pipeline.py` | `forge benchmark transfer` fine-tunes on an experiment's training environments and measures pass@k on its held-out environments. Transfer to an independent harness (WebArena / WorkArena) is the claim that would separate "the split held" from "the training actually taught the policy something about real apps" |
 | **Distributed parallel runs** | worker layer | `ParallelRolloutRunner` parallelizes within one host; multi-worker distribution with deterministic seed assignment, backpressure, and run-level aggregation is not built |
 
 There are also **no published numbers**. The evaluation protocol, metrics, and
@@ -845,8 +843,7 @@ forge/
     data_collector.py  # Episode collection loop
     env_quality.py     # EnvQualityMetrics: coverage, reward density, dead-end rate, diversity
     report.py          # BenchmarkReport: paper-ready figures and summary tables
-    transfer_pipeline.py  # Deferred external transfer-benchmark boundary
-    _fine_tune.py      # fine_tune_model() entry point
+    transfer_pipeline.py  # Fine-tune on train envs, pass@k on held-out envs
     _eval.py           # checkpoint-backed internal held-out evaluation + result records
   experiments.py       # declarative experiment and per-run result contracts
   training/            # Close the RL loop: train a policy from graded rollouts
@@ -903,7 +900,7 @@ frontend/
     benchmark/
       run/             # Launch benchmark: domain/depth/seed config + live log + progress bar
       report/          # Quality metrics table with colour coding + CSV download
-      transfer/        # Deferred external transfer benchmark
+      transfer/        # Transfer benchmark: fine-tune, then held-out pass@k
       eval/            # Internal checkpoint evaluation on held-out environments
     environments/
       new/             # 4-option landing page (CLI / Browser / Custom / Premade)
@@ -1082,7 +1079,9 @@ forge benchmark report               # generate summary tables from collected re
 forge benchmark eval \
   --checkpoint ./policy_checkpoint \
   --experiment experiments/internal_heldout.yaml
-forge benchmark transfer             # deferred — raises NotImplementedError (see Roadmap)
+forge benchmark transfer \
+  --data ./sft_data \
+  --experiment experiments/internal_heldout.yaml   # fine-tune, then held-out pass@1 / pass@3
 ```
 
 `forge run` and `forge export` drive the environment with a seeded random policy

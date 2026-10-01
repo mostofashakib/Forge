@@ -361,6 +361,44 @@ def test_benchmark_eval_help():
     assert "--suite" in result.output
 
 
+def test_benchmark_transfer_prints_what_the_pipeline_measured(tmp_path, monkeypatch):
+    from forge.benchmark import transfer_pipeline
+    from forge.benchmark.transfer_pipeline import TransferResult
+
+    seen = []
+
+    def measure(config):
+        seen.append(config)
+        return TransferResult(
+            model_path="ckpt", eval_suite=config.eval_suite, task_completion_rate=0.4,
+            success_at_1=0.25, success_at_3=0.5, num_eval_tasks=6,
+        )
+
+    monkeypatch.setattr(transfer_pipeline, "run_transfer_pipeline", measure)
+    result = runner.invoke(app, [
+        "benchmark", "transfer", "--data", str(tmp_path / "data"),
+        "--experiment", "exp.yaml", "--seeds", "2", "--max-steps", "40",
+    ])
+
+    assert result.exit_code == 0, result.output
+    assert (seen[0].eval_suite, seen[0].base_model, seen[0].seeds, seen[0].max_train_steps) == (
+        "exp.yaml", None, 2, 40,
+    )
+    assert "success@1 = 0.250" in result.output
+    assert "success@3 = 0.500" in result.output
+
+
+def test_benchmark_transfer_reports_a_failed_pipeline_and_exits_nonzero(tmp_path):
+    result = runner.invoke(app, [
+        "benchmark", "transfer", "--data", str(tmp_path / "data"),
+        "--experiment", str(tmp_path / "missing.yaml"),
+    ])
+
+    assert result.exit_code == 1
+    assert "experiment config not found" in result.output
+    assert "success@1" not in result.output
+
+
 def test_diagnose_early_termination_advice_names_settings_that_stop_episodes(tmp_path):
     """Container runs stop on dead ends and the step budget, never on a score threshold."""
     import datetime

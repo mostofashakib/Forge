@@ -110,6 +110,7 @@ def evaluate_on_suite(
 
     outcomes: list[EpisodeOutcome] = []
     reward_groups: list[list[float]] = []
+    task_pass_counts: dict[str, dict[str, int]] = {}
     output_root = Path(runs_dir) / resolved_run_id / "eval"
     for env_name in config.heldout_envs:
         tasks = task_provider.tasks_for(domain=env_name, depth=depth)
@@ -117,6 +118,9 @@ def evaluate_on_suite(
             raise ValueError(f"held-out environment has no compiled tasks: {env_name}")
         for task in tasks:
             task_rewards: list[float] = []
+            counts = task_pass_counts.setdefault(
+                f"{env_name}/{task.name}", {"decided": 0, "passed": 0}
+            )
             for repeat in range(config.determinism_repeats):
                 episode_path = (
                     output_root / env_name / task.name
@@ -132,6 +136,9 @@ def evaluate_on_suite(
                     )
                 outcomes.append(outcome)
                 task_rewards.append(outcome.reward)
+                if not outcome.indeterminate:
+                    counts["decided"] += 1
+                    counts["passed"] += outcome.passed
             reward_groups.append(task_rewards)
 
     if not outcomes:
@@ -180,6 +187,8 @@ def evaluate_on_suite(
         "result_path": str(result_path),
         "num_eval_tasks": len(reward_groups),
         "num_eval_episodes": len(outcomes),
+        # Per-task samples, so callers can estimate pass@k without rerunning.
+        "task_pass_counts": task_pass_counts,
         # Compatibility for existing report consumers.
         "task_completion_rate": pass_rate,
     }
