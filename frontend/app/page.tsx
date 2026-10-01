@@ -11,7 +11,6 @@ import {
   FlaskConical,
   Layers,
   RotateCcw,
-  Settings,
   ShieldCheck,
   Sparkles,
   Workflow,
@@ -118,27 +117,6 @@ const ROUTE_GUIDES: RouteGuide[] = [
     ],
     ctaLabel: "Manage Environments",
   },
-  {
-    id: "settings",
-    title: "Settings",
-    route: "/settings",
-    badge: "05 // CONFIG",
-    eyebrow: "System Configuration",
-    icon: Settings,
-    accent: "text-indigo-500",
-    headline: "API Credentials, Models & Compute Routing",
-    description:
-      "Configure your AI providers, local Ollama models, container runtime defaults, and storage directories in an organized, collapsible control center.",
-    whenToUse:
-      "Go here when setting up API keys (OpenAI, Anthropic, DeepSeek, etc.), configuring local models, or customizing system storage paths.",
-    keyFeatures: [
-      "Multi-provider API key management",
-      "Collapsible categorized configuration panels",
-      "Automated container setup & package managers",
-      "Live connection testing and verification",
-    ],
-    ctaLabel: "Configure Settings",
-  },
 ];
 
 const PIPELINE_STEPS = [
@@ -234,45 +212,9 @@ export default function LandingPage() {
             </Link>
           </div>
         </div>
-
-        {/* Live Architectural Readout */}
-        <div className="mt-8 grid grid-cols-2 border-t border-foreground/20 pt-6 sm:grid-cols-4 gap-4">
-          <div>
-            <span className="block font-mono text-[0.52rem] uppercase tracking-[0.2em] text-muted-foreground">
-              Verification Engine
-            </span>
-            <strong className="mt-1 block font-mono text-base font-semibold text-foreground">
-              Pass^k Proof
-            </strong>
-          </div>
-          <div>
-            <span className="block font-mono text-[0.52rem] uppercase tracking-[0.2em] text-muted-foreground">
-              Supported Algorithms
-            </span>
-            <strong className="mt-1 block font-mono text-base font-semibold text-foreground">
-              GRPO · PPO · DPO · SFT
-            </strong>
-          </div>
-          <div>
-            <span className="block font-mono text-[0.52rem] uppercase tracking-[0.2em] text-muted-foreground">
-              Training Modes
-            </span>
-            <strong className="mt-1 block font-mono text-base font-semibold text-foreground">
-              Online & Offline
-            </strong>
-          </div>
-          <div>
-            <span className="block font-mono text-[0.52rem] uppercase tracking-[0.2em] text-muted-foreground">
-              Sandbox Runtimes
-            </span>
-            <strong className="mt-1 block font-mono text-base font-semibold text-foreground">
-              Docker + Gymnasium
-            </strong>
-          </div>
-        </div>
       </section>
 
-      {/* 2. WHERE TO GO FOR WHAT (CORE INTERACTIVE DIRECTORY) */}
+      {/* 2. NAVIGATION DIRECTORY */}
       <section className="space-y-6">
         <div className="flex flex-col justify-between gap-4 border-b border-foreground/25 pb-4 md:flex-row md:items-end">
           <div>
@@ -280,12 +222,6 @@ export default function LandingPage() {
               <Compass size={14} />
               <span>NAVIGATION DIRECTORY</span>
             </div>
-            <h2 className="mt-1 text-2xl font-semibold tracking-[-0.03em] uppercase">
-              Where to Go for What
-            </h2>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Quickly find the exact module you need based on what you are trying to accomplish.
-            </p>
           </div>
 
           {/* Filter Pills */}
@@ -298,7 +234,7 @@ export default function LandingPage() {
                   : "border-foreground/20 hover:border-foreground/40 bg-card"
               }`}
             >
-              All Routes (5)
+              All Routes (4)
             </button>
             {ROUTE_GUIDES.map((guide) => (
               <button
