@@ -187,8 +187,100 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* 2. NAVIGATION DIRECTORY */}
-      <section className="space-y-6">
+      {/* 2. THE FORGE FLYWHEEL (WORKFLOW OVERVIEW) */}
+      <section className="space-y-6 border-t border-foreground/25 pt-10">
+        <div>
+          <div className="flex items-center gap-2 font-mono text-[0.62rem] font-semibold uppercase tracking-[0.2em] text-primary">
+            <Workflow size={14} />
+            <span>THE FORGE PIPELINE</span>
+          </div>
+          <h2 className="mt-1 text-2xl font-semibold tracking-[-0.03em] uppercase">
+            How Forge Closes the Learning Loop
+          </h2>
+        </div>
+
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
+          {PIPELINE_STEPS.map((s) => (
+            <div key={s.step} className="landing-pipeline-step flex flex-col justify-between">
+              <div>
+                <div className="flex items-center justify-between">
+                  <span className="font-mono text-xl font-bold text-primary">
+                    {s.step}
+                  </span>
+                  <span className="border border-foreground/20 px-2 py-0.5 font-mono text-[0.52rem] uppercase tracking-wider text-muted-foreground">
+                    {s.badge}
+                  </span>
+                </div>
+                <h3 className="mt-3 font-semibold text-sm text-foreground">
+                  {s.label}
+                </h3>
+                <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                  {s.desc}
+                </p>
+              </div>
+
+              <div className="mt-5 border-t border-border/60 pt-3">
+                <Link
+                  href={s.target}
+                  className="inline-flex items-center gap-1.5 font-mono text-[0.62rem] uppercase tracking-wider text-primary hover:underline"
+                >
+                  <span>Go to stage</span>
+                  <ArrowRight size={11} />
+                </Link>
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* 3. KEY ARCHITECTURAL PILLARS */}
+      <section className="space-y-6 border-t border-foreground/25 pt-10">
+        <div>
+          <div className="flex items-center gap-2 font-mono text-[0.62rem] font-semibold uppercase tracking-[0.2em] text-primary">
+            <Layers size={14} />
+            <span>CORE ARCHITECTURE</span>
+          </div>
+          <h2 className="mt-1 text-2xl font-semibold tracking-[-0.03em] uppercase">
+            Built for Verifiable Reasoning
+          </h2>
+        </div>
+
+        <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
+          <div className="border border-foreground/20 bg-card p-6 space-y-3">
+            <div className="grid size-9 place-items-center border border-foreground/20 bg-background text-primary">
+              <Zap size={16} />
+            </div>
+            <h3 className="font-semibold text-base">Execution Over Vibes (RLVR)</h3>
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              Traditional LLM evaluation relies on subjective LLM-as-a-judge scorers that hallucinate and suffer from sycophancy.
+              Forge validates tasks using executable unit tests, AST parsers, and sandbox outputs that deliver deterministic 0 or 1 ground truth.
+            </p>
+          </div>
+
+          <div className="border border-foreground/20 bg-card p-6 space-y-3">
+            <div className="grid size-9 place-items-center border border-foreground/20 bg-background text-primary">
+              <RotateCcw size={16} />
+            </div>
+            <h3 className="font-semibold text-base">Online & Offline Training</h3>
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              Forge unifies both training philosophies. Run <strong>Online Mode</strong> for self-play policy rollouts where the generator model matches the actor, or <strong>Offline Mode</strong> for aligning models on verified cross-family datasets.
+            </p>
+          </div>
+
+          <div className="border border-foreground/20 bg-card p-6 space-y-3">
+            <div className="grid size-9 place-items-center border border-foreground/20 bg-background text-primary">
+              <ShieldCheck size={16} />
+            </div>
+            <h3 className="font-semibold text-base">Hardened Sandbox Isolation</h3>
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              Run arbitrary agent code without risking your host machine. Forge provides ephemeral Docker containers with observation filtering, PII redaction, and strict PolicyEngine boundaries.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      {/* 4. NAVIGATION DIRECTORY */}
+      <section className="space-y-6 border-t border-foreground/25 pt-10">
         <div className="flex flex-col justify-between gap-4 border-b border-foreground/25 pb-4 md:flex-row md:items-end">
           <div>
             <div className="flex items-center gap-2 font-mono text-[0.62rem] font-semibold uppercase tracking-[0.2em] text-primary">
@@ -299,98 +391,6 @@ export default function LandingPage() {
               </div>
             );
           })}
-        </div>
-      </section>
-
-      {/* 3. THE FORGE FLYWHEEL (WORKFLOW OVERVIEW) */}
-      <section className="space-y-6 border-t border-foreground/25 pt-10">
-        <div>
-          <div className="flex items-center gap-2 font-mono text-[0.62rem] font-semibold uppercase tracking-[0.2em] text-primary">
-            <Workflow size={14} />
-            <span>THE FORGE PIPELINE</span>
-          </div>
-          <h2 className="mt-1 text-2xl font-semibold tracking-[-0.03em] uppercase">
-            How Forge Closes the Learning Loop
-          </h2>
-        </div>
-
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
-          {PIPELINE_STEPS.map((s) => (
-            <div key={s.step} className="landing-pipeline-step flex flex-col justify-between">
-              <div>
-                <div className="flex items-center justify-between">
-                  <span className="font-mono text-xl font-bold text-primary">
-                    {s.step}
-                  </span>
-                  <span className="border border-foreground/20 px-2 py-0.5 font-mono text-[0.52rem] uppercase tracking-wider text-muted-foreground">
-                    {s.badge}
-                  </span>
-                </div>
-                <h3 className="mt-3 font-semibold text-sm text-foreground">
-                  {s.label}
-                </h3>
-                <p className="mt-2 text-xs leading-5 text-muted-foreground">
-                  {s.desc}
-                </p>
-              </div>
-
-              <div className="mt-5 border-t border-border/60 pt-3">
-                <Link
-                  href={s.target}
-                  className="inline-flex items-center gap-1.5 font-mono text-[0.62rem] uppercase tracking-wider text-primary hover:underline"
-                >
-                  <span>Go to stage</span>
-                  <ArrowRight size={11} />
-                </Link>
-              </div>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* 4. KEY ARCHITECTURAL PILLARS */}
-      <section className="space-y-6 border-t border-foreground/25 pt-10">
-        <div>
-          <div className="flex items-center gap-2 font-mono text-[0.62rem] font-semibold uppercase tracking-[0.2em] text-primary">
-            <Layers size={14} />
-            <span>CORE ARCHITECTURE</span>
-          </div>
-          <h2 className="mt-1 text-2xl font-semibold tracking-[-0.03em] uppercase">
-            Built for Verifiable Reasoning
-          </h2>
-        </div>
-
-        <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
-          <div className="border border-foreground/20 bg-card p-6 space-y-3">
-            <div className="grid size-9 place-items-center border border-foreground/20 bg-background text-primary">
-              <Zap size={16} />
-            </div>
-            <h3 className="font-semibold text-base">Execution Over Vibes (RLVR)</h3>
-            <p className="text-xs leading-relaxed text-muted-foreground">
-              Traditional LLM evaluation relies on subjective LLM-as-a-judge scorers that hallucinate and suffer from sycophancy.
-              Forge validates tasks using executable unit tests, AST parsers, and sandbox outputs that deliver deterministic 0 or 1 ground truth.
-            </p>
-          </div>
-
-          <div className="border border-foreground/20 bg-card p-6 space-y-3">
-            <div className="grid size-9 place-items-center border border-foreground/20 bg-background text-primary">
-              <RotateCcw size={16} />
-            </div>
-            <h3 className="font-semibold text-base">Online & Offline Training</h3>
-            <p className="text-xs leading-relaxed text-muted-foreground">
-              Forge unifies both training philosophies. Run <strong>Online Mode</strong> for self-play policy rollouts where the generator model matches the actor, or <strong>Offline Mode</strong> for aligning models on verified cross-family datasets.
-            </p>
-          </div>
-
-          <div className="border border-foreground/20 bg-card p-6 space-y-3">
-            <div className="grid size-9 place-items-center border border-foreground/20 bg-background text-primary">
-              <ShieldCheck size={16} />
-            </div>
-            <h3 className="font-semibold text-base">Hardened Sandbox Isolation</h3>
-            <p className="text-xs leading-relaxed text-muted-foreground">
-              Run arbitrary agent code without risking your host machine. Forge provides ephemeral Docker containers with observation filtering, PII redaction, and strict PolicyEngine boundaries.
-            </p>
-          </div>
         </div>
       </section>
     </div>
