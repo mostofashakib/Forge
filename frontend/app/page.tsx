@@ -125,28 +125,24 @@ const PIPELINE_STEPS = [
     label: "Define Environment",
     target: "/environments",
     desc: "Wrap enterprise tasks or coding tools into Gymnasium environments with deterministic reward checks.",
-    badge: "SANDBOX",
   },
   {
     step: "02",
     label: "Synthesize & Verify",
     target: "/generator",
     desc: "Generate task taxonomies. Only tasks that pass execution k times and cross-judge review are admitted.",
-    badge: "PASS^K FILTER",
   },
   {
     step: "03",
     label: "Train & Align",
     target: "/training",
     desc: "Optimize agent policies using GRPO, PPO, or DPO backed by verifiable rewards in online or offline modes.",
-    badge: "RLVR & SFT",
   },
   {
     step: "04",
     label: "Benchmark & Refine",
     target: "/benchmark",
     desc: "Evaluate rollouts in parallel, isolate failure modes, and feed hard edge cases back into the generator.",
-    badge: "EVALUATION",
   },
 ];
 
@@ -197,14 +193,11 @@ export default function LandingPage() {
                   <span className="font-mono text-xl font-bold text-primary">
                     {s.step}
                   </span>
-                  <span className="border border-foreground/20 px-2 py-0.5 font-mono text-[0.52rem] uppercase tracking-wider text-muted-foreground">
-                    {s.badge}
-                  </span>
                 </div>
                 <h3 className="mt-3 font-semibold text-sm text-foreground">
                   {s.label}
                 </h3>
-                <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                <p className="mt-2 text-xs leading-5 text-muted-foreground line-clamp-3">
                   {s.desc}
                 </p>
               </div>
@@ -231,9 +224,8 @@ export default function LandingPage() {
               <Zap size={16} />
             </div>
             <h3 className="font-semibold text-base">Execution Over Vibes (RLVR)</h3>
-            <p className="text-xs leading-relaxed text-muted-foreground">
-              Traditional LLM evaluation relies on subjective LLM-as-a-judge scorers that hallucinate and suffer from sycophancy.
-              Forge validates tasks using executable unit tests, AST parsers, and sandbox outputs that deliver deterministic 0 or 1 ground truth.
+            <p className="text-xs leading-relaxed text-muted-foreground line-clamp-3">
+              Forge replaces subjective LLM scorers with executable unit tests, AST parsers, and hardened sandbox outputs that deliver deterministic 0 or 1 ground truth.
             </p>
           </div>
 
@@ -242,8 +234,8 @@ export default function LandingPage() {
               <RotateCcw size={16} />
             </div>
             <h3 className="font-semibold text-base">Online & Offline Training</h3>
-            <p className="text-xs leading-relaxed text-muted-foreground">
-              Forge unifies both training philosophies. Run <strong>Online Mode</strong> for self-play policy rollouts where the generator model matches the actor, or <strong>Offline Mode</strong> for aligning models on verified cross-family datasets.
+            <p className="text-xs leading-relaxed text-muted-foreground line-clamp-3">
+              Run Online Mode for self-play policy rollouts where generator models match the actor, or Offline Mode to align models across verified cross-family datasets.
             </p>
           </div>
 
@@ -252,8 +244,8 @@ export default function LandingPage() {
               <ShieldCheck size={16} />
             </div>
             <h3 className="font-semibold text-base">Hardened Sandbox Isolation</h3>
-            <p className="text-xs leading-relaxed text-muted-foreground">
-              Run arbitrary agent code without risking your host machine. Forge provides ephemeral Docker containers with observation filtering, PII redaction, and strict PolicyEngine boundaries.
+            <p className="text-xs leading-relaxed text-muted-foreground line-clamp-3">
+              Execute arbitrary agent code safely in ephemeral Docker containers featuring observation filtering, PII redaction, and strict PolicyEngine boundaries.
             </p>
           </div>
         </div>
