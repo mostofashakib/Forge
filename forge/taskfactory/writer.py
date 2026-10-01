@@ -57,7 +57,10 @@ check kinds:
   value         {path, op, value}   dotted path like inbox_unread or a.0.b, op adds contains
   actions_called {tools, ordered}   actions_not_called {tools}
   Collections and paths refer to the reset state shown above, the same shape
-  the seed rows merge into.
+  the seed rows merge into. Use only field names you see there. A collection
+  that is empty at reset (often a log or history) has fields you cannot see,
+  so never check it: check the records the actions change, and use
+  actions_called for which actions ran.
 """,
     "cli": """\
 seed.setup: shell commands that build the starting files and state.
