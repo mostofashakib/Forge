@@ -458,6 +458,85 @@
   .benchmark-notice--success { @apply border-emerald-700/40 bg-emerald-50 text-emerald-900; }
   .benchmark-notice--error { @apply border-red-700/40 bg-red-50 text-red-900; }
 
+  .tasks-page .benchmark-run__eyebrow a { @apply underline-offset-4 hover:underline; }
+  .tasks-domain--idle { @apply opacity-60; }
+  .tasks-hint { @apply mt-3 text-xs leading-5 text-muted-foreground; }
+  .tasks-hint a { @apply font-medium text-primary underline underline-offset-2; }
+  .tasks-hint--warn { @apply border-l-2 border-primary bg-primary/10 px-3 py-2 text-foreground; }
+  .tasks-hint--ok { @apply border-l-2 border-emerald-600 bg-emerald-50 px-3 py-2 text-emerald-900; }
+  .tasks-models { @apply grid grid-cols-2 gap-3; }
+  .tasks-models > div { @apply border border-foreground/20 bg-background/40 p-3; }
+  .tasks-models span { @apply block font-mono text-[0.5rem] uppercase tracking-[0.16em] text-muted-foreground; }
+  .tasks-models strong { @apply mt-2 block truncate font-mono text-xs font-medium; }
+  .tasks-models small { @apply mt-1 block font-mono text-[0.5rem] uppercase tracking-wider text-primary; }
+  .tasks-models .tasks-hint { @apply col-span-2 mt-0; }
+  .tasks-stages { @apply grid grid-cols-3 border-b border-background/15 sm:grid-cols-6; }
+  .tasks-stages li { @apply flex flex-col gap-1 border-r border-background/10 px-3 py-3 font-mono text-[0.55rem] uppercase tracking-wider text-background/35 last:border-r-0; }
+  .tasks-stages li span { @apply text-background/25; }
+  .tasks-stages .tasks-stage--active { @apply bg-primary/20 text-background; }
+  .tasks-stages .tasks-stage--active span { @apply animate-pulse text-primary; }
+  .tasks-stages .tasks-stage--done { @apply text-accent; }
+  .tasks-stages .tasks-stage--done span { @apply text-accent/60; }
+  .tasks-empty { @apply p-5 text-xs text-muted-foreground; }
+  .tasks-table-wrap { @apply overflow-x-auto; }
+  .tasks-table { @apply w-full min-w-[40rem] border-collapse text-left text-xs; }
+  .tasks-table th { @apply border-b border-foreground/25 px-5 py-3 font-mono text-[0.5rem] font-normal uppercase tracking-[0.16em] text-muted-foreground; }
+  .tasks-table td { @apply border-b border-foreground/10 px-5 py-3 align-top; }
+  .tasks-table tr:last-child td { @apply border-b-0; }
+  .tasks-table a { @apply font-semibold text-primary underline-offset-4 hover:underline; }
+  .tasks-table__version { @apply font-mono text-sm font-semibold; }
+  .tasks-table__mono { @apply font-mono text-[0.65rem]; }
+  .tasks-table__reason { @apply max-w-xl leading-5 text-muted-foreground; }
+  .tasks-status { @apply inline-block border px-2 py-0.5 font-mono text-[0.55rem] uppercase tracking-wider; }
+  .tasks-status--complete { @apply border-emerald-700/40 bg-emerald-50 text-emerald-800; }
+  .tasks-status--short { @apply border-amber-700/40 bg-amber-50 text-amber-800; }
+  .tasks-status--failed { @apply border-red-700/40 bg-red-50 text-red-800; }
+  .tasks-status--queued, .tasks-status--running { @apply border-foreground/30 bg-muted text-foreground; }
+  .tasks-actions { @apply relative z-10 mt-6 flex flex-wrap gap-3; }
+  .tasks-button { @apply inline-flex items-center bg-primary px-4 py-2.5 text-[0.65rem] font-semibold uppercase tracking-[0.14em] text-primary-foreground transition-all disabled:opacity-40; box-shadow: 3px 3px 0 var(--foreground); }
+  .tasks-button:hover:not(:disabled) { @apply -translate-y-0.5 bg-foreground text-background; }
+  .tasks-button--ghost { @apply border border-foreground/40 bg-transparent text-foreground; box-shadow: none; }
+  .tasks-taxonomy { @apply grid gap-px bg-foreground/15 sm:grid-cols-2 xl:grid-cols-3; }
+  .tasks-taxonomy__item { @apply bg-card p-5; }
+  .tasks-taxonomy__item strong { @apply text-sm font-semibold; }
+  .tasks-taxonomy__item p { @apply mt-2 text-xs leading-5 text-muted-foreground; }
+  .tasks-taxonomy__item > div { @apply mt-3 flex gap-1; }
+  .tasks-difficulty { @apply inline-grid h-5 min-w-7 place-items-center border px-1 font-mono text-[0.55rem] font-semibold; }
+  .tasks-difficulty--1 { @apply border-foreground/25 bg-background text-foreground; }
+  .tasks-difficulty--2 { @apply border-foreground/30 bg-secondary text-foreground; }
+  .tasks-difficulty--3 { @apply border-accent bg-accent/60 text-accent-foreground; }
+  .tasks-difficulty--4 { @apply border-primary bg-primary/80 text-primary-foreground; }
+  .tasks-difficulty--5 { @apply border-foreground bg-foreground text-background; }
+  .tasks-difficulty--off { @apply border-dashed border-foreground/15 text-foreground/25; }
+  .tasks-rubric { @apply grid border-t border-foreground/20 sm:grid-cols-3; }
+  .tasks-rubric > div { @apply border-b border-foreground/10 p-4 sm:border-b-0 sm:border-r last:border-r-0; }
+  .tasks-rubric dt { @apply font-mono text-[0.6rem] font-semibold text-primary; }
+  .tasks-rubric dd { @apply mt-1 text-xs leading-5 text-muted-foreground; }
+  .tasks-list { @apply divide-y divide-foreground/10; }
+  .tasks-card__head { @apply grid w-full grid-cols-[4.5rem_2.5rem_1fr_1rem] items-center gap-3 px-5 py-3.5 text-left transition-colors hover:bg-muted/40; }
+  .tasks-card--open .tasks-card__head { @apply bg-muted/50; }
+  .tasks-card__id { @apply font-mono text-[0.6rem] text-muted-foreground; }
+  .tasks-card__title strong { @apply block text-sm font-medium; }
+  .tasks-card__title small { @apply mt-0.5 block font-mono text-[0.55rem] uppercase tracking-wider text-muted-foreground; }
+  .tasks-card__body { @apply border-t border-foreground/10 bg-background/40 px-5 py-5; }
+  .tasks-card__objective { @apply max-w-3xl border-l-2 border-primary pl-4 text-sm leading-6; }
+  .tasks-card__grid { @apply mt-5 grid gap-6 lg:grid-cols-2; }
+  .tasks-card__grid h4 { @apply mb-2 mt-4 font-mono text-[0.55rem] uppercase tracking-[0.16em] text-muted-foreground first:mt-0; }
+  .tasks-golden { @apply max-h-96 list-decimal space-y-1.5 overflow-y-auto pl-6 font-mono text-[0.65rem] marker:text-muted-foreground; }
+  .tasks-golden code { @apply font-semibold text-foreground; }
+  .tasks-golden span { @apply ml-2 break-all text-muted-foreground; }
+  .tasks-golden em { @apply mt-1 block border-l-2 border-accent bg-accent/15 px-2 py-1 not-italic text-foreground; }
+  .tasks-checks { @apply space-y-1.5 text-xs leading-5; }
+  .tasks-checks code { @apply mr-1 bg-muted px-1 font-mono text-[0.6rem]; }
+  .tasks-muted { @apply text-xs text-muted-foreground; }
+  .tasks-card__fingerprint { @apply mt-4 font-mono text-[0.55rem]; }
+  .settings-model { @apply break-all text-sm; }
+  .settings-message { @apply mx-5; }
+  .settings-keys { @apply divide-y divide-foreground/10; }
+  .settings-keys li { @apply flex items-center justify-between px-5 py-3.5 text-sm; }
+  .settings-keys strong { @apply font-mono text-xs font-medium; }
+  .settings-note { @apply px-5 pb-5; }
+
   .new-env-page { @apply mx-auto max-w-6xl space-y-7; }
   .new-env-hero {
     @apply grid overflow-hidden border border-foreground/80 bg-foreground text-background lg:grid-cols-[1fr_18rem];

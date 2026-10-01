@@ -2,11 +2,13 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Boxes, FlaskConical } from "lucide-react";
+import { Boxes, FlaskConical, ListChecks, Settings } from "lucide-react";
 
 const NAV_ITEMS = [
   { label: "Environments", href: "/environments", icon: Boxes },
+  { label: "Tasks", href: "/tasks", icon: ListChecks },
   { label: "Benchmark", href: "/benchmark", icon: FlaskConical },
+  { label: "Settings", href: "/settings", icon: Settings },
 ];
 
 function isActivePath(pathname: string, href: string): boolean {
