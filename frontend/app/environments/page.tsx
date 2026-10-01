@@ -126,7 +126,7 @@ export default function EnvironmentsPage() {
           <div className="flex items-center gap-3 mb-6">
             <span className="signal-chip"><span className="size-1.5 rounded-full bg-foreground animate-pulse" /> system inventory</span>
           </div>
-          <p className="environment-hero__eyebrow">Build controlled worlds for capable agents.</p>
+          <p className="environment-hero__eyebrow">Create isolated Gymnasium environments for agent RL.</p>
           <h1 className="environment-hero__title">ENVIRONMENTS</h1>
           {allNames.length > 0 && (
             <p className="text-sm leading-6 text-muted-foreground mt-5 max-w-xl">
