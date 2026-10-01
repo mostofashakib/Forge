@@ -3,11 +3,12 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import ForgeMark from "@/components/ForgeMark";
-import { Boxes, FlaskConical, Settings, Sparkles } from "lucide-react";
+import { Boxes, Cpu, FlaskConical, Settings, Sparkles } from "lucide-react";
 
 const NAV_ITEMS = [
   { label: "Environments", href: "/environments", icon: Boxes },
   { label: "Generator", href: "/generator", icon: Sparkles },
+  { label: "Training", href: "/training", icon: Cpu },
   { label: "Benchmark", href: "/benchmark", icon: FlaskConical },
   { label: "Settings", href: "/settings", icon: Settings },
 ];
