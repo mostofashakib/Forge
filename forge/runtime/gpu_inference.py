@@ -184,7 +184,10 @@ class HybridGPUInferenceEngine(InferenceProvider):
                         "[hybrid-engine] local GPU execution failed (%s), falling back to cloud gateway",
                         exc,
                     )
-                    return self.cloud_provider.generate(request)
+                    resp = self.cloud_provider.generate(request)
+                    resp.metadata["fallback_from"] = "local_gpu"
+                    resp.metadata["local_error"] = str(exc)
+                    return resp
                 raise
 
         return self.cloud_provider.generate(request)

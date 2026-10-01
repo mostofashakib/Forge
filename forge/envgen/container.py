@@ -584,6 +584,16 @@ class ContainerRuntime:
             self._docker_client = docker.from_env()
         return self._docker_client
 
+    def image_exists(self, image: str) -> bool:
+        """Return True if image exists in daemon."""
+        if self._docker_client is not None:
+            try:
+                self._docker_client.images.get(image)
+                return True
+            except Exception:
+                return False
+        return _image_cached_locally(image)
+
     def build(self, env_name: str, app_dir: Path) -> str:
         dockerfile = app_dir / "Dockerfile"
         if not dockerfile.exists():

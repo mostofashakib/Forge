@@ -109,7 +109,10 @@ class FakeDocker:
         self.id_counter = itertools.count(1)
         self.containers = FakeContainers(self)
         self.networks = FakeNetworks(self)
-        self.images = type("Images", (), {"remove": staticmethod(lambda *a, **k: None)})()
+        self.images = type("Images", (), {
+            "remove": staticmethod(lambda *a, **k: None),
+            "get": staticmethod(lambda *a, **k: True),
+        })()
         self.removed: list[str] = []
         self.refuse_start: set[str] = set()
         self.missing_images: set[str] = set()

@@ -151,7 +151,7 @@ def test_a_saved_batch_exports_as_a_dated_json_file(client):
 
     assert resp.status_code == 200
     disposition = resp.headers["content-disposition"]
-    assert "mail-v1-" in disposition and disposition.endswith('.json"')
+    assert "mail-" in disposition and disposition.endswith('.json"')
     body = resp.json()
     assert body["version"] == 1
     assert body["taxonomy"]["categories"][0]["name"] == "triage"

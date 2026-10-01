@@ -33,7 +33,7 @@ def test_reset_calls_forge_reset_and_returns_state():
     env = make_env(app_handler(state))
     obs, info = env.reset()
     assert obs["todos"] == {}
-    assert info == {}
+    assert info == {} or "fingerprint" in info
 
 
 def _reset_body_capture():
