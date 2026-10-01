@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timezone
-from typing import Any, Callable, Sequence
+from typing import Sequence
 from pydantic import BaseModel, Field
 
 from forge.taskfactory.schemas import TaskDraft

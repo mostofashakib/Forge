@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 from abc import ABC, abstractmethod
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -179,6 +180,25 @@ class BaseEpisodeResult:
             result.model_dump() for result in evaluation.verification_results
         ]
         self.reward_breakdown = evaluation.reward.model_dump()
+
+
+def read_trajectory_steps(path: Path) -> Iterator[dict]:
+    """The step records a `TrajectoryWriter` wrote, streamed line by line.
+
+    Blank and unparseable lines are skipped, as is the closing summary line,
+    so a partial trace from a crashed run still reads cleanly.
+    """
+    with path.open(encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if record.get("type") != "episode_summary":
+                yield record
 
 
 class TrajectoryWriter:

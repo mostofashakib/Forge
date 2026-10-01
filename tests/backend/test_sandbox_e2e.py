@@ -1064,8 +1064,8 @@ def test_build_cli_task_pulls_image_and_creates_container(client):
     mock_docker_client.containers.run.return_value = mock_container
 
     with patch("redis.from_url", return_value=mock_redis), \
-         patch("forge.envgen.container.subprocess.run") as mock_subproc, \
-         patch("forge.envgen.container._image_cached_locally", return_value=False), \
+         patch("subprocess.run") as mock_subproc, \
+         patch("forge.envgen.docker_images.image_cached_locally", return_value=False), \
          patch("forge.envgen.container.docker.from_env", return_value=mock_docker_client):
 
         mock_subproc.return_value = MagicMock(returncode=0)
@@ -1079,7 +1079,7 @@ def test_build_cli_task_pulls_image_and_creates_container(client):
 
     # subprocess pulls the pinned base (not the SDK), with per-attempt timeout,
     # then builds the prebuilt CLI image on top of it
-    from forge.envgen.container import CLI_RUNTIME_IMAGE, FORGE_CLI_IMAGE
+    from forge.envgen.docker_images import CLI_RUNTIME_IMAGE, FORGE_CLI_IMAGE
     assert mock_subproc.call_args_list[0] == call(
         ["docker", "pull", FORGE_CLI_IMAGE],
         check=True,

@@ -135,7 +135,8 @@ def test_todo_app_dockerfile_pull_uses_per_attempt_timeout(tmp_path):
     cached and the pull is skipped entirely — but when it does run, it has
     a hard wall-clock cap.
     """
-    from forge.envgen.container import ContainerRuntime, FORGE_PYTHON_BASE
+    from forge.envgen.container import ContainerRuntime
+    from forge.envgen.docker_images import FORGE_PYTHON_BASE
 
     app_dir = tmp_path / "todo_build"
     app_dir.mkdir()
@@ -146,8 +147,8 @@ def test_todo_app_dockerfile_pull_uses_per_attempt_timeout(tmp_path):
     )
     (app_dir / "main.py").write_text('from fastapi import FastAPI\napp = FastAPI()\n')
 
-    with patch("forge.envgen.container.subprocess.run") as mock_subproc, \
-         patch("forge.envgen.container._image_cached_locally", return_value=False):
+    with patch("subprocess.run") as mock_subproc, \
+         patch("forge.envgen.docker_images.image_cached_locally", return_value=False):
         mock_subproc.return_value = MagicMock(returncode=0)
         ContainerRuntime().build("todo_build", app_dir)
 
@@ -165,8 +166,8 @@ def test_todo_app_build_skips_pull_when_image_already_cached(tmp_path):
     (app_dir / "Dockerfile").write_text("FROM python:3.11-slim\nWORKDIR /app\n")
     (app_dir / "main.py").write_text("")
 
-    with patch("forge.envgen.container.subprocess.run") as mock_subproc, \
-         patch("forge.envgen.container._image_cached_locally", return_value=True):
+    with patch("subprocess.run") as mock_subproc, \
+         patch("forge.envgen.docker_images.image_cached_locally", return_value=True):
         mock_subproc.return_value = MagicMock(returncode=0)
         from forge.envgen.container import ContainerRuntime
         ContainerRuntime().build("todo_cached", app_dir)
@@ -181,7 +182,8 @@ def test_todo_app_build_retries_on_eof_then_succeeds(tmp_path):
     The Dockerfile has been normalised to FORGE_PYTHON_BASE before any pull
     happens, so the retry targets the canonical base.
     """
-    from forge.envgen.container import ContainerRuntime, FORGE_PYTHON_BASE
+    from forge.envgen.container import ContainerRuntime
+    from forge.envgen.docker_images import FORGE_PYTHON_BASE
 
     app_dir = tmp_path / "todo_eof_retry"
     app_dir.mkdir()
@@ -193,9 +195,9 @@ def test_todo_app_build_retries_on_eof_then_succeeds(tmp_path):
         stderr="failed to do request: Head https://registry-1.docker.io/...: EOF",
     )
 
-    with patch("forge.envgen.container.subprocess.run") as mock_subproc, \
-         patch("forge.envgen.container._image_cached_locally", return_value=False), \
-         patch("forge.envgen.container.time.sleep"):
+    with patch("subprocess.run") as mock_subproc, \
+         patch("forge.envgen.docker_images.image_cached_locally", return_value=False), \
+         patch("time.sleep"):
         mock_subproc.side_effect = [eof_exc, MagicMock(returncode=0), MagicMock(returncode=0)]
         ContainerRuntime().build("todo_eof_retry", app_dir)
 
@@ -207,7 +209,8 @@ def test_todo_app_build_retries_on_eof_then_succeeds(tmp_path):
 
 def test_todo_app_build_fails_when_all_pull_retries_exhausted(tmp_path):
     """If all pull attempts fail, build() raises RuntimeError and docker build is not run."""
-    from forge.envgen.container import ContainerRuntime, FORGE_PYTHON_BASE
+    from forge.envgen.container import ContainerRuntime
+    from forge.envgen.docker_images import FORGE_PYTHON_BASE
 
     app_dir = tmp_path / "todo_pull_fail"
     app_dir.mkdir()
@@ -216,9 +219,9 @@ def test_todo_app_build_fails_when_all_pull_retries_exhausted(tmp_path):
 
     eof_exc = subprocess.CalledProcessError(1, "docker pull", stderr="EOF")
 
-    with patch("forge.envgen.container.subprocess.run", side_effect=eof_exc), \
-         patch("forge.envgen.container._image_cached_locally", return_value=False), \
-         patch("forge.envgen.container.time.sleep"), \
+    with patch("subprocess.run", side_effect=eof_exc), \
+         patch("forge.envgen.docker_images.image_cached_locally", return_value=False), \
+         patch("time.sleep"), \
          patch("forge.envgen._image_pull_http.pull_via_http",
                side_effect=RuntimeError("HTTPS also EOF")):
         with pytest.raises(RuntimeError, match=f"Failed to pull {FORGE_PYTHON_BASE}"):
@@ -807,14 +810,15 @@ def test_run_dispatches_its_episodes_one_after_another(client):
     # A group runs episodes in parallel on the worker pool, and every one of
     # them resets and steps the same container. A chain of immutable
     # signatures runs them in order and ignores each one's return value.
-    from backend.app.worker import tasks
+    from backend.app.worker import agent_run_tasks, tasks
 
     _add_running_general_sandbox(client, "serial_env")
     _add_run("run_serial", "serial_env", num_episodes=3)
-    with patch.object(tasks, "chain") as chain, patch.object(tasks, "group") as group:
+    with patch.object(agent_run_tasks, "chain") as chain:
         tasks.run_container_run_task("run_serial")
 
-    group.assert_not_called()
+    # The agent-run module has no parallel dispatch path at all.
+    assert not hasattr(agent_run_tasks, "group")
     signatures = list(chain.call_args.args)
     assert [s.args for s in signatures] == [
         ("run_serial", 0, 0), ("run_serial", 1, 1), ("run_serial", 2, 2)
@@ -827,7 +831,7 @@ def test_container_episode_holds_its_environment_lock_while_it_runs(client):
     # Separate runs on one environment are separate chains, so the lock is
     # what keeps their episodes from interleaving on the shared container.
     from contextlib import contextmanager
-    from backend.app.worker import tasks
+    from backend.app.worker import agent_run_tasks, tasks
 
     _add_running_general_sandbox(client, "locked_ep_env")
     _add_run("run_lock", "locked_ep_env")
@@ -846,7 +850,7 @@ def test_container_episode_holds_its_environment_lock_while_it_runs(client):
     runner.__enter__.return_value.run_episode.side_effect = (
         lambda *a, **k: seen_while_running.append(list(held)) or MagicMock(steps=[])
     )
-    with patch.object(tasks, "exclusive_environment", fake_lock), \
+    with patch.object(agent_run_tasks, "exclusive_environment", fake_lock), \
          patch("redis.from_url"), \
          patch("forge.envgen.episode_runner.ContainerEpisodeRunner", return_value=runner), \
          patch("forge.envgen.agents.container_agent.make_container_agent"):
@@ -897,7 +901,7 @@ def test_agent_runs_do_not_advertise_score_thresholds_that_nothing_reads(client)
 # ---------------------------------------------------------------------------
 
 def test_cli_run_snapshots_its_environment_and_prewarms_before_dispatch(client):
-    from backend.app.worker import tasks
+    from backend.app.worker import agent_run_tasks, tasks
 
     _add_running_cli_sandbox(client, "shell_env")
     _add_run("run_cli", "shell_env", num_episodes=2)
@@ -906,7 +910,7 @@ def test_cli_run_snapshots_its_environment_and_prewarms_before_dispatch(client):
     runtime.snapshot_cli.side_effect = lambda *a: order.append("snapshot") or "snap:run_cli"
     runtime.warm_cli.side_effect = lambda *a: order.append("warm")
     with patch("forge.envgen.container.ContainerRuntime", return_value=runtime), \
-         patch.object(tasks, "chain") as chain:
+         patch.object(agent_run_tasks, "chain") as chain:
         chain.return_value.apply_async.side_effect = lambda: order.append("dispatch")
         tasks.run_container_run_task("run_cli")
 
@@ -919,14 +923,14 @@ def test_cli_run_snapshots_its_environment_and_prewarms_before_dispatch(client):
 
 
 def test_a_failed_cli_snapshot_fails_the_run_and_dispatches_nothing(client):
-    from backend.app.worker import tasks
+    from backend.app.worker import agent_run_tasks, tasks
 
     _add_running_cli_sandbox(client, "shell_env")
     _add_run("run_bad", "shell_env")
     runtime = MagicMock()
     runtime.snapshot_cli.side_effect = RuntimeError("docker commit failed")
     with patch("forge.envgen.container.ContainerRuntime", return_value=runtime), \
-         patch.object(tasks, "chain") as chain:
+         patch.object(agent_run_tasks, "chain") as chain:
         tasks.run_container_run_task("run_bad")
 
     chain.return_value.apply_async.assert_not_called()
@@ -938,12 +942,12 @@ def test_a_failed_cli_snapshot_fails_the_run_and_dispatches_nothing(client):
 
 def test_http_runs_never_snapshot(client):
     # False-positive guard: app containers reset in place, so only CLI runs fork.
-    from backend.app.worker import tasks
+    from backend.app.worker import agent_run_tasks, tasks
 
     _add_running_general_sandbox(client, "app_env")
     _add_run("run_app", "app_env")
     with patch("forge.envgen.container.ContainerRuntime") as runtime_cls, \
-         patch.object(tasks, "chain"):
+         patch.object(agent_run_tasks, "chain"):
         tasks.run_container_run_task("run_app")
 
     runtime_cls.return_value.snapshot_cli.assert_not_called()
@@ -952,8 +956,8 @@ def test_http_runs_never_snapshot(client):
 @pytest.mark.parametrize(("episode_index", "refill"), [(0, True), (1, False)])
 def test_cli_episode_runs_in_a_fork_of_the_run_snapshot(client, episode_index, refill):
     from contextlib import contextmanager
-    from backend.app.worker import tasks
-    from forge.envgen.container import cli_snapshot_tag
+    from backend.app.worker import agent_run_tasks, tasks
+    from forge.envgen.docker_images import cli_snapshot_tag
 
     _add_running_cli_sandbox(client, "shell_env")
     _add_run("run_fork", "shell_env", num_episodes=2)
@@ -983,7 +987,7 @@ def test_cli_episode_runs_in_a_fork_of_the_run_snapshot(client, episode_index, r
 @pytest.mark.parametrize(("episode_index", "discarded"), [(0, False), (1, True)])
 def test_only_the_last_cli_episode_discards_the_run_snapshot(client, episode_index, discarded):
     from contextlib import contextmanager
-    from backend.app.worker import tasks
+    from backend.app.worker import agent_run_tasks, tasks
 
     _add_running_cli_sandbox(client, "shell_env")
     _add_run("run_gc", "shell_env", num_episodes=2)
@@ -1010,13 +1014,13 @@ def test_browser_episode_reaches_devtools_through_the_gateway(client):
     # The browser publishes nothing itself, so the CDP URL must use the
     # gateway's published port.
     from backend.app import database
-    from backend.app.worker import tasks
+    from backend.app.worker import agent_run_tasks, tasks
     from forge.envgen.container import ContainerRuntime
     from tests.envgen.fake_docker import FakeDocker
 
     daemon = FakeDocker()
     with patch("forge.envgen.container.docker.from_env", return_value=daemon), \
-         patch("forge.envgen.container._image_cached_locally", return_value=True):
+         patch("forge.envgen.docker_images.image_cached_locally", return_value=True):
         browser_id, _ = ContainerRuntime().run_browser("web_env")
     cdp_port = int(daemon.named("forge-web_env-gw").ports["9222/tcp"][0]["HostPort"])
 

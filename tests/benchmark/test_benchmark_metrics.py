@@ -104,6 +104,12 @@ def test_detect_reward_hacking_and_memorization_and_contamination():
     assert graphs_contam.diagnostics["contamination_risk"] == "high"
 
 
+@pytest.mark.parametrize(("n", "c", "k"), [(5, -1, 1), (5, 6, 1), (5, 2, 0), (-1, 0, 1)])
+def test_rejects_impossible_counts(n, c, k):
+    with pytest.raises(ValueError):
+        compute_pass_at_k(n=n, c=c, k=k)
+
+
 def test_rejects_invalid_sample_count():
     # Negative path: passing k > n should raise ValueError or return 0
     with pytest.raises((ValueError, ZeroDivisionError)):

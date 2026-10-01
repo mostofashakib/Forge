@@ -100,3 +100,47 @@ def test_rejects_empty_prompt():
     req = InferenceRequest(model="test", prompt="")
     # False-positive / boundary check: empty prompt should be handled gracefully or validated
     assert provider.generate(req).content is not None
+
+
+@pytest.mark.parametrize(
+    ("hardware", "expected"),
+    [
+        ({"cuda_available": True, "mps_available": False}, True),
+        ({"cuda_available": False, "mps_available": True}, True),
+        ({"cuda_available": False, "mps_available": False}, False),
+        ({}, False),
+        ({"error": "torch missing"}, False),
+    ],
+)
+def test_has_local_accelerator(hardware, expected):
+    from forge.contracts.gpu import has_local_accelerator
+
+    assert has_local_accelerator(hardware) is expected
+
+
+def test_compute_status_reports_hardware_and_gateway(monkeypatch):
+    from forge.contracts.gpu import compute_status
+
+    monkeypatch.setenv("FORGE_INFERENCE_GATEWAY_URL", "https://gw.example/v1")
+    monkeypatch.delenv("FORGE_INFERENCE_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    hardware = {"cuda_available": False, "mps_available": True, "devices": []}
+    with patch.object(GPUDeviceSpec, "probe_hardware", return_value=hardware):
+        status = compute_status()
+
+    assert status == {
+        "hardware": hardware,
+        "default_mode": "local_gpu",
+        "api_gateway": {"endpoint_url": "https://gw.example/v1", "has_api_key": False},
+    }
+
+
+def test_compute_status_falls_back_to_gateway_without_accelerator(monkeypatch):
+    from forge.contracts.gpu import compute_status
+
+    monkeypatch.setenv("FORGE_INFERENCE_API_KEY", "k")
+    with patch.object(GPUDeviceSpec, "probe_hardware", return_value={"cuda_available": False}):
+        status = compute_status()
+
+    assert status["default_mode"] == "api_gateway"
+    assert status["api_gateway"]["has_api_key"] is True

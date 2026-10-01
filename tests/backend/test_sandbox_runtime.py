@@ -102,7 +102,7 @@ def _silent_redis():
 ])
 def test_progress_stream_reports_a_build_that_already_finished(client, status, expected):
     _add_sandbox(client, "finished_env", status=status)
-    with patch("backend.app.api.sandbox.redis.asyncio.from_url", return_value=_silent_redis()):
+    with patch("redis.asyncio.from_url", return_value=_silent_redis()):
         with client.websocket_connect("/api/sandbox/ws/progress/finished_env") as ws:
             assert ws.receive_json() == expected
 
@@ -138,7 +138,7 @@ def test_activity_stream_reaps_the_docker_logs_process(client):
     async def fake_exec(*_args, **_kwargs):
         return proc
 
-    with patch("backend.app.api.sandbox.asyncio.create_subprocess_exec", fake_exec):
+    with patch("backend.app.api.sandbox_streams.asyncio.create_subprocess_exec", fake_exec):
         with client.websocket_connect("/api/sandbox/ws/activity/logs_env"):
             pass
 

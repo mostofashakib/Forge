@@ -7,11 +7,12 @@ and a pre-started spare means the next episode never waits for a boot.
 """
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from forge.envgen.container import ContainerRuntime, cli_snapshot_tag
+from forge.envgen.container import ContainerRuntime
+from forge.envgen.docker_images import cli_snapshot_tag
 from tests.envgen.fake_docker import FakeDocker
 
 SNAPSHOT = cli_snapshot_tag("shell", "run-1")
@@ -21,7 +22,7 @@ SNAPSHOT = cli_snapshot_tag("shell", "run-1")
 def daemon():
     fake = FakeDocker()
     with patch("forge.envgen.container.docker.from_env", return_value=fake), \
-         patch("forge.envgen.container._image_cached_locally", return_value=True):
+         patch("forge.envgen.docker_images.image_cached_locally", return_value=True):
         yield fake
 
 
@@ -30,11 +31,11 @@ def _containers(daemon: FakeDocker) -> dict[str, object]:
 
 
 def test_a_run_snapshots_the_environment_once_under_a_run_scoped_tag():
-    with patch("forge.envgen.container._docker_cli") as cli:
-        tag = ContainerRuntime().snapshot_cli("shell", "base-container", "run-1")
+    cli = MagicMock()
+    tag = ContainerRuntime(cli=cli).snapshot_cli("shell", "base-container", "run-1")
 
     assert tag == SNAPSHOT
-    cli.assert_called_once_with("commit", "base-container", SNAPSHOT)
+    cli.run.assert_called_once_with("commit", "base-container", SNAPSHOT)
 
 
 def test_a_new_run_gets_a_new_snapshot_tag():
@@ -115,8 +116,8 @@ def test_removing_the_environment_also_removes_its_warm_and_episode_containers(d
 
 
 def test_discarding_a_snapshot_removes_its_image_and_tolerates_a_missing_one():
-    with patch("forge.envgen.container.subprocess.run") as run:
-        ContainerRuntime.discard_cli_snapshot(SNAPSHOT)
+    with patch("subprocess.run") as run:
+        ContainerRuntime().discard_cli_snapshot(SNAPSHOT)
 
     assert run.call_args.args[0] == ["docker", "rmi", "-f", SNAPSHOT]
     assert run.call_args.kwargs["check"] is False

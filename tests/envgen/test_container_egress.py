@@ -11,11 +11,9 @@ from unittest.mock import patch
 
 import pytest
 
-from forge.envgen.container import (
-    FORGE_GATEWAY_IMAGE,
-    ContainerRuntime,
-    sandbox_network_name,
-)
+from forge.envgen.container import ContainerRuntime
+from forge.envgen.docker_images import FORGE_GATEWAY_IMAGE
+from forge.envgen.sandbox_network import sandbox_network_name
 from tests.envgen.fake_docker import FakeDocker
 
 APP_IMAGE = "forge-env-mail:latest"
@@ -25,7 +23,7 @@ APP_IMAGE = "forge-env-mail:latest"
 def daemon():
     fake = FakeDocker()
     with patch("forge.envgen.container.docker.from_env", return_value=fake), \
-         patch("forge.envgen.container._image_cached_locally", return_value=True):
+         patch("forge.envgen.docker_images.image_cached_locally", return_value=True):
         yield fake
 
 

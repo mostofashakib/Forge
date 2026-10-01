@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from backend.app.models import SandboxEnvironment
-from backend.app.worker import tasks
+from backend.app.worker import sandbox_build_tasks as tasks
 from forge.envgen.correctness_validator import (
     CorrectnessFinding, CorrectnessValidationError, CorrectnessValidationResult,
 )

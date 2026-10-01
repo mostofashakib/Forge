@@ -3,6 +3,7 @@ import json
 
 from pydantic import BaseModel
 
+from forge.contracts import CheckResult, VerificationResult
 from forge.extraction.llm_client import LLMClient, get_judge_client
 from forge.runtime.errors import GradingError
 from forge.envgen.config import envgen_config
@@ -24,6 +25,14 @@ _SCORER_SYSTEM = (
     "  1.0     — objective fully achieved\n"
     "Be concise. Call the extract tool with your numeric score and a one-sentence reasoning."
 )
+
+
+def objective_verification(score: float, success_threshold: float) -> VerificationResult:
+    """The objective scorer's verdict as a verification result."""
+    return VerificationResult.from_checks(
+        "objective_scorer",
+        [CheckResult(name="objective_score", passed=score >= success_threshold, score=score)],
+    )
 
 
 class ObjectivePrompts:

@@ -1,10 +1,10 @@
 """Training API: orchestrates policy training (GRPO, DPO, SFT, PPO) from graded rollouts, synthetic data, and preference datasets."""
 from __future__ import annotations
 
-import json
 import logging
 import threading
 import uuid
+from functools import partial
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
@@ -14,18 +14,22 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from backend.app.database import get_db, get_session_factory
-from backend.app.models import Episode, TaskBatch, TrainingRun
-from backend.app.services import task_registry
+from backend.app.models import TaskBatch, TrainingRun
+from backend.app.services.training_data import (
+    episode_counts_by_env,
+    stage_available_data,
+    stage_batch_by_id,
+)
+from backend.app.services.training_runs import execute_training_run
 from forge.paths import confined_relative_path
 from forge.training.checkpoint import PolicyCheckpoint
 from forge.training.trainer import (
-    NoTrainingSignalError,
     PolicyTrainer,
     TrainingConfig,
     TrainingObjective,
 )
 
-from forge.contracts.gpu import APIGatewaySpec, GPUDeviceSpec, GPUInferenceContract, InferenceMode
+from forge.contracts.gpu import compute_status
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/training", tags=["training"])
@@ -82,8 +86,9 @@ def get_training_data_sources(db: Session = Depends(get_db)) -> list[dict[str, A
     # 2. Completed environment episodes
     try:
         from backend.app.services.task_factory_targets import list_targets
+        episode_counts = episode_counts_by_env(db)
         for target in list_targets(db):
-            count = db.query(Episode).filter(Episode.env_name == target.name).count()
+            count = episode_counts.get(target.name, 0)
             if count > 0:
                 sources.append({
                     "id": f"env:{target.name}",
@@ -114,247 +119,7 @@ def get_training_data_sources(db: Session = Depends(get_db)) -> list[dict[str, A
 @router.get("/hardware")
 def get_training_hardware() -> dict[str, Any]:
     """Inspect local GPU devices (CUDA/MPS) and configured cloud gateway for training."""
-    hardware = GPUDeviceSpec.probe_hardware()
-    gw_spec = APIGatewaySpec()
-    return {
-        "hardware": hardware,
-        "default_mode": "local_gpu" if hardware.get("cuda_available") or hardware.get("mps_available") else "api_gateway",
-        "api_gateway": {
-            "endpoint_url": gw_spec.endpoint_url,
-            "has_api_key": bool(gw_spec.resolved_api_key()),
-        },
-    }
-
-
-def _execute_training_run(run_id: str, config: TrainingConfig) -> None:
-    """Execute policy training in a background worker thread."""
-    SessionLocal = get_session_factory()
-    with SessionLocal() as db:
-        run = db.get(TrainingRun, run_id)
-        if not run:
-            return
-        run.status = "running"
-        db.commit()
-
-    try:
-        trainer = PolicyTrainer()
-        result = trainer.train(config)
-        with SessionLocal() as db:
-            run = db.get(TrainingRun, run_id)
-            if run:
-                run.status = "completed"
-                run.checkpoint_path = result.checkpoint_path
-                run.num_examples = result.num_examples
-                run.mean_reward = getattr(result, "mean_reward", 0.0)
-                run.completed_at = datetime.now(timezone.utc)
-                db.commit()
-        logger.info("[training] run %s completed: checkpoint at %s", run_id, result.checkpoint_path)
-    except NoTrainingSignalError as exc:
-        logger.warning("[training] run %s failed with no training signal: %s", run_id, exc)
-        with SessionLocal() as db:
-            run = db.get(TrainingRun, run_id)
-            if run:
-                run.status = "failed"
-                run.error = f"No training signal: {exc}"
-                run.completed_at = datetime.now(timezone.utc)
-                db.commit()
-    except Exception as exc:
-        logger.exception("[training] run %s encountered an error: %s", run_id, exc)
-        with SessionLocal() as db:
-            run = db.get(TrainingRun, run_id)
-            if run:
-                run.status = "failed"
-                run.error = str(exc)
-                run.completed_at = datetime.now(timezone.utc)
-                db.commit()
-
-
-def _stage_generator_batch(batch_id: str, target_dir: Path, db: Session) -> Path:
-    target_dir.mkdir(parents=True, exist_ok=True)
-    batch_dict = task_registry.get_batch(db, batch_id)
-    if not batch_dict:
-        return target_dir
-
-    tasks = batch_dict.get("tasks", [])
-    rejections = batch_dict.get("rejections", [])
-    env_name = batch_dict.get("env_name", "generator")
-
-    # 1. Write batch_export.json
-    try:
-        (target_dir / "batch_export.json").write_text(json.dumps(batch_dict, indent=2))
-    except Exception:
-        pass
-
-    # 2. Write SFT pairs
-    sft_rows = []
-    for t in tasks:
-        prompt = t.get("objective") or t.get("prompt") or ""
-        golden = t.get("golden", [])
-        completion = "\n".join(
-            f"$ {s.get('command') or s.get('tool', '')}" if isinstance(s, dict) else str(s)
-            for s in golden
-        ) if golden else str(t.get("completion", ""))
-        if prompt and completion:
-            sft_rows.append({
-                "messages": [
-                    {"role": "user", "content": f"Task: {prompt}\nEnvironment: {env_name}"},
-                    {"role": "assistant", "content": completion},
-                ],
-                "prompt": f"Task: {prompt}\nEnvironment: {env_name}",
-                "completion": completion,
-                "total_reward": 1.0,
-            })
-    if sft_rows:
-        with (target_dir / "sft_pairs.jsonl").open("w") as fh:
-            for row in sft_rows:
-                fh.write(json.dumps(row) + "\n")
-
-    # 3. Write Preference pairs
-    pref_rows = []
-    for task in tasks:
-        rej = next((r for r in rejections if r.get("slot_index") == task.get("slot_index")), None)
-        prompt = task.get("objective", "")
-        chosen = "\n".join(s.get("command") or s.get("tool", "") for s in task.get("golden", []))
-        rejected = rej.get("reason", "Execution failed") if rej else "Execution failed validation"
-        pref_rows.append({
-            "task": prompt,
-            "env_name": env_name,
-            "chosen": [
-                {"role": "user", "content": f"Task: {prompt}\nEnvironment: {env_name}"},
-                {"role": "assistant", "content": chosen},
-            ],
-            "rejected": [
-                {"role": "user", "content": f"Task: {prompt}\nEnvironment: {env_name}"},
-                {"role": "assistant", "content": rejected},
-            ],
-            "chosen_reward": 1.0,
-            "rejected_reward": 0.0,
-            "chosen_passed": True,
-            "rejected_passed": False,
-        })
-    if pref_rows:
-        with (target_dir / "preference_pairs.jsonl").open("w") as fh:
-            for row in pref_rows:
-                fh.write(json.dumps(row) + "\n")
-
-    # 4. Write GRPO/PPO rollouts
-    try:
-        import pandas as pd
-        rollout_rows = []
-        for i, t in enumerate(tasks):
-            prompt = t.get("objective", "")
-            golden = t.get("golden", [])
-            completion = "\n".join(s.get("command") or s.get("tool", "") for s in golden)
-            rollout_rows.append({
-                "episode_id": f"ep_gen_{t.get('id', i)}",
-                "env_name": env_name,
-                "task_name": prompt[:40],
-                "prompt": f"Task: {prompt}\nEnvironment: {env_name}",
-                "completion": completion,
-                "total_reward": 1.0,
-                "passed": True,
-                "per_step_rewards": json.dumps([1.0]),
-                "behavior_model": "synthetic_generator",
-            })
-        if rollout_rows:
-            # Contrastive row for group advantage variance
-            rollout_rows.append({
-                "episode_id": f"ep_gen_fail_{rollout_rows[0]['task_name']}",
-                "env_name": rollout_rows[0]["env_name"],
-                "task_name": rollout_rows[0]["task_name"],
-                "prompt": rollout_rows[0]["prompt"],
-                "completion": "failed step",
-                "total_reward": 0.0,
-                "passed": False,
-                "per_step_rewards": json.dumps([0.0]),
-                "behavior_model": "synthetic_generator",
-            })
-            pd.DataFrame(rollout_rows).to_parquet(target_dir / "grpo_rollouts.parquet", index=False)
-    except Exception as exc:
-        logger.warning("[training] could not write rollouts parquet: %s", exc)
-
-    return target_dir
-
-
-def _auto_populate_training_data(data_dir: Path, db: Session, objective: str) -> None:
-    """Ensure data_dir has learnable signal from DB episodes, task batches, or sample stubs."""
-    data_dir.mkdir(parents=True, exist_ok=True)
-    # 1. Try to export episodes from DB if any exist
-    try:
-        from backend.app.services.export_writers import grpo_rollouts, preference_pairs, sft_pairs
-        from backend.app.services.task_factory_targets import list_targets
-        for target in list_targets(db):
-            has_ep = db.query(Episode).filter(Episode.env_name == target.name).count() > 0
-            if has_ep:
-                grpo_rollouts.write(target.name, db, data_dir)
-                preference_pairs.write(target.name, db, data_dir)
-                sft_pairs.write(target.name, db, data_dir)
-                return
-    except Exception as exc:
-        logger.warning("[training] export writers error: %s", exc)
-
-    # 2. Try latest task batch from DB
-    try:
-        batch = db.query(TaskBatch).filter(TaskBatch.deleted_at.is_(None)).order_by(TaskBatch.created_at.desc()).first()
-        if batch:
-            _stage_generator_batch(batch.id, data_dir, db)
-            return
-    except Exception as exc:
-        logger.warning("[training] stage batch error: %s", exc)
-
-    # 3. Create starter signal files so training pipeline functions reliably
-    try:
-        import pandas as pd
-        rollouts = [
-            {
-                "episode_id": "ep_starter_0",
-                "env_name": "starter",
-                "task_name": "starter_task",
-                "prompt": "Task: execute command\nEnvironment: starter",
-                "completion": "$ echo hello",
-                "total_reward": 1.0,
-                "passed": True,
-                "per_step_rewards": json.dumps([1.0]),
-                "behavior_model": "starter_model",
-            },
-            {
-                "episode_id": "ep_starter_1",
-                "env_name": "starter",
-                "task_name": "starter_task",
-                "prompt": "Task: execute command\nEnvironment: starter",
-                "completion": "$ false",
-                "total_reward": 0.0,
-                "passed": False,
-                "per_step_rewards": json.dumps([0.0]),
-                "behavior_model": "starter_model",
-            },
-        ]
-        pd.DataFrame(rollouts).to_parquet(data_dir / "grpo_rollouts.parquet", index=False)
-
-        with (data_dir / "preference_pairs.jsonl").open("w") as fh:
-            fh.write(json.dumps({
-                "task": "starter_task",
-                "env_name": "starter",
-                "chosen": [{"role": "user", "content": "Task: execute command\nEnvironment: starter"}, {"role": "assistant", "content": "$ echo hello"}],
-                "rejected": [{"role": "user", "content": "Task: execute command\nEnvironment: starter"}, {"role": "assistant", "content": "$ false"}],
-                "chosen_reward": 1.0,
-                "rejected_reward": 0.0,
-                "chosen_passed": True,
-                "rejected_passed": False,
-            }) + "\n")
-
-        with (data_dir / "sft_pairs.jsonl").open("w") as fh:
-            fh.write(json.dumps({
-                "messages": [
-                    {"role": "user", "content": "Task: execute command\nEnvironment: starter"},
-                    {"role": "assistant", "content": "$ echo hello"},
-                ],
-                "prompt": "Task: execute command\nEnvironment: starter",
-                "completion": "$ echo hello",
-                "total_reward": 1.0,
-            }) + "\n")
-    except Exception as exc:
-        logger.warning("[training] could not write starter files: %s", exc)
+    return compute_status()
 
 
 @router.post("/runs", status_code=202)
@@ -368,8 +133,7 @@ def create_training_run(
     # Handle generator batch selection (e.g. generator:tb_123 or tb_123)
     if data_dir_param.startswith("generator:") or data_dir_param.startswith("tb_") or "generator/tb_" in data_dir_param:
         batch_id = data_dir_param.split(":")[-1].split("/")[-1]
-        target_dir = root / "exports" / "generator" / batch_id
-        data_dir = _stage_generator_batch(batch_id, target_dir, db)
+        data_dir = stage_batch_by_id(db, batch_id, root / "exports" / "generator" / batch_id)
     else:
         try:
             data_dir = confined_relative_path(root, data_dir_param)
@@ -377,8 +141,13 @@ def create_training_run(
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
         if not data_dir.exists():
-            data_dir.mkdir(parents=True, exist_ok=True)
-            _auto_populate_training_data(data_dir, db, body.objective)
+            data_dir.mkdir(parents=True)
+            if not stage_available_data(db, data_dir):
+                data_dir.rmdir()
+                raise HTTPException(
+                    status_code=422,
+                    detail="No training data found. Run agent episodes or generate a task batch first.",
+                )
 
     try:
         output_dir = confined_relative_path(root, body.output_dir)
@@ -415,7 +184,14 @@ def create_training_run(
     )
 
     thread = threading.Thread(
-        target=_execute_training_run, args=(run_id, config), daemon=True
+        target=partial(
+            execute_training_run,
+            run_id,
+            config,
+            session_factory=get_session_factory(),
+            trainer=PolicyTrainer(),
+        ),
+        daemon=True,
     )
     thread.start()
 

@@ -144,3 +144,51 @@ def test_budget_truncation_policy():
     assert res.truncated
     assert res.reason == "max_steps"
     assert res.reason in BUDGET_REASONS
+
+
+def test_environment_version_ignores_run_outputs(tmp_path):
+    from forge.runtime.reliability import compute_environment_version
+
+    env_dir = tmp_path / "ledger"
+    (env_dir / "transitions").mkdir(parents=True)
+    (env_dir / "gym_wrapper.py").write_text("def build(): ...\n")
+    before = compute_environment_version("ledger", env_type="in_process", env_dir=env_dir)
+
+    # Everything a run writes beside the package.
+    for output in ("episodes/ep_1.jsonl", "episodes/ep_1.trace.jsonl", "agent_episodes/cep_1.jsonl",
+                   "exports/sft.jsonl", "__pycache__/gym_wrapper.cpython-311.pyc", "port"):
+        (env_dir / output).parent.mkdir(parents=True, exist_ok=True)
+        (env_dir / output).write_text("x")
+
+    assert compute_environment_version("ledger", env_type="in_process", env_dir=env_dir) == before
+
+
+def test_environment_version_changes_when_the_package_changes(tmp_path):
+    from forge.runtime.reliability import compute_environment_version
+
+    env_dir = tmp_path / "ledger"
+    env_dir.mkdir()
+    (env_dir / "gym_wrapper.py").write_text("def build(): ...\n")
+    before = compute_environment_version("ledger", env_type="in_process", env_dir=env_dir)
+
+    (env_dir / "gym_wrapper.py").write_text("def build(): return 1\n")
+
+    assert compute_environment_version("ledger", env_type="in_process", env_dir=env_dir) != before
+
+
+def test_a_type_error_inside_the_runner_is_not_mistaken_for_a_signature_mismatch(monkeypatch):
+    # The runner's own bug must surface, not trigger re-invoking the episode
+    # with other argument shapes inside the same attempt.
+    monkeypatch.setenv("FORGE_RETRY_CAP", "0")
+    calls = []
+
+    def buggy_runner(attempt: int, seed: int):
+        calls.append((attempt, seed))
+        raise TypeError("unsupported operand type(s)")
+
+    with pytest.raises(TypeError, match="unsupported operand"):
+        execute_reliable_episode(
+            task_runner=buggy_runner, task_id="t", env_name="e", environment_version="v", seed=7,
+        )
+
+    assert calls == [(0, 7)]

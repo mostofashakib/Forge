@@ -6,13 +6,12 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.concurrency import run_in_threadpool
+from fastapi import APIRouter, Depends, HTTPException, WebSocket
 from pydantic import BaseModel, Field, model_validator
 from typing import Literal
 from sqlalchemy.orm import Session
 
-from backend.app.api._pubsub_relay import relay_pubsub
+from backend.app.api._pubsub_relay import stream_channel
 from backend.app.database import get_db, get_session_factory
 from backend.app.models import BenchmarkRun
 from forge.paths import confined_relative_path
@@ -24,7 +23,7 @@ logger = logging.getLogger(__name__)
 # Lazy module-level reference so tests can patch backend.app.api.benchmark.run_benchmark_task.
 # The actual import is deferred to avoid circular-import issues at package load time.
 try:
-    from backend.app.worker.tasks import run_benchmark_task, run_evaluation_task, run_transfer_task  # noqa: F401
+    from backend.app.worker.benchmark_tasks import run_benchmark_task, run_evaluation_task, run_transfer_task  # noqa: F401
 except Exception:  # pragma: no cover
     run_benchmark_task = None  # type: ignore[assignment]
     run_evaluation_task = None  # type: ignore[assignment]
@@ -124,9 +123,8 @@ def list_benchmark_runs(db: Session = Depends(get_db)):
 @router.get("/evals/capabilities")
 def evaluation_capabilities():
     bundled_harbor = Path.cwd() / "example_tasks" / ".venv" / "bin" / "harbor"
-    from forge.contracts.gpu import APIGatewaySpec, GPUDeviceSpec
-    hardware = GPUDeviceSpec.probe_hardware()
-    gw_spec = APIGatewaySpec()
+    from forge.contracts.gpu import compute_status
+    status = compute_status()
     return {
         "engines": {
             "forge": {"available": True},
@@ -136,12 +134,9 @@ def evaluation_capabilities():
             },
         },
         "compute": {
-            "hardware": hardware,
-            "local_gpu_available": bool(hardware.get("cuda_available") or hardware.get("mps_available")),
-            "api_gateway": {
-                "endpoint_url": gw_spec.endpoint_url,
-                "has_api_key": bool(gw_spec.resolved_api_key()),
-            },
+            "hardware": status["hardware"],
+            "local_gpu_available": status["default_mode"] == "local_gpu",
+            "api_gateway": status["api_gateway"],
             "supported_modes": ["auto", "local_gpu", "api_gateway"],
         },
     }
@@ -367,44 +362,14 @@ def _finished_run_message(run_id: str) -> dict | None:
 @router.websocket("/ws/progress/{run_id}")
 async def benchmark_progress_ws(websocket: WebSocket, run_id: str):
     """Stream benchmark run progress from Celery worker via Redis pub/sub."""
-    import redis
-    await websocket.accept()
-
-    redis_connection_url = redis_url()
-    channel = f"forge:benchmark:{run_id}"
-    try:
-        r = redis.asyncio.from_url(redis_connection_url)
-        pubsub = r.pubsub()
-        await pubsub.subscribe(channel)
-        logger.info("[ws:benchmark] subscribed to %s", channel)
-    except Exception:
-        logger.exception("[ws:benchmark] FAILED to connect to Redis")
-        await websocket.close(code=1011)
-        return
-
-    try:
-        # Checked after subscribing, so a run that ends in between still
-        # reaches this client through the channel.
-        finished = await run_in_threadpool(_finished_run_message, run_id)
-        if finished is not None:
-            await websocket.send_json(finished)
-        else:
-            await relay_pubsub(
-                websocket,
-                pubsub,
-                is_final=lambda data: bool(data.get("done") or data.get("error")),
-            )
-    except WebSocketDisconnect:
-        logger.info("[ws:benchmark] client disconnected — run_id=%s", run_id)
-    except Exception:
-        logger.exception("[ws:benchmark] unexpected error for %s", run_id)
-    finally:
-        await pubsub.unsubscribe(channel)
-        await r.aclose()
-        try:
-            await websocket.close()
-        except RuntimeError:
-            pass
+    await stream_channel(
+        websocket,
+        redis_url=redis_url(),
+        channel=f"forge:benchmark:{run_id}",
+        finished_message=lambda: _finished_run_message(run_id),
+        is_final=lambda data: bool(data.get("done") or data.get("error")),
+        log_tag="benchmark",
+    )
 
 
 def _run_to_dict(run: BenchmarkRun) -> dict:

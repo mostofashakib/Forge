@@ -100,12 +100,12 @@ def daemon():
     fake = FakeDocker()
     with patch("forge.envgen.container.docker.from_env", return_value=fake), \
          patch("backend.app.services.task_factory_targets.docker.from_env", return_value=fake), \
-         patch("forge.envgen.container._image_cached_locally", return_value=True):
+         patch("forge.envgen.docker_images.image_cached_locally", return_value=True):
         yield fake
 
 
 def test_a_cli_target_forks_from_its_container(db, envs_dir, daemon):
-    with patch("forge.envgen.container.ensure_cli_image", return_value="forge-cli:test"):
+    with patch("forge.envgen.docker_images.ensure_cli_image", return_value="forge-cli:test"):
         cid, _ = ContainerRuntime().run_cli("shell")
     _sandbox(db, "shell", "cli", container_id=cid)
 

@@ -9,32 +9,13 @@ import pytest
 
 from tests.envgen.fake_docker import FakeDocker
 
-from forge.envgen.container import (
-    ContainerRuntime,
-    FORGE_APP_PORT,
-    FORGE_PYTHON_BASE,
-    STANDARD_BASE_IMAGES,
-    CLI_DOCKERFILE,
-    CLI_RUNTIME_IMAGE,
-    _cli_image_tag,
-    ensure_cli_image,
-    FORGE_BROWSER_IMAGE,
-    FORGE_CLI_IMAGE,
-    RUNTIME_LOCK,
-    _HUB_MIRRORS,
-    _image_cached_locally,
-    _is_hub_image,
-    _mirror_ref_for,
-    _normalise_dockerfile_base,
-    _normalise_dockerfile_install,
-    _normalise_dockerfile_port,
-    _parse_from_image,
-    _pull_with_retry,
-    _wait_for_port_binding,
-    _write_locked_requirements,
-    prewarm_standard_base_images,
-    pull_image,
-)
+from forge.envgen.container import ContainerRuntime
+from forge.envgen.sandbox_network import container_name
+from forge.envgen.container_specs import FORGE_APP_PORT
+from forge.envgen.docker_images import CLI_DOCKERFILE, CLI_RUNTIME_IMAGE, FORGE_BROWSER_IMAGE, FORGE_CLI_IMAGE, FORGE_PYTHON_BASE, STANDARD_BASE_IMAGES, _HUB_MIRRORS, _cli_image_tag, _is_hub_image, _mirror_ref_for, _pull_with_retry, ensure_cli_image, image_cached_locally, prewarm_standard_base_images, pull_image
+from forge.envgen.dockerfile import normalise_dockerfile_base, normalise_dockerfile_install, normalise_dockerfile_port, parse_from_image, write_locked_requirements
+from forge.envgen.runtime_lock import RUNTIME_LOCK
+from forge.envgen.sandbox_network import wait_for_port_binding
 
 
 # ---------------------------------------------------------------------------
@@ -42,59 +23,59 @@ from forge.envgen.container import (
 # ---------------------------------------------------------------------------
 
 def test_container_name_alphanumeric():
-    assert ContainerRuntime._container_name("myenv") == "forge-myenv"
+    assert container_name("myenv") == "forge-myenv"
 
 
 def test_container_name_underscores_preserved():
-    assert ContainerRuntime._container_name("my_env") == "forge-my_env"
+    assert container_name("my_env") == "forge-my_env"
 
 
 def test_container_name_hyphens_preserved():
-    assert ContainerRuntime._container_name("my-env") == "forge-my-env"
+    assert container_name("my-env") == "forge-my-env"
 
 
 def test_container_name_spaces_replaced():
-    assert ContainerRuntime._container_name("my env") == "forge-my-env"
+    assert container_name("my env") == "forge-my-env"
 
 
 def test_container_name_special_chars_replaced():
-    assert ContainerRuntime._container_name("env@v1!") == "forge-env-v1-"
+    assert container_name("env@v1!") == "forge-env-v1-"
 
 
 # ---------------------------------------------------------------------------
-# _parse_from_image — Dockerfile FROM parsing
+# parse_from_image — Dockerfile FROM parsing
 # ---------------------------------------------------------------------------
 
 def test_parse_from_standard(tmp_path):
     df = tmp_path / "Dockerfile"
     df.write_text("FROM python:3.12-slim\nWORKDIR /app\n")
-    assert _parse_from_image(df) == "python:3.12-slim"
+    assert parse_from_image(df) == "python:3.12-slim"
 
 
 def test_parse_from_llm_version(tmp_path):
     """LLM often generates python:3.11-slim — must be parsed correctly."""
     df = tmp_path / "Dockerfile"
     df.write_text("FROM python:3.11-slim\nWORKDIR /app\n")
-    assert _parse_from_image(df) == "python:3.11-slim"
+    assert parse_from_image(df) == "python:3.11-slim"
 
 
 def test_parse_from_strips_build_stage_alias(tmp_path):
     df = tmp_path / "Dockerfile"
     df.write_text("FROM python:3.12-slim AS builder\nWORKDIR /app\n")
-    assert _parse_from_image(df) == "python:3.12-slim"
+    assert parse_from_image(df) == "python:3.12-slim"
 
 
 def test_parse_from_scratch_returns_none(tmp_path):
     """scratch has no registry — no pull needed."""
     df = tmp_path / "Dockerfile"
     df.write_text("FROM scratch\nCOPY binary /\n")
-    assert _parse_from_image(df) is None
+    assert parse_from_image(df) is None
 
 
 def test_parse_from_ubuntu(tmp_path):
     df = tmp_path / "Dockerfile"
     df.write_text("FROM ubuntu:22.04\nRUN apt-get update\n")
-    assert _parse_from_image(df) == "ubuntu:22.04"
+    assert parse_from_image(df) == "ubuntu:22.04"
 
 
 def test_parse_from_takes_first_from_in_multistage(tmp_path):
@@ -104,13 +85,13 @@ def test_parse_from_takes_first_from_in_multistage(tmp_path):
         "FROM node:20-slim AS frontend\n"
         "FROM base AS final\n"
     )
-    assert _parse_from_image(df) == "python:3.12-slim"
+    assert parse_from_image(df) == "python:3.12-slim"
 
 
 def test_parse_from_missing_returns_none(tmp_path):
     df = tmp_path / "Dockerfile"
     df.write_text("# no FROM here\nRUN echo hello\n")
-    assert _parse_from_image(df) is None
+    assert parse_from_image(df) is None
 
 
 # ---------------------------------------------------------------------------
@@ -118,8 +99,8 @@ def test_parse_from_missing_returns_none(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_pull_with_retry_succeeds_on_first_attempt():
-    with patch("forge.envgen.container.subprocess.run") as mock_run, \
-         patch("forge.envgen.container.time.sleep"):
+    with patch("subprocess.run") as mock_run, \
+         patch("time.sleep"):
         mock_run.return_value = MagicMock(returncode=0)
         _pull_with_retry("python:3.12-slim")
 
@@ -131,8 +112,8 @@ def test_pull_with_retry_succeeds_on_first_attempt():
 
 def test_pull_with_retry_timeout_is_passed_to_subprocess():
     """Custom pull_timeout is forwarded to subprocess.run."""
-    with patch("forge.envgen.container.subprocess.run") as mock_run, \
-         patch("forge.envgen.container.time.sleep"):
+    with patch("subprocess.run") as mock_run, \
+         patch("time.sleep"):
         mock_run.return_value = MagicMock(returncode=0)
         _pull_with_retry("python:3.12-slim", pull_timeout=60)
 
@@ -143,8 +124,8 @@ def test_pull_with_retry_timeout_is_passed_to_subprocess():
 def test_pull_with_retry_retries_on_timeout_expired():
     """TimeoutExpired is a transient error — must retry, not fail immediately."""
     timeout_exc = subprocess.TimeoutExpired(["docker", "pull"], 120)
-    with patch("forge.envgen.container.subprocess.run") as mock_run, \
-         patch("forge.envgen.container.time.sleep") as mock_sleep:
+    with patch("subprocess.run") as mock_run, \
+         patch("time.sleep") as mock_sleep:
         mock_run.side_effect = [timeout_exc, MagicMock(returncode=0)]
         _pull_with_retry("python:3.12-slim", max_attempts=3)
 
@@ -155,8 +136,8 @@ def test_pull_with_retry_retries_on_timeout_expired():
 def test_pull_with_retry_timeout_message_in_error():
     """When all attempts time out the RuntimeError must mention the timeout."""
     timeout_exc = subprocess.TimeoutExpired(["docker", "pull"], 120)
-    with patch("forge.envgen.container.subprocess.run", side_effect=timeout_exc), \
-         patch("forge.envgen.container.time.sleep"):
+    with patch("subprocess.run", side_effect=timeout_exc), \
+         patch("time.sleep"):
         with pytest.raises(RuntimeError, match="timed out"):
             _pull_with_retry("python:3.12-slim", max_attempts=2)
 
@@ -164,8 +145,8 @@ def test_pull_with_retry_timeout_message_in_error():
 def test_pull_with_retry_retries_on_eof_then_succeeds():
     """Simulates an EOF on the first pull attempt, success on the second."""
     eof_exc = subprocess.CalledProcessError(1, "docker pull")
-    with patch("forge.envgen.container.subprocess.run") as mock_run, \
-         patch("forge.envgen.container.time.sleep") as mock_sleep:
+    with patch("subprocess.run") as mock_run, \
+         patch("time.sleep") as mock_sleep:
         mock_run.side_effect = [eof_exc, MagicMock(returncode=0)]
         _pull_with_retry("python:3.12-slim", max_attempts=3)
 
@@ -176,8 +157,8 @@ def test_pull_with_retry_retries_on_eof_then_succeeds():
 def test_pull_with_retry_raises_after_all_attempts_exhausted():
     """All attempts fail → RuntimeError is raised, not CalledProcessError."""
     eof_exc = subprocess.CalledProcessError(1, "docker pull")
-    with patch("forge.envgen.container.subprocess.run", side_effect=eof_exc), \
-         patch("forge.envgen.container.time.sleep"):
+    with patch("subprocess.run", side_effect=eof_exc), \
+         patch("time.sleep"):
         with pytest.raises(RuntimeError, match="Failed to pull python:3.12-slim after 3 attempts"):
             _pull_with_retry("python:3.12-slim", max_attempts=3)
 
@@ -186,8 +167,8 @@ def test_pull_with_retry_exponential_backoff():
     """Backoff delays must be 1 s, 2 s (2^0, 2^1) for a 3-attempt run."""
     eof_exc = subprocess.CalledProcessError(1, "docker pull")
     delays = []
-    with patch("forge.envgen.container.subprocess.run", side_effect=eof_exc), \
-         patch("forge.envgen.container.time.sleep", side_effect=lambda d: delays.append(d)):
+    with patch("subprocess.run", side_effect=eof_exc), \
+         patch("time.sleep", side_effect=lambda d: delays.append(d)):
         with pytest.raises(RuntimeError):
             _pull_with_retry("python:3.12-slim", max_attempts=3)
 
@@ -199,8 +180,8 @@ def test_pull_with_retry_surfaces_docker_stderr_in_error():
     exc_with_output = subprocess.CalledProcessError(
         1, "docker pull", stderr="Error response from daemon: EOF"
     )
-    with patch("forge.envgen.container.subprocess.run", side_effect=exc_with_output), \
-         patch("forge.envgen.container.time.sleep"):
+    with patch("subprocess.run", side_effect=exc_with_output), \
+         patch("time.sleep"):
         with pytest.raises(RuntimeError, match="Error response from daemon: EOF"):
             _pull_with_retry("python:3.12-slim", max_attempts=1)
 
@@ -211,8 +192,8 @@ def test_pull_with_retry_fails_fast_on_image_not_found():
         1, "docker pull",
         stderr="Error response from daemon: manifest for python:0.0.0 not found",
     )
-    with patch("forge.envgen.container.subprocess.run", side_effect=exc_not_found) as mock_run, \
-         patch("forge.envgen.container.time.sleep") as mock_sleep:
+    with patch("subprocess.run", side_effect=exc_not_found) as mock_run, \
+         patch("time.sleep") as mock_sleep:
         with pytest.raises(RuntimeError, match="not found"):
             _pull_with_retry("python:0.0.0", max_attempts=3)
 
@@ -227,8 +208,8 @@ def test_pull_with_retry_fails_fast_on_auth_denied():
         1, "docker pull",
         stderr="Error response from daemon: pull access denied for private/image",
     )
-    with patch("forge.envgen.container.subprocess.run", side_effect=exc_denied) as mock_run, \
-         patch("forge.envgen.container.time.sleep"):
+    with patch("subprocess.run", side_effect=exc_denied) as mock_run, \
+         patch("time.sleep"):
         with pytest.raises(RuntimeError, match="Failed to pull"):
             _pull_with_retry("private/image", max_attempts=3)
 
@@ -242,8 +223,8 @@ def test_pull_with_retry_eof_uses_capped_backoff():
         stderr="failed to do request: Head ...: EOF",
     )
     delays: list[float] = []
-    with patch("forge.envgen.container.subprocess.run", side_effect=eof_exc), \
-         patch("forge.envgen.container.time.sleep", side_effect=lambda d: delays.append(d)):
+    with patch("subprocess.run", side_effect=eof_exc), \
+         patch("time.sleep", side_effect=lambda d: delays.append(d)):
         with pytest.raises(RuntimeError, match="Failed to pull"):
             _pull_with_retry("python:3.11-slim", max_attempts=5)
 
@@ -252,13 +233,13 @@ def test_pull_with_retry_eof_uses_capped_backoff():
 
 
 # ---------------------------------------------------------------------------
-# _image_cached_locally
+# image_cached_locally
 # ---------------------------------------------------------------------------
 
 def test_image_cached_locally_returns_true_when_inspect_succeeds():
-    with patch("forge.envgen.container.subprocess.run") as mock_run:
+    with patch("subprocess.run") as mock_run:
         mock_run.return_value = MagicMock(returncode=0)
-        assert _image_cached_locally("python:3.12-slim") is True
+        assert image_cached_locally("python:3.12-slim") is True
 
     mock_run.assert_called_once_with(
         ["docker", "image", "inspect", "python:3.12-slim"],
@@ -267,14 +248,14 @@ def test_image_cached_locally_returns_true_when_inspect_succeeds():
 
 
 def test_image_cached_locally_returns_false_when_inspect_fails():
-    with patch("forge.envgen.container.subprocess.run") as mock_run:
+    with patch("subprocess.run") as mock_run:
         mock_run.return_value = MagicMock(returncode=1)
-        assert _image_cached_locally("python:3.11-slim") is False
+        assert image_cached_locally("python:3.11-slim") is False
 
 
 def test_image_cached_locally_returns_false_on_exception():
-    with patch("forge.envgen.container.subprocess.run", side_effect=OSError("docker not found")):
-        assert _image_cached_locally("python:3.12-slim") is False
+    with patch("subprocess.run", side_effect=OSError("docker not found")):
+        assert image_cached_locally("python:3.12-slim") is False
 
 
 # ---------------------------------------------------------------------------
@@ -287,8 +268,8 @@ def test_build_writes_dockerfile_and_calls_subprocess(tmp_path):
     (app_dir / "main.py").write_text("# app")
 
     # Image not cached → triggers a pull before docker build
-    with patch("forge.envgen.container.subprocess.run") as mock_run, \
-         patch("forge.envgen.container._image_cached_locally", return_value=False):
+    with patch("subprocess.run") as mock_run, \
+         patch("forge.envgen.docker_images.image_cached_locally", return_value=False):
         mock_run.return_value = MagicMock(returncode=0)
         runtime = ContainerRuntime()
         tag = runtime.build("test_env", app_dir)
@@ -312,8 +293,8 @@ def test_build_skips_pull_when_image_cached_locally(tmp_path):
     app_dir.mkdir()
     (app_dir / "Dockerfile").write_text("FROM python:3.12-slim\nWORKDIR /app\n")
 
-    with patch("forge.envgen.container.subprocess.run") as mock_run, \
-         patch("forge.envgen.container._image_cached_locally", return_value=True):
+    with patch("subprocess.run") as mock_run, \
+         patch("forge.envgen.docker_images.image_cached_locally", return_value=True):
         mock_run.return_value = MagicMock(returncode=0)
         tag = ContainerRuntime().build("cached_env", app_dir)
 
@@ -336,8 +317,8 @@ def test_build_prepulls_from_image_before_docker_build(tmp_path):
         "FROM python:3.11-slim\nWORKDIR /app\nCOPY . .\n"
     )
 
-    with patch("forge.envgen.container.subprocess.run") as mock_run, \
-         patch("forge.envgen.container._image_cached_locally", return_value=False):
+    with patch("subprocess.run") as mock_run, \
+         patch("forge.envgen.docker_images.image_cached_locally", return_value=False):
         mock_run.return_value = MagicMock(returncode=0)
         ContainerRuntime().build("prepull_env", app_dir)
 
@@ -354,7 +335,7 @@ def test_build_skips_prepull_for_scratch(tmp_path):
     app_dir.mkdir()
     (app_dir / "Dockerfile").write_text("FROM scratch\nCOPY binary /\n")
 
-    with patch("forge.envgen.container.subprocess.run") as mock_run:
+    with patch("subprocess.run") as mock_run:
         mock_run.return_value = MagicMock(returncode=0)
         ContainerRuntime().build("scratch_env", app_dir)
 
@@ -371,9 +352,9 @@ def test_build_retries_pull_on_eof_then_builds(tmp_path):
 
     eof_exc = subprocess.CalledProcessError(1, "docker pull")
 
-    with patch("forge.envgen.container.subprocess.run") as mock_run, \
-         patch("forge.envgen.container.time.sleep"), \
-         patch("forge.envgen.container._image_cached_locally", return_value=False):
+    with patch("subprocess.run") as mock_run, \
+         patch("time.sleep"), \
+         patch("forge.envgen.docker_images.image_cached_locally", return_value=False):
         # pull fails once, then succeeds; build succeeds
         mock_run.side_effect = [eof_exc, MagicMock(returncode=0), MagicMock(returncode=0)]
         tag = ContainerRuntime().build("retry_env", app_dir)
@@ -394,8 +375,8 @@ def test_build_does_not_run_docker_build_when_pull_fails_permanently(tmp_path):
 
     eof_exc = subprocess.CalledProcessError(1, "docker pull")
 
-    with patch("forge.envgen.container.subprocess.run", side_effect=eof_exc), \
-         patch("forge.envgen.container.time.sleep"), \
+    with patch("subprocess.run", side_effect=eof_exc), \
+         patch("time.sleep"), \
          patch("forge.envgen._image_pull_http.pull_via_http",
                side_effect=RuntimeError("HTTPS also EOF")):
         with pytest.raises(RuntimeError, match="Failed to pull"):
@@ -412,8 +393,8 @@ def test_build_surfaces_docker_build_stderr_on_failure(tmp_path):
         1, "docker build", stderr="RUN false returned 1"
     )
 
-    with patch("forge.envgen.container.subprocess.run") as mock_run, \
-         patch("forge.envgen.container.time.sleep"):
+    with patch("subprocess.run") as mock_run, \
+         patch("time.sleep"):
         # pull succeeds, build fails
         mock_run.side_effect = [MagicMock(returncode=0), build_exc]
         with pytest.raises(RuntimeError, match="RUN false returned 1"):
@@ -425,7 +406,7 @@ def test_build_does_not_use_docker_sdk(tmp_path):
     app_dir.mkdir()
     (app_dir / "main.py").write_text("# app")
 
-    with patch("forge.envgen.container.subprocess.run") as mock_run, \
+    with patch("subprocess.run") as mock_run, \
          patch("forge.envgen.container.docker.from_env") as mock_sdk:
         mock_run.return_value = MagicMock(returncode=0)
         ContainerRuntime().build("test_env", app_dir)
@@ -444,9 +425,9 @@ def test_run_cli_pulls_image_via_subprocess():
     mock_docker.containers.get.side_effect = docker.errors.NotFound("not found")
     mock_docker.containers.run.return_value = mock_container
 
-    with patch("forge.envgen.container._image_cached_locally", return_value=False), \
-         patch("forge.envgen.container._pull_with_retry") as mock_pull, \
-         patch("forge.envgen.container.subprocess.run", return_value=MagicMock(returncode=0)), \
+    with patch("forge.envgen.docker_images.image_cached_locally", return_value=False), \
+         patch("forge.envgen.docker_images._pull_with_retry") as mock_pull, \
+         patch("subprocess.run", return_value=MagicMock(returncode=0)), \
          patch("forge.envgen.container.docker.from_env", return_value=mock_docker):
         runtime = ContainerRuntime()
         container_id, port = runtime.run_cli("my_env")
@@ -463,8 +444,8 @@ def test_run_cli_skips_pull_when_image_cached():
     mock_docker.containers.get.side_effect = docker.errors.NotFound("not found")
     mock_docker.containers.run.return_value = mock_container
 
-    with patch("forge.envgen.container._image_cached_locally", return_value=True), \
-         patch("forge.envgen.container._pull_with_retry") as mock_pull, \
+    with patch("forge.envgen.docker_images.image_cached_locally", return_value=True), \
+         patch("forge.envgen.docker_images._pull_with_retry") as mock_pull, \
          patch("forge.envgen.container.docker.from_env", return_value=mock_docker):
         ContainerRuntime().run_cli("my_env")
 
@@ -478,7 +459,7 @@ def test_run_cli_container_uses_tail_command():
     mock_docker.containers.get.side_effect = docker.errors.NotFound("not found")
     mock_docker.containers.run.return_value = mock_container
 
-    with patch("forge.envgen.container._image_cached_locally", return_value=True), \
+    with patch("forge.envgen.docker_images.image_cached_locally", return_value=True), \
          patch("forge.envgen.container.docker.from_env", return_value=mock_docker):
         ContainerRuntime().run_cli("keepalive_env")
 
@@ -497,8 +478,8 @@ def test_run_cli_container_uses_tail_command():
 
 def test_run_browser_pulls_image_via_subprocess():
     daemon = FakeDocker()
-    with patch("forge.envgen.container._image_cached_locally", return_value=False), \
-         patch("forge.envgen.container._pull_with_retry") as mock_pull, \
+    with patch("forge.envgen.docker_images.image_cached_locally", return_value=False), \
+         patch("forge.envgen.docker_images._pull_with_retry") as mock_pull, \
          patch("forge.envgen.container.docker.from_env", return_value=daemon):
         container_id, port = ContainerRuntime().run_browser("my_browser_env")
 
@@ -516,8 +497,8 @@ def test_run_browser_skips_pull_when_image_cached():
     mock_docker.containers.get.side_effect = docker.errors.NotFound("not found")
     mock_docker.containers.run.return_value = mock_container
 
-    with patch("forge.envgen.container._image_cached_locally", return_value=True), \
-         patch("forge.envgen.container._pull_with_retry") as mock_pull, \
+    with patch("forge.envgen.docker_images.image_cached_locally", return_value=True), \
+         patch("forge.envgen.docker_images._pull_with_retry") as mock_pull, \
          patch("forge.envgen.container.docker.from_env", return_value=mock_docker):
         ContainerRuntime().run_browser("my_browser_env")
 
@@ -531,7 +512,7 @@ def test_run_browser_skips_pull_when_image_cached():
 def test_run_returns_container_id_and_port():
     daemon = FakeDocker()
     with patch("forge.envgen.container.docker.from_env", return_value=daemon), \
-         patch("forge.envgen.container._image_cached_locally", return_value=True):
+         patch("forge.envgen.docker_images.image_cached_locally", return_value=True):
         container_id, port = ContainerRuntime().run("test_env", "forge-env-test-env:latest")
 
     app = daemon.containers.get(container_id)
@@ -572,7 +553,7 @@ def test_stop_calls_stop_on_container():
 def test_reattach_all_returns_managed_containers():
     daemon = FakeDocker()
     with patch("forge.envgen.container.docker.from_env", return_value=daemon), \
-         patch("forge.envgen.container._image_cached_locally", return_value=True):
+         patch("forge.envgen.docker_images.image_cached_locally", return_value=True):
         runtime = ContainerRuntime()
         app_id, port = runtime.run("my_env", "forge-env-my-env:latest")
         result = runtime.reattach_all()
@@ -583,7 +564,7 @@ def test_reattach_all_returns_managed_containers():
 def test_reattach_all_uses_the_browser_ui_port():
     daemon = FakeDocker()
     with patch("forge.envgen.container.docker.from_env", return_value=daemon), \
-         patch("forge.envgen.container._image_cached_locally", return_value=True):
+         patch("forge.envgen.docker_images.image_cached_locally", return_value=True):
         runtime = ContainerRuntime()
         browser_id, ui_port = runtime.run_browser("web_env")
         result = runtime.reattach_all()
@@ -606,7 +587,7 @@ def test_reattach_all_skips_containers_without_port():
 
 
 # ---------------------------------------------------------------------------
-# _normalise_dockerfile_base — rewrites LLM-chosen python tags to canonical base
+# normalise_dockerfile_base — rewrites LLM-chosen python tags to canonical base
 # ---------------------------------------------------------------------------
 
 def test_build_rejects_generated_network_import_before_docker(tmp_path: Path):
@@ -619,7 +600,7 @@ def test_build_rejects_generated_network_import_before_docker(tmp_path: Path):
 def test_normalise_rewrites_python_311_to_canonical(tmp_path: Path):
     df = tmp_path / "Dockerfile"
     df.write_text("FROM python:3.11-slim\nWORKDIR /app\n")
-    changed = _normalise_dockerfile_base(df)
+    changed = normalise_dockerfile_base(df)
     assert changed is True
     assert df.read_text() == f"FROM {FORGE_PYTHON_BASE}\nWORKDIR /app\n"
 
@@ -627,7 +608,7 @@ def test_normalise_rewrites_python_311_to_canonical(tmp_path: Path):
 def test_normalise_rewrites_python_312_bookworm(tmp_path: Path):
     df = tmp_path / "Dockerfile"
     df.write_text("FROM python:3.12-bookworm\n")
-    changed = _normalise_dockerfile_base(df)
+    changed = normalise_dockerfile_base(df)
     assert changed is True
     assert df.read_text() == f"FROM {FORGE_PYTHON_BASE}\n"
 
@@ -635,7 +616,7 @@ def test_normalise_rewrites_python_312_bookworm(tmp_path: Path):
 def test_normalise_noop_when_already_canonical(tmp_path: Path):
     df = tmp_path / "Dockerfile"
     df.write_text(f"FROM {FORGE_PYTHON_BASE}\nCOPY . .\n")
-    changed = _normalise_dockerfile_base(df)
+    changed = normalise_dockerfile_base(df)
     assert changed is False
     assert df.read_text() == f"FROM {FORGE_PYTHON_BASE}\nCOPY . .\n"
 
@@ -643,7 +624,7 @@ def test_normalise_noop_when_already_canonical(tmp_path: Path):
 def test_normalise_preserves_stage_alias(tmp_path: Path):
     df = tmp_path / "Dockerfile"
     df.write_text("FROM python:3.11-slim AS builder\nWORKDIR /app\n")
-    changed = _normalise_dockerfile_base(df)
+    changed = normalise_dockerfile_base(df)
     assert changed is True
     assert df.read_text() == f"FROM {FORGE_PYTHON_BASE} AS builder\nWORKDIR /app\n"
 
@@ -651,7 +632,7 @@ def test_normalise_preserves_stage_alias(tmp_path: Path):
 def test_normalise_leaves_non_python_base_alone(tmp_path: Path):
     df = tmp_path / "Dockerfile"
     df.write_text("FROM node:20-slim\nRUN npm install\n")
-    changed = _normalise_dockerfile_base(df)
+    changed = normalise_dockerfile_base(df)
     assert changed is False
     assert df.read_text() == "FROM node:20-slim\nRUN npm install\n"
 
@@ -659,13 +640,13 @@ def test_normalise_leaves_non_python_base_alone(tmp_path: Path):
 def test_normalise_handles_lowercase_from(tmp_path: Path):
     df = tmp_path / "Dockerfile"
     df.write_text("from python:3.11-alpine\nWORKDIR /app\n")
-    changed = _normalise_dockerfile_base(df)
+    changed = normalise_dockerfile_base(df)
     assert changed is True
     assert df.read_text() == f"from {FORGE_PYTHON_BASE}\nWORKDIR /app\n"
 
 
 # ---------------------------------------------------------------------------
-# _normalise_dockerfile_port — guardrail against the LLM picking a non-8000 port
+# normalise_dockerfile_port — guardrail against the LLM picking a non-8000 port
 # ---------------------------------------------------------------------------
 
 def test_normalise_port_rewrites_expose_5000_to_canonical(tmp_path: Path):
@@ -675,7 +656,7 @@ def test_normalise_port_rewrites_expose_5000_to_canonical(tmp_path: Path):
         "EXPOSE 5000\n"
         "CMD [\"uvicorn\", \"main:app\", \"--host\", \"0.0.0.0\", \"--port\", \"5000\"]\n"
     )
-    assert _normalise_dockerfile_port(df) is True
+    assert normalise_dockerfile_port(df) is True
     text = df.read_text()
     assert f"EXPOSE {FORGE_APP_PORT}" in text
     assert "EXPOSE 5000" not in text
@@ -691,7 +672,7 @@ def test_normalise_port_rewrites_shell_form_cmd(tmp_path: Path):
         "EXPOSE 8080\n"
         "CMD uvicorn main:app --host 0.0.0.0 --port 8080\n"
     )
-    assert _normalise_dockerfile_port(df) is True
+    assert normalise_dockerfile_port(df) is True
     text = df.read_text()
     assert f"--port {FORGE_APP_PORT}" in text
     assert "8080" not in text
@@ -705,7 +686,7 @@ def test_normalise_port_rewrites_equals_form(tmp_path: Path):
         "EXPOSE 5000\n"
         "CMD uvicorn main:app --host=0.0.0.0 --port=5000\n"
     )
-    assert _normalise_dockerfile_port(df) is True
+    assert normalise_dockerfile_port(df) is True
     text = df.read_text()
     assert f"--port={FORGE_APP_PORT}" in text
 
@@ -718,7 +699,7 @@ def test_normalise_port_adds_expose_when_missing(tmp_path: Path):
         "WORKDIR /app\n"
         'CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]\n'
     )
-    assert _normalise_dockerfile_port(df) is True
+    assert normalise_dockerfile_port(df) is True
     assert f"EXPOSE {FORGE_APP_PORT}" in df.read_text()
 
 
@@ -731,7 +712,7 @@ def test_normalise_port_noop_when_already_canonical(tmp_path: Path):
         f'CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "{FORGE_APP_PORT}"]\n'
     )
     df.write_text(canonical)
-    assert _normalise_dockerfile_port(df) is False
+    assert normalise_dockerfile_port(df) is False
     assert df.read_text() == canonical
 
 
@@ -746,7 +727,7 @@ def test_normalise_port_handles_multiple_expose_lines(tmp_path: Path):
         "EXPOSE 9100\n"
         "CMD uvicorn main:app --port 5000\n"
     )
-    _normalise_dockerfile_port(df)
+    normalise_dockerfile_port(df)
     text = df.read_text()
     # Both EXPOSE lines now point at the canonical port; CMD too.
     assert text.count(f"EXPOSE {FORGE_APP_PORT}") == 2
@@ -800,7 +781,7 @@ def test_build_replaces_llm_requirements_with_the_lock(tmp_path: Path):
     app_dir.mkdir()
     (app_dir / "requirements.txt").write_text("fastapi\nbeautifulsoup4==4.12.0\nrequests\n")
 
-    _write_locked_requirements(app_dir)
+    write_locked_requirements(app_dir)
 
     assert (app_dir / "requirements.txt").read_text() == RUNTIME_LOCK.read_text()
 
@@ -809,7 +790,7 @@ def test_build_writes_the_lock_when_requirements_are_missing(tmp_path: Path):
     app_dir = tmp_path / "app"
     app_dir.mkdir()
 
-    _write_locked_requirements(app_dir)
+    write_locked_requirements(app_dir)
 
     assert (app_dir / "requirements.txt").read_text() == RUNTIME_LOCK.read_text()
 
@@ -826,7 +807,7 @@ def test_every_pip_install_becomes_the_one_hashed_lock_install(tmp_path: Path):
         "COPY . .\n"
     )
 
-    assert _normalise_dockerfile_install(df) is True
+    assert normalise_dockerfile_install(df) is True
 
     lines = df.read_text().splitlines()
     assert lines == [
@@ -848,7 +829,7 @@ def test_system_package_installs_are_removed(tmp_path: Path):
         f"{_LOCKED_INSTALL}\n"
     )
 
-    _normalise_dockerfile_install(df)
+    normalise_dockerfile_install(df)
 
     assert "apt-get" not in df.read_text()
     assert _LOCKED_INSTALL in df.read_text()
@@ -860,7 +841,7 @@ def test_install_normalisation_ignores_a_dockerfile_without_installs(tmp_path: P
     original = "FROM python:3.12-slim\nENV PIP_NO_CACHE_DIR=1\nCOPY . .\n"
     df.write_text(original)
 
-    assert _normalise_dockerfile_install(df) is False
+    assert normalise_dockerfile_install(df) is False
     assert df.read_text() == original
 
 
@@ -869,8 +850,8 @@ def test_build_installs_the_lock_even_when_it_writes_the_dockerfile(tmp_path: Pa
     app_dir.mkdir()
     (app_dir / "main.py").write_text("# app")
 
-    with patch("forge.envgen.container._image_cached_locally", return_value=True), \
-         patch("forge.envgen.container.subprocess.run") as mock_run:
+    with patch("forge.envgen.docker_images.image_cached_locally", return_value=True), \
+         patch("subprocess.run") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
         ContainerRuntime().build("fallback_env", app_dir)
 
@@ -892,8 +873,8 @@ def test_build_normalises_requirements_alongside_dockerfile(tmp_path: Path):
     )
     (app_dir / "requirements.txt").write_text("fastapi\nuvicorn[standard]\n")
 
-    with patch("forge.envgen.container._image_cached_locally", return_value=True), \
-         patch("forge.envgen.container.subprocess.run") as mock_run:
+    with patch("forge.envgen.docker_images.image_cached_locally", return_value=True), \
+         patch("subprocess.run") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
         ContainerRuntime().build("baseline_env", app_dir)
 
@@ -934,10 +915,10 @@ def test_building_a_premade_image_does_not_rewrite_its_committed_files(template,
     shutil.copytree(premade, work)
 
     dockerfile = work / "Dockerfile"
-    assert _normalise_dockerfile_base(dockerfile) is False
-    assert _normalise_dockerfile_port(dockerfile) is False
-    assert _normalise_dockerfile_install(dockerfile) is False
-    assert _write_locked_requirements(work) is False
+    assert normalise_dockerfile_base(dockerfile) is False
+    assert normalise_dockerfile_port(dockerfile) is False
+    assert normalise_dockerfile_install(dockerfile) is False
+    assert write_locked_requirements(work) is False
 
 
 def test_mirror_pull_of_a_digest_ref_tags_the_name_without_the_digest():
@@ -950,9 +931,9 @@ def test_mirror_pull_of_a_digest_ref_tags_the_name_without_the_digest():
             return None
         raise RuntimeError(f"failed: {ref}")
 
-    with patch("forge.envgen.container._image_cached_locally", return_value=False), \
-         patch("forge.envgen.container._pull_with_retry", side_effect=pull_side_effect), \
-         patch("forge.envgen.container._docker_tag") as mock_tag:
+    with patch("forge.envgen.docker_images.image_cached_locally", return_value=False), \
+         patch("forge.envgen.docker_images._pull_with_retry", side_effect=pull_side_effect), \
+         patch("forge.envgen.docker_images._docker_tag") as mock_tag:
         pull_image(image)
 
     mock_tag.assert_called_once_with(
@@ -964,8 +945,8 @@ def test_a_digest_ref_never_falls_back_to_the_rebuilt_http_image():
     # The HTTPS loader rebuilds the manifest locally, so its digest can never
     # match the pin. Serving it would silently unpin the build.
     image = "python:3.12-slim@sha256:" + "b" * 64
-    with patch("forge.envgen.container._image_cached_locally", return_value=False), \
-         patch("forge.envgen.container._pull_with_retry", side_effect=RuntimeError("EOF")), \
+    with patch("forge.envgen.docker_images.image_cached_locally", return_value=False), \
+         patch("forge.envgen.docker_images._pull_with_retry", side_effect=RuntimeError("EOF")), \
          patch("forge.envgen._image_pull_http.pull_via_http") as mock_http:
         with pytest.raises(RuntimeError, match="digest"):
             pull_image(image)
@@ -986,8 +967,8 @@ def test_build_normalises_port_alongside_base(tmp_path: Path):
         'CMD ["uvicorn", "main:app", "--port", "5000"]\n'
     )
 
-    with patch("forge.envgen.container._image_cached_locally", return_value=True), \
-         patch("forge.envgen.container.subprocess.run") as mock_run:
+    with patch("forge.envgen.docker_images.image_cached_locally", return_value=True), \
+         patch("subprocess.run") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
         ContainerRuntime().build("port_norm_env", app_dir)
 
@@ -1003,9 +984,9 @@ def test_build_normalises_dockerfile_before_pull(tmp_path: Path):
     app_dir.mkdir()
     (app_dir / "Dockerfile").write_text("FROM python:3.11-slim\nWORKDIR /app\n")
 
-    with patch("forge.envgen.container._image_cached_locally", return_value=False), \
-         patch("forge.envgen.container._pull_with_retry") as mock_pull, \
-         patch("forge.envgen.container.subprocess.run") as mock_run:
+    with patch("forge.envgen.docker_images.image_cached_locally", return_value=False), \
+         patch("forge.envgen.docker_images._pull_with_retry") as mock_pull, \
+         patch("subprocess.run") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
         ContainerRuntime().build("my_env", app_dir)
 
@@ -1020,8 +1001,8 @@ def test_build_normalises_dockerfile_before_pull(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 def test_prewarm_skips_images_already_cached():
-    with patch("forge.envgen.container._image_cached_locally", return_value=True), \
-         patch("forge.envgen.container._pull_with_retry") as mock_pull:
+    with patch("forge.envgen.docker_images.image_cached_locally", return_value=True), \
+         patch("forge.envgen.docker_images._pull_with_retry") as mock_pull:
         results = prewarm_standard_base_images(images=("python:3.12-slim", "ubuntu:22.04"))
 
     mock_pull.assert_not_called()
@@ -1029,8 +1010,8 @@ def test_prewarm_skips_images_already_cached():
 
 
 def test_prewarm_pulls_missing_images():
-    with patch("forge.envgen.container._image_cached_locally", return_value=False), \
-         patch("forge.envgen.container._pull_with_retry") as mock_pull:
+    with patch("forge.envgen.docker_images.image_cached_locally", return_value=False), \
+         patch("forge.envgen.docker_images._pull_with_retry") as mock_pull:
         results = prewarm_standard_base_images(images=("python:3.12-slim", "ubuntu:22.04"))
 
     assert mock_pull.call_count == 2
@@ -1046,8 +1027,8 @@ def test_prewarm_does_not_raise_when_pull_fails():
     def pull_fail(image, **_):
         raise RuntimeError(f"Failed to pull {image} after 5 attempts: EOF")
 
-    with patch("forge.envgen.container._image_cached_locally", side_effect=cache_check), \
-         patch("forge.envgen.container._pull_with_retry", side_effect=pull_fail), \
+    with patch("forge.envgen.docker_images.image_cached_locally", side_effect=cache_check), \
+         patch("forge.envgen.docker_images._pull_with_retry", side_effect=pull_fail), \
          patch("forge.envgen._image_pull_http.pull_via_http",
                side_effect=RuntimeError("HTTPS also EOF")):
         results = prewarm_standard_base_images(images=("python:3.12-slim",))
@@ -1108,8 +1089,8 @@ def test_mirror_ref_for_user_repo_does_not_add_library():
 
 def test_pull_image_skips_when_already_cached():
     """No network calls when the image is already in the local cache."""
-    with patch("forge.envgen.container._image_cached_locally", return_value=True), \
-         patch("forge.envgen.container._pull_with_retry") as mock_pull:
+    with patch("forge.envgen.docker_images.image_cached_locally", return_value=True), \
+         patch("forge.envgen.docker_images._pull_with_retry") as mock_pull:
         pull_image("python:3.12-slim")
 
     mock_pull.assert_not_called()
@@ -1117,8 +1098,8 @@ def test_pull_image_skips_when_already_cached():
 
 def test_pull_image_uses_canonical_first():
     """Happy path: docker.io works, so no mirrors are tried."""
-    with patch("forge.envgen.container._image_cached_locally", return_value=False), \
-         patch("forge.envgen.container._pull_with_retry") as mock_pull:
+    with patch("forge.envgen.docker_images.image_cached_locally", return_value=False), \
+         patch("forge.envgen.docker_images._pull_with_retry") as mock_pull:
         pull_image("python:3.12-slim")
 
     mock_pull.assert_called_once_with("python:3.12-slim")
@@ -1126,7 +1107,7 @@ def test_pull_image_uses_canonical_first():
 
 def test_pull_image_falls_back_to_aws_ecr_when_dockerhub_fails(caplog):
     """When docker.io throws EOF, the next mirror (public.ecr.aws) is tried."""
-    caplog.set_level(logging.INFO, logger="forge.envgen.container")
+    caplog.set_level(logging.INFO, logger="forge.envgen.docker_images")
     canonical_fail = RuntimeError("Failed to pull python:3.12-slim: EOF")
 
     def pull_side_effect(ref, **_):
@@ -1135,9 +1116,9 @@ def test_pull_image_falls_back_to_aws_ecr_when_dockerhub_fails(caplog):
         # mirror succeeds
         return None
 
-    with patch("forge.envgen.container._image_cached_locally", return_value=False), \
-         patch("forge.envgen.container._pull_with_retry", side_effect=pull_side_effect) as mock_pull, \
-         patch("forge.envgen.container.subprocess.run") as mock_subproc:
+    with patch("forge.envgen.docker_images.image_cached_locally", return_value=False), \
+         patch("forge.envgen.docker_images._pull_with_retry", side_effect=pull_side_effect) as mock_pull, \
+         patch("subprocess.run") as mock_subproc:
         mock_subproc.return_value = MagicMock(returncode=0)
         pull_image("python:3.12-slim")
 
@@ -1167,9 +1148,9 @@ def test_pull_image_falls_through_to_gcr_when_first_mirror_fails():
             return None  # GCR mirror succeeds
         raise RuntimeError(f"failed: {ref}")
 
-    with patch("forge.envgen.container._image_cached_locally", return_value=False), \
-         patch("forge.envgen.container._pull_with_retry", side_effect=pull_side_effect) as mock_pull, \
-         patch("forge.envgen.container.subprocess.run") as mock_subproc:
+    with patch("forge.envgen.docker_images.image_cached_locally", return_value=False), \
+         patch("forge.envgen.docker_images._pull_with_retry", side_effect=pull_side_effect) as mock_pull, \
+         patch("subprocess.run") as mock_subproc:
         mock_subproc.return_value = MagicMock(returncode=0)
         pull_image("python:3.12-slim")
 
@@ -1183,8 +1164,8 @@ def test_pull_image_falls_through_to_gcr_when_first_mirror_fails():
 
 def test_pull_image_raises_when_all_registries_and_https_fail():
     """If every registry AND the direct-HTTPS fallback fail, the chain is surfaced."""
-    with patch("forge.envgen.container._image_cached_locally", return_value=False), \
-         patch("forge.envgen.container._pull_with_retry", side_effect=RuntimeError("EOF")), \
+    with patch("forge.envgen.docker_images.image_cached_locally", return_value=False), \
+         patch("forge.envgen.docker_images._pull_with_retry", side_effect=RuntimeError("EOF")), \
          patch("forge.envgen._image_pull_http.pull_via_http",
                side_effect=RuntimeError("https EOF too")):
         with pytest.raises(RuntimeError, match="from docker.io, any mirror, or direct HTTPS"):
@@ -1198,8 +1179,8 @@ def test_pull_image_falls_through_to_direct_https_when_all_docker_pulls_fail():
     This is the key fix for environments where the Docker daemon's HTTP/2
     client is unstable (MTU mismatch, broken IPv6, idle-stream resets) —
     httpx talks plain HTTP/1.1 over a fresh stack and bypasses dockerd."""
-    with patch("forge.envgen.container._image_cached_locally", return_value=False), \
-         patch("forge.envgen.container._pull_with_retry",
+    with patch("forge.envgen.docker_images.image_cached_locally", return_value=False), \
+         patch("forge.envgen.docker_images._pull_with_retry",
                side_effect=RuntimeError("EOF on every docker pull")) as mock_pull, \
          patch("forge.envgen._image_pull_http.pull_via_http") as mock_http:
         # All 3 docker pulls fail; HTTPS succeeds.
@@ -1212,8 +1193,8 @@ def test_pull_image_falls_through_to_direct_https_when_all_docker_pulls_fail():
 
 def test_pull_image_does_not_use_mirrors_for_non_hub_image():
     """Non-Hub images (lscr.io/...) have no Hub-mirror equivalent — don't try."""
-    with patch("forge.envgen.container._image_cached_locally", return_value=False), \
-         patch("forge.envgen.container._pull_with_retry") as mock_pull:
+    with patch("forge.envgen.docker_images.image_cached_locally", return_value=False), \
+         patch("forge.envgen.docker_images._pull_with_retry") as mock_pull:
         pull_image("lscr.io/linuxserver/chromium:latest")
 
     mock_pull.assert_called_once_with("lscr.io/linuxserver/chromium:latest")
@@ -1221,8 +1202,8 @@ def test_pull_image_does_not_use_mirrors_for_non_hub_image():
 
 def test_pull_image_propagates_failure_for_non_hub_image():
     """Non-Hub image failures bubble up as-is (no mirror fallback applies)."""
-    with patch("forge.envgen.container._image_cached_locally", return_value=False), \
-         patch("forge.envgen.container._pull_with_retry", side_effect=RuntimeError("auth denied")):
+    with patch("forge.envgen.docker_images.image_cached_locally", return_value=False), \
+         patch("forge.envgen.docker_images._pull_with_retry", side_effect=RuntimeError("auth denied")):
         with pytest.raises(RuntimeError, match="auth denied"):
             pull_image("lscr.io/linuxserver/chromium:latest")
 
@@ -1235,7 +1216,7 @@ def test_pull_image_propagates_failure_for_non_hub_image():
 def fake_daemon():
     daemon = FakeDocker()
     with patch("forge.envgen.container.docker.from_env", return_value=daemon), \
-         patch("forge.envgen.container._image_cached_locally", return_value=True):
+         patch("forge.envgen.docker_images.image_cached_locally", return_value=True):
         yield daemon
 
 
@@ -1313,14 +1294,14 @@ def test_start_falls_through_when_existing_container_refuses_to_start(fake_daemo
 
 
 # ---------------------------------------------------------------------------
-# _wait_for_port_binding — polls Docker for the host-port mapping
+# wait_for_port_binding — polls Docker for the host-port mapping
 # ---------------------------------------------------------------------------
 
 def test_wait_for_port_binding_returns_port_on_first_try():
     container = MagicMock()
     container.ports = {"8000/tcp": [{"HostPort": "32777"}]}
-    with patch("forge.envgen.container.time.sleep") as mock_sleep:
-        port = _wait_for_port_binding(container, "8000/tcp", attempts=5, interval=0.1)
+    with patch("time.sleep") as mock_sleep:
+        port = wait_for_port_binding(container, "8000/tcp", attempts=5, interval=0.1)
     assert port == 32777
     mock_sleep.assert_not_called()
 
@@ -1343,8 +1324,8 @@ def test_wait_for_port_binding_polls_until_binding_appears():
 
     container.reload.side_effect = reload_side_effect
 
-    with patch("forge.envgen.container.time.sleep"):
-        port = _wait_for_port_binding(container, "8000/tcp", attempts=5, interval=0.1)
+    with patch("time.sleep"):
+        port = wait_for_port_binding(container, "8000/tcp", attempts=5, interval=0.1)
     assert port == 32100
     assert container.reload.call_count == 3
 
@@ -1356,9 +1337,9 @@ def test_wait_for_port_binding_raises_with_diagnostic_when_never_appears():
     container.id = "abcdef1234567890"
     container.ports = {}  # never gets a binding
 
-    with patch("forge.envgen.container.time.sleep"):
+    with patch("time.sleep"):
         with pytest.raises(RuntimeError, match=r"never reported a host-port binding for 8000/tcp"):
-            _wait_for_port_binding(container, "8000/tcp", attempts=3, interval=0.01)
+            wait_for_port_binding(container, "8000/tcp", attempts=3, interval=0.01)
 
 
 def test_wait_for_port_binding_skips_zero_or_invalid_host_port():
@@ -1378,8 +1359,8 @@ def test_wait_for_port_binding_skips_zero_or_invalid_host_port():
 
     container.reload.side_effect = reload_side_effect
 
-    with patch("forge.envgen.container.time.sleep"):
-        port = _wait_for_port_binding(container, "8000/tcp", attempts=5, interval=0.01)
+    with patch("time.sleep"):
+        port = wait_for_port_binding(container, "8000/tcp", attempts=5, interval=0.01)
     assert port == 32200
 
 
@@ -1395,8 +1376,8 @@ def test_build_gives_up_on_a_hung_docker_build(tmp_path):
     app_dir.mkdir()
     (app_dir / "Dockerfile").write_text("FROM python:3.12-slim\nWORKDIR /app\n")
 
-    with patch("forge.envgen.container.subprocess.run") as mock_run, \
-         patch("forge.envgen.container._image_cached_locally", return_value=True):
+    with patch("subprocess.run") as mock_run, \
+         patch("forge.envgen.docker_images.image_cached_locally", return_value=True):
         mock_run.side_effect = subprocess.TimeoutExpired(["docker", "build"], 900)
         with pytest.raises(RuntimeError, match="docker build timed out after 900s"):
             ContainerRuntime().build("hung_env", app_dir)
@@ -1411,7 +1392,7 @@ def test_build_gives_up_on_a_hung_docker_build(tmp_path):
 def _launch_kwargs(launch) -> dict:
     """Run one ContainerRuntime launch on a fake daemon and return the env container's kwargs."""
     daemon = FakeDocker()
-    with patch("forge.envgen.container._image_cached_locally", return_value=True), \
+    with patch("forge.envgen.docker_images.image_cached_locally", return_value=True), \
          patch("forge.envgen.container.docker.from_env", return_value=daemon):
         launch(ContainerRuntime())
     env_containers = [
@@ -1478,9 +1459,9 @@ def test_cli_image_is_built_from_the_pinned_base_when_missing():
         calls.append(cmd)
         return MagicMock(returncode=0, stdout="", stderr="")
 
-    with patch("forge.envgen.container._image_cached_locally", return_value=False), \
-         patch("forge.envgen.container._pull_with_retry"), \
-         patch("forge.envgen.container.subprocess.run", side_effect=fake_run):
+    with patch("forge.envgen.docker_images.image_cached_locally", return_value=False), \
+         patch("forge.envgen.docker_images._pull_with_retry"), \
+         patch("subprocess.run", side_effect=fake_run):
         assert ensure_cli_image() == CLI_RUNTIME_IMAGE
 
     builds = [c for c in calls if c[:2] == ["docker", "build"]]
@@ -1490,8 +1471,8 @@ def test_cli_image_is_built_from_the_pinned_base_when_missing():
 
 
 def test_cli_image_is_not_rebuilt_when_already_cached():
-    with patch("forge.envgen.container._image_cached_locally", return_value=True), \
-         patch("forge.envgen.container.subprocess.run") as mock_run:
+    with patch("forge.envgen.docker_images.image_cached_locally", return_value=True), \
+         patch("subprocess.run") as mock_run:
         assert ensure_cli_image() == CLI_RUNTIME_IMAGE
 
     mock_run.assert_not_called()
@@ -1503,9 +1484,9 @@ def test_a_failed_cli_image_build_raises_with_dockers_output():
             raise subprocess.CalledProcessError(1, cmd, stderr="E: Unable to locate package")
         return MagicMock(returncode=0)
 
-    with patch("forge.envgen.container._image_cached_locally", return_value=False), \
-         patch("forge.envgen.container._pull_with_retry"), \
-         patch("forge.envgen.container.subprocess.run", side_effect=fake_run):
+    with patch("forge.envgen.docker_images.image_cached_locally", return_value=False), \
+         patch("forge.envgen.docker_images._pull_with_retry"), \
+         patch("subprocess.run", side_effect=fake_run):
         with pytest.raises(RuntimeError, match="Unable to locate package"):
             ensure_cli_image()
 

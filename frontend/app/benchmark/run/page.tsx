@@ -1,7 +1,7 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { Cloud, Cpu, Zap } from "lucide-react";
+import { InferenceModePicker, type InferenceMode } from "@/components/InferenceModePicker";
 import { API_BASE, wsBase } from "@/lib/api";
 import { Toast } from "@/components/Toast";
 
@@ -19,7 +19,7 @@ export default function BenchmarkRunPage() {
   const [depth, setDepth] = useState(5);
   const [seeds, setSeeds] = useState(5);
   const [outputDir, setOutputDir] = useState("benchmark_results");
-  const [inferenceMode, setInferenceMode] = useState<"auto" | "local_gpu" | "api_gateway">("auto");
+  const [inferenceMode, setInferenceMode] = useState<InferenceMode>("auto");
   const [phase, setPhase] = useState<Phase>("idle");
   const [logs, setLogs] = useState<string[]>([]);
   const [progress, setProgress] = useState<{ completed: number; total: number | null }>({
@@ -189,68 +189,12 @@ export default function BenchmarkRunPage() {
             </div>
           </div>
 
-          {/* Inference Target */}
-          <div className="benchmark-field">
-            <div className="benchmark-field__label">
-              <span>Inference</span>
-              <small>Local GPU vs Cloud Gateway</small>
-            </div>
-            <div className="benchmark-domain-grid" style={{ gridTemplateColumns: "repeat(3, 1fr)" }}>
-              <label className="benchmark-domain">
-                <input
-                  type="radio"
-                  name="benchmark_inference_mode"
-                  checked={inferenceMode === "auto"}
-                  onChange={() => setInferenceMode("auto")}
-                  disabled={isRunning}
-                />
-                <span className="benchmark-domain__check">✓</span>
-                <span>
-                  <div className="flex items-center gap-1">
-                    <Zap size={13} className="text-amber-500" />
-                    <strong>Auto</strong>
-                  </div>
-                  <small>Detect local GPU or fallback</small>
-                </span>
-              </label>
-
-              <label className="benchmark-domain">
-                <input
-                  type="radio"
-                  name="benchmark_inference_mode"
-                  checked={inferenceMode === "local_gpu"}
-                  onChange={() => setInferenceMode("local_gpu")}
-                  disabled={isRunning}
-                />
-                <span className="benchmark-domain__check">✓</span>
-                <span>
-                  <div className="flex items-center gap-1">
-                    <Cpu size={13} className="text-emerald-500" />
-                    <strong>Local GPU</strong>
-                  </div>
-                  <small>CUDA / Apple Silicon MPS</small>
-                </span>
-              </label>
-
-              <label className="benchmark-domain">
-                <input
-                  type="radio"
-                  name="benchmark_inference_mode"
-                  checked={inferenceMode === "api_gateway"}
-                  onChange={() => setInferenceMode("api_gateway")}
-                  disabled={isRunning}
-                />
-                <span className="benchmark-domain__check">✓</span>
-                <span>
-                  <div className="flex items-center gap-1">
-                    <Cloud size={13} className="text-blue-500" />
-                    <strong>API Gateway</strong>
-                  </div>
-                  <small>Hosted vLLM / Ollama</small>
-                </span>
-              </label>
-            </div>
-          </div>
+          <InferenceModePicker
+            name="benchmark_inference_mode"
+            value={inferenceMode}
+            onChange={setInferenceMode}
+            disabled={isRunning}
+          />
 
           <div className="benchmark-field-row">
             <label className="benchmark-field">

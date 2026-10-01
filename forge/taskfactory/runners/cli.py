@@ -10,7 +10,7 @@ from collections.abc import Callable, Iterator, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from typing import Protocol
 
-from forge.envgen.container import grading_sandbox
+from forge.envgen.grading_sandbox import grading_sandbox
 from forge.taskfactory.runner import SeedError, StepResult, fingerprint_of
 from forge.taskfactory.schemas import Check, GoldenStep, TaskDraft
 from forge.taskfactory.state_checks import CheckOutcome

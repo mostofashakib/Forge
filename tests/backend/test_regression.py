@@ -197,7 +197,7 @@ def test_build_task_sets_building_then_running_for_cli(client):
     original_set_status = None
 
     with patch("redis.from_url", return_value=mock_redis), \
-         patch("forge.envgen.container.subprocess.run"), \
+         patch("subprocess.run"), \
          patch("forge.envgen.container.docker.from_env", return_value=mock_docker):
         from backend.app.worker.tasks import build_sandbox_task
         build_sandbox_task(job_id="test-job", env_name="build_status_cli", env_type="cli")
@@ -231,7 +231,7 @@ def test_build_task_error_path_sets_status_error(client):
     mock_redis.publish.side_effect = lambda _ch, data: published.append(json.loads(data))
 
     with patch("redis.from_url", return_value=mock_redis), \
-         patch("forge.envgen.container.subprocess.run", side_effect=RuntimeError("docker pull failed")), \
+         patch("subprocess.run", side_effect=RuntimeError("docker pull failed")), \
          patch("forge.envgen._image_pull_http.pull_via_http",
                side_effect=RuntimeError("HTTPS also failed")):
         from backend.app.worker.tasks import build_sandbox_task
@@ -269,7 +269,7 @@ def test_build_task_always_publishes_done_signal(client):
     mock_docker.containers.run.return_value = mock_container
 
     with patch("redis.from_url", return_value=mock_redis), \
-         patch("forge.envgen.container.subprocess.run"), \
+         patch("subprocess.run"), \
          patch("forge.envgen.container.docker.from_env", return_value=mock_docker):
         from backend.app.worker.tasks import build_sandbox_task
         build_sandbox_task(job_id="j", env_name="done_signal_env", env_type="cli")
@@ -301,7 +301,7 @@ def test_websocket_exec_rejects_unknown_env(client):
 @pytest.mark.asyncio
 async def test_websocket_feed_tolerates_disconnect_before_accept():
     """A client that unmounts during the handshake must not raise an ASGI error."""
-    from backend.app.api.sandbox import sandbox_event_feed
+    from backend.app.api.sandbox_streams import sandbox_event_feed
 
     websocket = MagicMock()
     websocket.accept = AsyncMock(
@@ -320,7 +320,7 @@ async def test_websocket_feed_tolerates_disconnect_before_accept():
 @pytest.mark.asyncio
 async def test_websocket_feed_tolerates_disconnect_during_send():
     """A disconnect after acceptance must also close the stream cleanly."""
-    from backend.app.api.sandbox import sandbox_event_feed
+    from backend.app.api.sandbox_streams import sandbox_event_feed
 
     async def events():
         yield {"type": "action"}

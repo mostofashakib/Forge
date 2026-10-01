@@ -64,6 +64,13 @@ BUDGET_REASONS: frozenset[str] = frozenset(
 )
 
 
+def is_budget_reason(reason: str | None) -> bool:
+    """Whether a termination reason means a resource budget ran out (truncation)."""
+    if not reason:
+        return False
+    return reason in BUDGET_REASONS or "budget" in reason or "max_steps" in reason
+
+
 class BudgetTerminationPolicy(TerminationPolicy):
     """Enforces episode resource budgets: steps, tokens, wall clock time, and cost.
 

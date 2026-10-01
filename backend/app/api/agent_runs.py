@@ -110,7 +110,7 @@ def create_agent_run(
     db.add(run)
     db.commit()
 
-    from backend.app.worker.tasks import run_container_run_task
+    from backend.app.worker.agent_run_tasks import run_container_run_task
     try:
         run_container_run_task.delay(run_id)
     except Exception as exc:

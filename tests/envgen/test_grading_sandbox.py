@@ -13,11 +13,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from forge.envgen.container import (
-    FORGE_GRADER_TOOLBOX_IMAGE,
-    ensure_grader_toolbox,
-    grading_sandbox,
-)
+from forge.envgen.docker_images import FORGE_GRADER_TOOLBOX_IMAGE
+from forge.envgen.grading_sandbox import ensure_grader_toolbox, grading_sandbox
 
 
 class _DockerCli:
@@ -41,8 +38,8 @@ class _DockerCli:
 
 
 def _grade(cli: _DockerCli, raise_inside: bool = False) -> list[str]:
-    with patch("forge.envgen.container.subprocess.run", side_effect=cli), \
-         patch("forge.envgen.container._image_cached_locally", return_value=True):
+    with patch("subprocess.run", side_effect=cli), \
+         patch("forge.envgen.docker_images.image_cached_locally", return_value=True):
         with grading_sandbox("agentcontainer123456") as exec_argv:
             if raise_inside:
                 raise RuntimeError("assertion runner crashed")
@@ -92,8 +89,8 @@ def test_the_grader_and_snapshot_are_removed_even_when_grading_fails():
 
 def test_the_toolbox_volume_is_populated_once_from_the_pinned_image():
     cli = _DockerCli(volume_exists=False)
-    with patch("forge.envgen.container.subprocess.run", side_effect=cli), \
-         patch("forge.envgen.container._image_cached_locally", return_value=True):
+    with patch("subprocess.run", side_effect=cli), \
+         patch("forge.envgen.docker_images.image_cached_locally", return_value=True):
         volume = ensure_grader_toolbox()
 
     assert cli.sub("volume")[1][2] == "create"
@@ -104,7 +101,7 @@ def test_the_toolbox_volume_is_populated_once_from_the_pinned_image():
 
 def test_an_existing_toolbox_volume_is_not_rebuilt():
     cli = _DockerCli(volume_exists=True)
-    with patch("forge.envgen.container.subprocess.run", side_effect=cli):
+    with patch("subprocess.run", side_effect=cli):
         ensure_grader_toolbox()
 
     assert cli.sub("run") == []
@@ -114,8 +111,8 @@ def test_a_failed_toolbox_population_leaves_no_half_built_volume():
     # The volume's existence is what marks the toolbox ready, so a failed
     # copy must not leave an empty volume behind.
     cli = _DockerCli(volume_exists=False, fail="run")
-    with patch("forge.envgen.container.subprocess.run", side_effect=cli), \
-         patch("forge.envgen.container._image_cached_locally", return_value=True):
+    with patch("subprocess.run", side_effect=cli), \
+         patch("forge.envgen.docker_images.image_cached_locally", return_value=True):
         with pytest.raises(RuntimeError, match="grader toolbox"):
             ensure_grader_toolbox()
 

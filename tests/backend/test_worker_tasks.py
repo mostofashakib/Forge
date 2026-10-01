@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -7,25 +8,26 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from backend.app.worker import tasks
+from backend.app.worker import benchmark_tasks, env_artifacts, rollout_tasks, tasks
+from forge.benchmark.env_quality import EnvQualityMetrics
 from forge.schema.state_schema import StateSchemaManifest
 
 MANIFEST = StateSchemaManifest(env_name="mail", fields={"inbox": {"type": "array"}})
 
 
 def test_load_manifest_returns_none_when_absent(tmp_path):
-    assert tasks._load_manifest(tmp_path) is None
+    assert env_artifacts.load_manifest(tmp_path) is None
 
 
 def test_load_manifest_parses_the_schema(tmp_path):
     (tmp_path / "state_schema.json").write_text(MANIFEST.model_dump_json())
-    assert tasks._load_manifest(tmp_path) == MANIFEST
+    assert env_artifacts.load_manifest(tmp_path) == MANIFEST
 
 
 def test_load_manifest_reports_a_corrupt_schema(tmp_path, caplog):
     (tmp_path / "state_schema.json").write_text("{broken")
     with caplog.at_level(logging.WARNING):
-        assert tasks._load_manifest(tmp_path) is None
+        assert env_artifacts.load_manifest(tmp_path) is None
     assert "state_schema.json" in caplog.text
 
 
@@ -69,7 +71,7 @@ def test_benchmark_parses_each_manifest_once(benchmark_db):
     runner.__enter__.return_value.run_episode.return_value = SimpleNamespace(
         total_reward=1.0, termination_reason="done"
     )
-    quality = SimpleNamespace(
+    quality = EnvQualityMetrics(
         env_name="mail", state_coverage_score=1.0, reward_density=0.0,
         dead_end_rate=0.0, action_diversity=0.0, num_episodes=3, num_steps=3,
     )
@@ -146,11 +148,11 @@ def test_benchmark_episodes_hold_their_environment_lock(benchmark_db):
         lambda *a, **k: seen_while_running.append(list(held))
         or SimpleNamespace(total_reward=0.0, termination_reason="done")
     )
-    quality = SimpleNamespace(
+    quality = EnvQualityMetrics(
         env_name="mail", state_coverage_score=1.0, reward_density=0.0,
         dead_end_rate=0.0, action_diversity=0.0, num_episodes=1, num_steps=1,
     )
-    with patch.object(tasks, "exclusive_environment", fake_lock), \
+    with patch.object(benchmark_tasks, "exclusive_environment", fake_lock), \
          patch("redis.from_url"), \
          patch("forge.benchmark.data_collector.DataCollector", _Collector), \
          patch("forge.benchmark.compiled_tasks.CompiledTaskProvider"), \
@@ -164,3 +166,186 @@ def test_benchmark_episodes_hold_their_environment_lock(benchmark_db):
 
     assert seen_while_running == [["mail"]]
     assert held == []
+
+
+# ---------------------------------------------------------------------------
+# Rollout episodes: status, failure classification and the job counter
+# ---------------------------------------------------------------------------
+
+def _add_rollout_job(job_id: str, num_episodes: int) -> None:
+    from backend.app import database
+    from backend.app.models import RolloutJob
+
+    with database.get_session_factory()() as db:
+        db.add(RolloutJob(
+            id=job_id, env_name="mail", task_name="triage", agent_id="random",
+            num_episodes=num_episodes, seed_start=0, status="running",
+            episodes_completed=0, created_at=datetime.now(timezone.utc),
+        ))
+        db.commit()
+
+
+def _rollout_state(job_id: str):
+    from backend.app import database
+    from backend.app.models import Episode, RolloutJob
+
+    with database.get_session_factory()() as db:
+        job = db.get(RolloutJob, job_id)
+        episodes = db.query(Episode).filter_by(env_name="mail").all()
+        return (job.status, job.episodes_completed), [
+            (ep.status, ep.failure_type, ep.attempts_json is not None) for ep in episodes
+        ]
+
+
+def test_rollout_episode_crash_is_classified_and_completes_the_job(benchmark_db):
+    _add_rollout_job("rj_crash", num_episodes=1)
+
+    with patch(
+        "forge.runtime.reliability.execute_reliable_episode",
+        side_effect=RuntimeError("connection refused"),
+    ):
+        tasks.run_episode_task.apply(args=["rj_crash", 0, 7])
+
+    job, episodes = _rollout_state("rj_crash")
+    assert job == ("completed", 1)
+    assert episodes == [("failed", "infrastructure", False)]
+
+
+def test_rollout_episode_that_hits_its_budget_is_truncated(benchmark_db):
+    _add_rollout_job("rj_budget", num_episodes=2)
+    result = SimpleNamespace(termination_reason="max_steps")
+
+    with patch("forge.runtime.reliability.execute_reliable_episode", return_value=(result, [])):
+        tasks.run_episode_task.apply(args=["rj_budget", 0, 1])
+
+    job, episodes = _rollout_state("rj_budget")
+    assert job == ("running", 1)
+    assert episodes == [("truncated", None, True)]
+
+
+def test_rollout_episode_that_submits_keeps_its_running_status(benchmark_db):
+    # False-positive guard: only budget reasons truncate.
+    _add_rollout_job("rj_done", num_episodes=1)
+    result = SimpleNamespace(termination_reason="submitted")
+
+    with patch("forge.runtime.reliability.execute_reliable_episode", return_value=(result, [])):
+        tasks.run_episode_task.apply(args=["rj_done", 0, 1])
+
+    job, episodes = _rollout_state("rj_done")
+    assert job == ("completed", 1)
+    assert episodes == [("running", None, True)]
+
+
+def test_rollout_dispatch_failure_marks_the_job_failed(benchmark_db):
+    from backend.app import database
+    from backend.app.models import RolloutJob
+
+    _add_rollout_job("rj_broker", num_episodes=2)
+    with patch.object(rollout_tasks, "group", side_effect=RuntimeError("broker down")):
+        tasks.run_rollout_task.apply(args=["rj_broker"])
+
+    with database.get_session_factory()() as db:
+        job = db.get(RolloutJob, "rj_broker")
+        assert (job.status, job.error) == ("failed", "broker down")
+        assert job.completed_at is not None
+
+
+def test_evaluation_fails_the_run_when_redis_is_unreachable(benchmark_db):
+    from backend.app import database
+    from backend.app.models import BenchmarkRun
+
+    redis_client = MagicMock()
+    redis_client.ping.side_effect = ConnectionError("no redis")
+    with patch("redis.from_url", return_value=redis_client):
+        tasks.run_evaluation_task("bm_1", "forge", {})
+
+    with database.get_session_factory()() as db:
+        run = db.get(BenchmarkRun, "bm_1")
+        assert (run.status, run.error) == ("failed", "no redis")
+
+
+def test_evaluation_rejects_an_unknown_engine(benchmark_db):
+    from backend.app import database
+    from backend.app.models import BenchmarkRun
+
+    redis_client = MagicMock()
+    with patch("redis.from_url", return_value=redis_client):
+        tasks.run_evaluation_task("bm_1", "nope", {})
+
+    with database.get_session_factory()() as db:
+        run = db.get(BenchmarkRun, "bm_1")
+        assert run.status == "failed"
+        assert "unsupported evaluation engine" in run.error
+    published = [c.args[1] for c in redis_client.publish.call_args_list]
+    assert any("unsupported evaluation engine" in m for m in published)
+
+
+def test_every_task_keeps_its_registered_queue_name():
+    # Jobs already in the broker route by name, so moving a task between
+    # modules must not rename it.
+    from backend.app.worker.celery_app import celery
+
+    expected = {
+        f"backend.app.worker.tasks.{name}" for name in tasks.__all__
+    }
+    assert expected <= set(celery.tasks)
+    assert {getattr(tasks, name).name for name in tasks.__all__} == expected
+
+
+# ---------------------------------------------------------------------------
+# Transfer evaluation reports only what an evaluator measured
+# ---------------------------------------------------------------------------
+
+def _benchmark_run(run_id: str):
+    from backend.app import database
+    from backend.app.models import BenchmarkRun
+
+    with database.get_session_factory()() as db:
+        run = db.get(BenchmarkRun, run_id)
+        return run.status, run.error, run.report_json
+
+
+def test_production_transfer_fails_instead_of_inventing_metrics(benchmark_db):
+    redis_client = MagicMock()
+    with patch("redis.from_url", return_value=redis_client):
+        tasks.run_transfer_task("bm_1", {"base_model": "m", "seeds": 3})
+
+    status, error, report = _benchmark_run("bm_1")
+    assert status == "failed"
+    assert "deferred" in error
+    assert report is None
+    published = [json.loads(c.args[1]) for c in redis_client.publish.call_args_list]
+    assert not any("result" in m for m in published)
+    assert any("deferred" in m.get("error", "") for m in published)
+
+
+def test_transfer_reports_the_injected_evaluators_result(benchmark_db):
+    from forge.benchmark.transfer_pipeline import TransferResult
+
+    seen = []
+
+    def evaluate(config):
+        seen.append(config)
+        return TransferResult(
+            model_path=config.base_model, eval_suite=config.eval_suite,
+            task_completion_rate=0.5, success_at_1=0.25, success_at_3=0.75, num_eval_tasks=8,
+        )
+
+    published: list[dict] = []
+    with patch("forge.contracts.gpu.GPUDeviceSpec.probe_hardware", return_value={"mps_available": True}):
+        benchmark_tasks.execute_transfer_run(
+            "bm_1",
+            {"base_model": "m", "eval_suite": "s", "seeds": 2, "max_steps": 40, "data_dir": "d"},
+            evaluate=evaluate,
+            publish=published.append,
+        )
+
+    status, error, report = _benchmark_run("bm_1")
+    assert (status, error) == ("done", None)
+    assert json.loads(report) == {
+        "model_path": "m", "eval_suite": "s", "task_completion_rate": 0.5,
+        "pass_at_1": 0.25, "pass_at_3": 0.75, "num_eval_tasks": 8,
+        "inference_mode": "auto", "device": "Apple Silicon MPS (Metal)",
+    }
+    assert (seen[0].seeds, seen[0].max_train_steps, str(seen[0].data_dir)) == (2, 40, "d")
+    assert published[-1]["done"] is True

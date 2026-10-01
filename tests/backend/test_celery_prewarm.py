@@ -19,8 +19,8 @@ class _InlineThread:
 def test_boot_prewarm_also_builds_the_cli_image(monkeypatch):
     monkeypatch.delenv("FORGE_DISABLE_PREWARM", raising=False)
     with patch.object(celery_app.threading, "Thread", _InlineThread), \
-         patch("forge.envgen.container.prewarm_standard_base_images", return_value={}), \
-         patch("forge.envgen.container.ensure_cli_image") as ensure:
+         patch("forge.envgen.docker_images.prewarm_standard_base_images", return_value={}), \
+         patch("forge.envgen.docker_images.ensure_cli_image") as ensure:
         celery_app._prewarm_base_images_on_boot()
 
     ensure.assert_called_once_with()
@@ -28,7 +28,7 @@ def test_boot_prewarm_also_builds_the_cli_image(monkeypatch):
 
 def test_disabled_prewarm_does_not_build_the_cli_image(monkeypatch):
     monkeypatch.setenv("FORGE_DISABLE_PREWARM", "1")
-    with patch("forge.envgen.container.ensure_cli_image") as ensure:
+    with patch("forge.envgen.docker_images.ensure_cli_image") as ensure:
         celery_app._prewarm_base_images_on_boot()
 
     ensure.assert_not_called()

@@ -43,9 +43,10 @@ def _runner(max_steps: int, scorer: _CountingScorer) -> ContainerEpisodeRunner:
         base_url="http://c", objective="do it", max_steps=max_steps,
         consecutive_below_threshold=99,
     )
-    runner = ContainerEpisodeRunner(config, scorer=scorer)
-    runner._http = httpx.Client(
-        base_url="http://c", transport=httpx.MockTransport(handler)
+    runner = ContainerEpisodeRunner(
+        config,
+        scorer=scorer,
+        http_client=httpx.Client(base_url="http://c", transport=httpx.MockTransport(handler)),
     )
     runner._actions = [{"endpoint": "/act", "method": "post", "params": {}}]
     return runner

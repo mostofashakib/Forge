@@ -33,10 +33,8 @@ def _runner(*, fail: bool = False) -> tuple[ContainerEpisodeRunner, list[str]]:
         return httpx.Response(200, json=_SCHEMA)
 
     runner = ContainerEpisodeRunner(
-        EpisodeConfig(base_url="http://app", objective="close the ticket")
-    )
-    runner._http = httpx.Client(
-        base_url="http://app", transport=httpx.MockTransport(handler)
+        EpisodeConfig(base_url="http://app", objective="close the ticket"),
+        http_client=httpx.Client(base_url="http://app", transport=httpx.MockTransport(handler)),
     )
     return runner, calls
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 import csv
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from forge.benchmark.env_quality import EnvQualityMetrics
@@ -26,18 +26,7 @@ class BenchmarkReport:
 
         # summary.json
         summary = {
-            "env_quality": [
-                {
-                    "env_name": m.env_name,
-                    "state_coverage_score": m.state_coverage_score,
-                    "reward_density": m.reward_density,
-                    "dead_end_rate": m.dead_end_rate,
-                    "action_diversity": m.action_diversity,
-                    "num_episodes": m.num_episodes,
-                    "num_steps": m.num_steps,
-                }
-                for m in metrics
-            ]
+            "env_quality": [asdict(m) for m in metrics]
         }
         (out / "summary.json").write_text(json.dumps(summary, indent=2))
 

@@ -100,28 +100,60 @@ class ReviewerAgent(EnvGenAgent):
     async def run(self, ctx: EnvGenContext, bus: ArtifactBus) -> None:
         artifacts = {name: await bus.wait_for(name) for name in self.depends_on}
         artifacts.update({name: bus.get(name) for name in self.optional_depends_on})
-        issues: list[ReviewIssue] = []
         app_code: dict[str, str] = artifacts["app_code"] or {}
+        actions = [action.name for action in ctx.compiler_input.actions]
 
+        issues: list[ReviewIssue] = [
+            *self._structure_issues(app_code, with_ui=ctx.with_ui),
+            *self._file_issues(app_code),
+            *self._generated_python_issues(artifacts),
+            *self._endpoint_issues(app_code, actions),
+            # Contract conformance. Static, like the determinism gate — it asks
+            # whether the generated code declares the shape the runtime requires,
+            # which the semantic reviewer cannot check reliably.
+            *self._contract_issues(
+                artifacts["state_bridge_code"] or "",
+                artifacts["reward_fn_code"] or "",
+            ),
+            *self._ui_issues(app_code.get("ui.html", "").lower(), actions),
+            *self._empty_artifact_issues(artifacts),
+        ]
+        if self._semantic_review and self._panel is not None:
+            issues.extend(await self._semantic_issues(ctx, artifacts, app_code))
+
+        requirements = [
+            ctx.description,
+            f"Domain: {ctx.compiler_input.domain}",
+            f"Actions: {', '.join(actions) or 'none'}",
+            f"Policy requirements: {ctx.policy_requirements or 'default safety policy'}",
+            f"Reward requirements: {ctx.reward_requirements or 'default task reward'}",
+        ]
+        review = GenerationReview(
+            approved=not any(issue.severity == ReviewSeverity.ERROR for issue in issues),
+            requirements_checked=requirements,
+            issues=issues,
+        )
+        await bus.publish("review_report", review)
+
+    def _structure_issues(self, app_code: dict[str, str], *, with_ui: bool) -> list[ReviewIssue]:
         required_files = {"main.py", "requirements.txt", "Dockerfile"}
         # A headless environment has no UI specialist, so ui.html is never
         # generated and must not be demanded of it.
-        if ctx.with_ui:
+        if with_ui:
             required_files.add("ui.html")
-        for path in sorted(required_files - set(app_code)):
-            issues.append(self._error("structure", f"Required file {path!r} is missing", path))
+        return [
+            self._error("structure", f"Required file {path!r} is missing", path)
+            for path in sorted(required_files - set(app_code))
+        ]
 
+    def _file_issues(self, app_code: dict[str, str]) -> list[ReviewIssue]:
+        issues: list[ReviewIssue] = []
         for path, content in app_code.items():
             if not content.strip():
                 issues.append(self._error("completeness", "Generated file is empty", path))
                 continue
             if path.endswith(".py"):
-                try:
-                    ast.parse(content, filename=path)
-                except SyntaxError as exc:
-                    issues.append(self._error(
-                        "syntax", f"Python does not parse: {exc.msg} at line {exc.lineno}", path
-                    ))
+                issues.extend(self._syntax_issues(content, path))
             lowered = content.lower()
             if "todo" in lowered or "fixme" in lowered or "lorem ipsum" in lowered:
                 issues.append(ReviewIssue(
@@ -130,7 +162,9 @@ class ReviewerAgent(EnvGenAgent):
                     message="Generated file contains placeholder text",
                     artifact=path,
                 ))
+        return issues
 
+    def _generated_python_issues(self, artifacts: dict) -> list[ReviewIssue]:
         generated_python = {
             **{
                 f"instrumented:{path}": content
@@ -140,139 +174,106 @@ class ReviewerAgent(EnvGenAgent):
             "state_bridge_code": artifacts["state_bridge_code"] or "",
             "reward_fn_code": artifacts["reward_fn_code"] or "",
         }
-        for artifact_name, content in generated_python.items():
-            if not content:
-                continue
-            try:
-                ast.parse(content, filename=artifact_name)
-            except SyntaxError as exc:
-                issues.append(self._error(
-                    "syntax",
-                    f"Python does not parse: {exc.msg} at line {exc.lineno}",
-                    artifact_name,
-                ))
+        return [
+            issue
+            for name, content in generated_python.items() if content
+            for issue in self._syntax_issues(content, name)
+        ]
 
+    def _syntax_issues(self, content: str, artifact: str) -> list[ReviewIssue]:
+        try:
+            ast.parse(content, filename=artifact)
+        except SyntaxError as exc:
+            return [self._error("syntax", f"Python does not parse: {exc.msg} at line {exc.lineno}", artifact)]
+        return []
+
+    def _endpoint_issues(self, app_code: dict[str, str], actions: list[str]) -> list[ReviewIssue]:
         backend_text = "\n".join(
             content for path, content in app_code.items() if path.endswith(".py")
         )
-        for endpoint in (
-            "/forge/health", "/forge/state", "/forge/reset",
-            "/forge/snapshot", "/forge/restore", "/forge/restore-state",
-        ):
-            if endpoint not in backend_text:
-                issues.append(self._error(
-                    "requirements", f"Required Forge endpoint {endpoint!r} is missing", "main.py"
-                ))
-        for action in ctx.compiler_input.actions:
-            if action.name not in backend_text:
-                issues.append(self._error(
-                    "requirements", f"Declared action {action.name!r} is not implemented"
-                ))
+        issues = [
+            self._error("requirements", f"Required Forge endpoint {endpoint!r} is missing", "main.py")
+            for endpoint in (
+                "/forge/health", "/forge/state", "/forge/reset",
+                "/forge/snapshot", "/forge/restore", "/forge/restore-state",
+            )
+            if endpoint not in backend_text
+        ]
+        issues.extend(
+            self._error("requirements", f"Declared action {action!r} is not implemented")
+            for action in actions
+            if action not in backend_text
+        )
+        return issues
 
-        # Contract conformance. Static, like the determinism gate — it asks
-        # whether the generated code declares the shape the runtime requires,
-        # which the semantic reviewer cannot check reliably.
-        issues.extend(self._contract_issues(
-            artifacts["state_bridge_code"] or "",
-            artifacts["reward_fn_code"] or "",
-        ))
-
-        ui = app_code.get("ui.html", "").lower()
-        if ui and not all(token in ui for token in ("<html", "<script", "</html>")):
+    def _ui_issues(self, ui: str, actions: list[str]) -> list[ReviewIssue]:
+        if not ui:
+            return []
+        issues = []
+        if not all(token in ui for token in ("<html", "<script", "</html>")):
             issues.append(self._error(
                 "ui", "ui.html must contain a complete HTML document with client behavior", "ui.html"
             ))
-        for action in ctx.compiler_input.actions:
-            if ui and action.name.lower() not in ui:
-                issues.append(self._error(
-                    "requirements",
-                    f"Declared action {action.name!r} is not exposed by the UI",
-                    "ui.html",
-                ))
-
-        for artifact_name in self.depends_on[1:]:
-            value = artifacts[artifact_name]
-            if value is None or value == "" or value == {}:
-                issues.append(self._error(
-                    "artifact", f"Specialist output {artifact_name!r} is empty", artifact_name
-                ))
-
-        requirements = [
-            ctx.description,
-            f"Domain: {ctx.compiler_input.domain}",
-            f"Actions: {', '.join(action.name for action in ctx.compiler_input.actions) or 'none'}",
-            f"Policy requirements: {ctx.policy_requirements or 'default safety policy'}",
-            f"Reward requirements: {ctx.reward_requirements or 'default task reward'}",
-        ]
-        if self._semantic_review and self._panel is not None:
-            review_chars = envgen_config().generated_file_review_chars
-            artifact_excerpt = "\n\n".join(
-                f"=== {path} ===\n{content[:review_chars]}"
-                for path, content in app_code.items()
-            )
-            researched_context = artifacts["reviewer_research"]
-            research_section = (
-                f"Researched product context:\n{researched_context.as_prompt()}\n\n"
-                if researched_context is not None
-                else ""
-            )
-            semantic_input = (
-                f"User request: {ctx.description}\n"
-                f"Domain: {ctx.compiler_input.domain}\n"
-                f"Entities: {[entity.model_dump() for entity in ctx.compiler_input.entities]}\n"
-                f"Actions: {[action.model_dump() for action in ctx.compiler_input.actions]}\n"
-                f"Policy requirements: {ctx.policy_requirements or 'default'}\n"
-                f"Reward requirements: {ctx.reward_requirements or 'default'}\n\n"
-                f"{research_section}"
-                f"Generated application:\n{artifact_excerpt}\n\n"
-                f"State bridge:\n{str(artifacts['state_bridge_code'])[:8000]}\n\n"
-                f"Policy:\n{str(artifacts['policy_dsl'])[:4000]}\n\n"
-                f"Reward:\n{str(artifacts['reward_fn_code'])[:8000]}"
-            )
-            loop = asyncio.get_running_loop()
-            result = await loop.run_in_executor(
-                None, lambda: self._panel.assess(semantic_input)
-            )
-            if result.contested:
-                # The panel disagreed. That is not approval: a contested gate
-                # means the artifacts are not established as correct, and the
-                # dissenting findings are exactly what the repair loop needs.
-                # Labelled separately so a reader can tell "reviewers
-                # disagreed" from "reviewers rejected".
-                findings = result.findings or [
-                    "Semantic reviewers could not reach agreement"
-                ]
-                issues.extend(
-                    ReviewIssue(
-                        severity=ReviewSeverity.ERROR,
-                        category="semantic_review_contested",
-                        message=finding,
-                    )
-                    for finding in findings
-                )
-            else:
-                severity = (
-                    ReviewSeverity.WARNING if result.requirements_met
-                    else ReviewSeverity.ERROR
-                )
-                findings = result.findings or (
-                    ["Semantic reviewer found unmet user requirements"]
-                    if not result.requirements_met else []
-                )
-                issues.extend(
-                    ReviewIssue(
-                        severity=severity,
-                        category="semantic_review",
-                        message=finding,
-                    )
-                    for finding in findings
-                )
-        review = GenerationReview(
-            approved=not any(issue.severity == ReviewSeverity.ERROR for issue in issues),
-            requirements_checked=requirements,
-            issues=issues,
+        issues.extend(
+            self._error("requirements", f"Declared action {action!r} is not exposed by the UI", "ui.html")
+            for action in actions
+            if action.lower() not in ui
         )
-        await bus.publish("review_report", review)
+        return issues
+
+    def _empty_artifact_issues(self, artifacts: dict) -> list[ReviewIssue]:
+        return [
+            self._error("artifact", f"Specialist output {name!r} is empty", name)
+            for name in self.depends_on[1:]
+            if artifacts[name] is None or artifacts[name] == "" or artifacts[name] == {}
+        ]
+
+    async def _semantic_issues(self, ctx: EnvGenContext, artifacts: dict, app_code: dict[str, str]) -> list[ReviewIssue]:
+        review_chars = envgen_config().generated_file_review_chars
+        artifact_excerpt = "\n\n".join(
+            f"=== {path} ===\n{content[:review_chars]}"
+            for path, content in app_code.items()
+        )
+        researched_context = artifacts["reviewer_research"]
+        research_section = (
+            f"Researched product context:\n{researched_context.as_prompt()}\n\n"
+            if researched_context is not None
+            else ""
+        )
+        semantic_input = (
+            f"User request: {ctx.description}\n"
+            f"Domain: {ctx.compiler_input.domain}\n"
+            f"Entities: {[entity.model_dump() for entity in ctx.compiler_input.entities]}\n"
+            f"Actions: {[action.model_dump() for action in ctx.compiler_input.actions]}\n"
+            f"Policy requirements: {ctx.policy_requirements or 'default'}\n"
+            f"Reward requirements: {ctx.reward_requirements or 'default'}\n\n"
+            f"{research_section}"
+            f"Generated application:\n{artifact_excerpt}\n\n"
+            f"State bridge:\n{str(artifacts['state_bridge_code'])[:8000]}\n\n"
+            f"Policy:\n{str(artifacts['policy_dsl'])[:4000]}\n\n"
+            f"Reward:\n{str(artifacts['reward_fn_code'])[:8000]}"
+        )
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, lambda: self._panel.assess(semantic_input))
+        if result.contested:
+            # The panel disagreed. That is not approval: a contested gate
+            # means the artifacts are not established as correct, and the
+            # dissenting findings are exactly what the repair loop needs.
+            # Labelled separately so a reader can tell "reviewers
+            # disagreed" from "reviewers rejected".
+            findings = result.findings or ["Semantic reviewers could not reach agreement"]
+            return [
+                ReviewIssue(severity=ReviewSeverity.ERROR, category="semantic_review_contested", message=finding)
+                for finding in findings
+            ]
+        severity = ReviewSeverity.WARNING if result.requirements_met else ReviewSeverity.ERROR
+        findings = result.findings or (
+            ["Semantic reviewer found unmet user requirements"] if not result.requirements_met else []
+        )
+        return [
+            ReviewIssue(severity=severity, category="semantic_review", message=finding)
+            for finding in findings
+        ]
 
     @staticmethod
     def _error(category: str, message: str, artifact: str | None = None) -> ReviewIssue:

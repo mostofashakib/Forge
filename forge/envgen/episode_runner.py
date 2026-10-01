@@ -12,15 +12,12 @@ import httpx
 
 from forge.contracts import (
     Action,
-    CheckResult,
     DeadEndTerminationPolicy,
     Environment,
-    EpisodeEvaluation,
     EpisodeController,
     MaxStepsTerminationPolicy,
     StepOutcome,
     Task,
-    VerificationResult,
 )
 from forge.envgen.agents.container_agent import ContainerAgentBase
 from forge.contracts.persona import PersonaPopulation
@@ -34,13 +31,13 @@ from forge.envgen.episode_base import (
     TrajectoryWriter,
 )
 from forge.envgen.objective import ObjectiveScorer
+from forge.envgen.objective_grading import ObjectiveGrader
 from forge.runtime.tools import OpenAPIToolProvider
 from forge.runtime.context import RuntimeContext
 from forge.runtime.prompting import ForgeAgentPromptTemplate
 from forge.runtime.reward import ObjectiveScoreRubric
 from forge.runtime.task_source import StaticTaskSource
 from forge.runtime.tasks import select_task
-from forge.runtime.trajectory import Trajectory
 from forge.runtime.control import SUBMIT_ENDPOINT, is_submit_action
 from forge.schema.state_schema import StateSchemaManifest
 from forge.runtime.reliability import (
@@ -160,12 +157,16 @@ class ContainerEpisodeRunner(EpisodeController):
         scorer: ObjectiveScorer | None = None,
         manifest: StateSchemaManifest | None = None,
         environment: Environment | None = None,
+        http_client: httpx.Client | None = None,
     ) -> None:
         self._cfg = config
         self._scorer = scorer or ObjectiveScorer()
+        self._grader = ObjectiveGrader(
+            self._scorer, objective=config.objective, success_threshold=config.success_threshold
+        )
         self._normalizer = HashNormalizer(manifest=manifest)
         self._manifest = manifest
-        self._http = httpx.Client(
+        self._http = http_client or httpx.Client(
             base_url=config.base_url,
             timeout=config.http_timeout,
         )
@@ -426,29 +427,9 @@ class ContainerEpisodeRunner(EpisodeController):
                     base_url=cfg.base_url,
                 )
 
-            # Replay previously logged outputs or query agent live
-            if replay_steps is not None and step_idx < len(replay_steps):
-                replayed = replay_steps[step_idx]
-                expected_hash = replayed.get("state_hash_before")
-                if expected_hash and expected_hash != state_hash_before:
-                    raise DivergenceError(
-                        step=step_idx,
-                        expected_hash=expected_hash,
-                        actual_hash=state_hash_before,
-                    )
-                action = replayed["action"]
-            else:
-                try:
-                    action = agent.act(state, cfg.objective, available_actions)
-                except Exception as exc:
-                    logger.warning("[%s] step %d: agent.act failed: %s", episode_id, step_idx, exc)
-                    raise InfrastructureCrash(
-                        reason=REASON_PROVIDER_ERROR,
-                        detail=f"agent.act failed at step {step_idx}: {exc}",
-                        original_exc=exc,
-                        step=step_idx,
-                    )
-
+            action = self._next_action(
+                agent, state, cfg.objective, available_actions, step_idx, state_hash_before, replay_steps, episode_id,
+            )
             # Write model output before action runs
             if model_output_log is not None:
                 model_output_log.append({
@@ -456,78 +437,19 @@ class ContainerEpisodeRunner(EpisodeController):
                     "action": action,
                     "state_hash_before": state_hash_before,
                 })
-
-            # Ensure the chosen endpoint is in the discovered set (safety)
-            if not is_submit_action(action) and available_actions and not any(
-                a["endpoint"] == action.get("endpoint") for a in available_actions
-            ):
-                logger.debug(
-                    "[%s] step %d: agent chose unknown endpoint %r — falling back",
-                    episode_id, step_idx, action.get("endpoint"),
-                )
-                action = {"endpoint": available_actions[0]["endpoint"], "payload": {}}
+            action = self._known_action(action, available_actions, step_idx, episode_id)
 
             if is_submit_action(action):
-                state_hash = self._normalizer.hash(state)
-                step = StepRecord(
-                    step_index=step_idx,
-                    state_before=state,
-                    action={"endpoint": SUBMIT_ENDPOINT, "payload": {}},
-                    state_after=state,
-                    reward=0.0,
-                    objective_score=0.0,
-                    state_hash_before=state_hash,
-                    state_hash_after=state_hash,
-                    terminated=True,
-                    truncated=False,
-                    termination_reason="submitted",
-                )
-                result.steps.append(step)
-                result.termination_reason = "submitted"
-                self._finalize_result(result, state, action)
-                step.reward = result.total_reward
-                step.objective_score = result.final_objective_score
-                if writer is not None:
-                    writer.record(step)
+                self._submit(result, state, action, step_idx, writer)
                 break
 
-            # Execute the action
             self._execute_action(action, step_idx)
-
-            # Observe new state
-            try:
-                new_state = self._get_state()
-            except Exception as exc:
-                logger.warning("[%s] step %d: get_state failed: %s", episode_id, step_idx, exc)
-                raise InfrastructureCrash(
-                    reason=REASON_STATE_READ_FAILED,
-                    detail=f"get_state failed at step {step_idx}: {exc}",
-                    original_exc=exc,
-                    step=step_idx,
-                )
-
+            new_state = self._observe_after(step_idx, episode_id)
             state_hash_after = self._normalizer.hash(new_state)
 
-            # Build derived-field diff for richer LLM judge context
-            derived_diff: dict = {}
-            if self._manifest is not None:
-                for fname, fspec in self._manifest.fields.items():
-                    if fspec.derived_from:
-                        bv = state.get(fname)
-                        av = new_state.get(fname)
-                        if bv != av:
-                            derived_diff[fname] = {"before": bv, "after": av}
-
             # Stopping checks use only deterministic state progress and budget.
-            outcome = StepOutcome(
-                step_index=step_idx,
-                state_hash=state_hash_after,
-            )
+            outcome = StepOutcome(step_index=step_idx, state_hash=state_hash_after)
             decision = dead_end_policy.check(outcome) or max_steps_policy.check(outcome)
-            termination_reason = decision.reason if decision else None
-            truncated = bool(decision and decision.truncated)
-            terminated = bool(decision and not decision.truncated)
-
             step = StepRecord(
                 step_index=step_idx,
                 state_before=state,
@@ -537,9 +459,9 @@ class ContainerEpisodeRunner(EpisodeController):
                 objective_score=0.0,
                 state_hash_before=state_hash_before,
                 state_hash_after=state_hash_after,
-                terminated=terminated,
-                truncated=truncated,
-                termination_reason=termination_reason if (terminated or truncated) else None,
+                terminated=bool(decision and not decision.truncated),
+                truncated=bool(decision and decision.truncated),
+                termination_reason=decision.reason if decision else None,
             )
             result.steps.append(step)
             logger.info(
@@ -549,15 +471,14 @@ class ContainerEpisodeRunner(EpisodeController):
                 cfg.max_steps,
                 state_hash_before[:6],
                 state_hash_after[:6],
-                f"  → {termination_reason}" if termination_reason else "",
+                f"  → {decision.reason}" if decision else "",
             )
 
-            state = new_state
-
-            if terminated or truncated:
-                result.termination_reason = termination_reason or (
-                    "truncated" if truncated else "unknown"
+            if decision is not None:
+                result.termination_reason = decision.reason or (
+                    "truncated" if decision.truncated else "unknown"
                 )
+                derived_diff = self._manifest.derived_diff(state, new_state) if self._manifest else {}
                 self._finalize_result(
                     result,
                     new_state,
@@ -565,15 +486,92 @@ class ContainerEpisodeRunner(EpisodeController):
                     derived_diff=derived_diff or None,
                     state_changed=state_hash_before != state_hash_after,
                 )
-                step.reward = result.total_reward
-                step.objective_score = result.final_objective_score
-                if writer is not None:
-                    writer.record(step)
+                self._record_graded(step, result, writer)
                 break
+            state = new_state
             if writer is not None:
                 writer.record(step)
 
         result.completed_at = datetime.now(timezone.utc)
+
+    @staticmethod
+    def _next_action(
+        agent, state, objective, available_actions, step_idx, state_hash_before, replay_steps, episode_id,
+    ) -> dict:
+        """The logged action when replaying, else the agent's choice."""
+        if replay_steps is not None and step_idx < len(replay_steps):
+            replayed = replay_steps[step_idx]
+            expected_hash = replayed.get("state_hash_before")
+            if expected_hash and expected_hash != state_hash_before:
+                raise DivergenceError(
+                    step=step_idx,
+                    expected_hash=expected_hash,
+                    actual_hash=state_hash_before,
+                )
+            return replayed["action"]
+        try:
+            return agent.act(state, objective, available_actions)
+        except Exception as exc:
+            logger.warning("[%s] step %d: agent.act failed: %s", episode_id, step_idx, exc)
+            raise InfrastructureCrash(
+                reason=REASON_PROVIDER_ERROR,
+                detail=f"agent.act failed at step {step_idx}: {exc}",
+                original_exc=exc,
+                step=step_idx,
+            )
+
+    @staticmethod
+    def _known_action(action: dict, available_actions: list[dict], step_idx: int, episode_id: str) -> dict:
+        """Replace an endpoint the app does not expose with its first real one."""
+        if is_submit_action(action) or not available_actions:
+            return action
+        if any(a["endpoint"] == action.get("endpoint") for a in available_actions):
+            return action
+        logger.debug(
+            "[%s] step %d: agent chose unknown endpoint %r — falling back",
+            episode_id, step_idx, action.get("endpoint"),
+        )
+        return {"endpoint": available_actions[0]["endpoint"], "payload": {}}
+
+    def _submit(self, result, state: dict, action: dict, step_idx: int, writer) -> None:
+        """Record the submit as a terminal step and grade the state as it stands."""
+        state_hash = self._normalizer.hash(state)
+        step = StepRecord(
+            step_index=step_idx,
+            state_before=state,
+            action={"endpoint": SUBMIT_ENDPOINT, "payload": {}},
+            state_after=state,
+            reward=0.0,
+            objective_score=0.0,
+            state_hash_before=state_hash,
+            state_hash_after=state_hash,
+            terminated=True,
+            truncated=False,
+            termination_reason="submitted",
+        )
+        result.steps.append(step)
+        result.termination_reason = "submitted"
+        self._finalize_result(result, state, action)
+        self._record_graded(step, result, writer)
+
+    def _observe_after(self, step_idx: int, episode_id: str) -> dict:
+        try:
+            return self._get_state()
+        except Exception as exc:
+            logger.warning("[%s] step %d: get_state failed: %s", episode_id, step_idx, exc)
+            raise InfrastructureCrash(
+                reason=REASON_STATE_READ_FAILED,
+                detail=f"get_state failed at step {step_idx}: {exc}",
+                original_exc=exc,
+                step=step_idx,
+            )
+
+    @staticmethod
+    def _record_graded(step: StepRecord, result, writer) -> None:
+        step.reward = result.total_reward
+        step.objective_score = result.final_objective_score
+        if writer is not None:
+            writer.record(step)
 
     def _finalize_result(
         self,
@@ -585,46 +583,17 @@ class ContainerEpisodeRunner(EpisodeController):
         state_changed: bool = False,
     ) -> None:
         """Run the container's objective judge and rubric exactly once."""
-        state_changed = state_changed or any(
-            step.state_hash_before != step.state_hash_after for step in result.steps
-        )
-        score = self._scorer.score(
+        self._grader.grade(
+            result,
             state,
-            self._cfg.objective,
+            action,
+            task=self._selected_task or Task(id="objective", objective=self._cfg.objective),
+            rubric=self.environment.rubric,
             derived_diff=derived_diff,
-            action_taken=action,
+            state_changed=state_changed or any(
+                step.state_hash_before != step.state_hash_after for step in result.steps
+            ),
         )
-        result.llm_verdicts += 1
-        verification = VerificationResult.from_checks(
-            "objective_scorer",
-            [CheckResult(
-                name="objective_score",
-                passed=score >= self._cfg.success_threshold,
-                score=score,
-            )],
-        )
-        selected_task = self._selected_task or Task(
-            id="objective", objective=self._cfg.objective
-        )
-        task = selected_task.model_copy(update={
-            "metadata": {
-                **selected_task.metadata,
-                "state_changed": state_changed,
-            }
-        })
-        reward = self.environment.rubric.score(
-            state,
-            Trajectory(episode_id=result.episode_id, steps=[]),
-            [verification],
-            task,
-        )
-        result.final_objective_score = score
-        result.apply_evaluation(EpisodeEvaluation(
-            passed=verification.passed,
-            reward=reward,
-            verification_results=[verification],
-            reason=result.termination_reason,
-        ))
 
     # ------------------------------------------------------------------
     # Multi-episode rollout

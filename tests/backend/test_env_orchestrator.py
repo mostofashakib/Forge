@@ -228,7 +228,7 @@ def _plan_with(agent_ids: list[str]):
 
 
 def test_pipeline_flags_report_a_headless_build():
-    from backend.app.worker.tasks import pipeline_flags
+    from backend.app.worker.sandbox_build_tasks import pipeline_flags
 
     flags = pipeline_flags(_plan_with(["backend_builder", "app_assembler"]))
 
@@ -238,7 +238,7 @@ def test_pipeline_flags_report_a_headless_build():
 
 def test_pipeline_flags_report_the_specialists_a_plan_contains():
     # False-positive guard: the flags must track the plan, not a constant.
-    from backend.app.worker.tasks import pipeline_flags
+    from backend.app.worker.sandbox_build_tasks import pipeline_flags
 
     flags = pipeline_flags(_plan_with(["user_researcher", "backend_builder", "ui_builder"]))
 

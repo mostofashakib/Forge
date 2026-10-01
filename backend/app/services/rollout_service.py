@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.app.models import RolloutJob
-from backend.app.worker.tasks import run_rollout_task
+from backend.app.worker.rollout_tasks import run_rollout_task
 
 
 def create_rollout(

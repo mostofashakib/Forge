@@ -1,5 +1,6 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING
+import copy
 import uuid
 import gymnasium as gym
 from forge.contracts import (
@@ -22,6 +23,9 @@ from forge.contracts import (
 from forge.contracts.persona import PersonaPopulation
 from forge.personas.engine import PersonaEngine
 from forge.runtime.action import ActionValidator
+from forge.runtime.checkpoint import EnvCheckpoint
+from forge.runtime.episode_grader import EpisodeGrader
+from forge.runtime.tool_surface import ToolSurface
 from forge.runtime.context import RuntimeContext
 from forge.runtime.diff import compute_diff
 from forge.runtime.errors import ResetRequiredError
@@ -84,12 +88,14 @@ class ForgeEnv(gym.Env, Environment):
         termination_policy: TerminationPolicy | None = None,
         online_verifier_engine: VerifierEngine | None = None,
         personas: PersonaEngine | None = None,
+        grader: EpisodeGrader | None = None,
     ) -> None:
         super().__init__()
         self.env_spec = env_spec
         self._initial_state = initial_state_provider
         self._verifier_engine = verifier_engine
         self._reward_engine = reward_engine
+        self._grader = grader or EpisodeGrader(verifier_engine, reward_engine)
         self._task_source = task_source or StaticTaskSource(
             [env_spec.default_task] if env_spec.default_task else []
         )
@@ -133,7 +139,6 @@ class ForgeEnv(gym.Env, Environment):
         self._episode_id: str | None = None
         self._invalid_action_count: int = 0
         self._total_reward: float = 0.0
-        self._evaluation: EpisodeEvaluation | None = None
 
     # ------------------------------------------------------------------
     # Composed Environment facade
@@ -189,24 +194,30 @@ class ForgeEnv(gym.Env, Environment):
         """The simulated humans sharing this environment with the agent."""
         return self._personas
 
+    @property
+    def _evaluation(self) -> EpisodeEvaluation | None:
+        return self._grader.evaluation
+
+    def attach_telemetry(self, telemetry: "TelemetrySink | None") -> None:
+        """Record every later step to `telemetry`. Attach after any warm-up episodes."""
+        self._telemetry = telemetry
+
     def current_trajectory(self):
         """Full recorded trajectory of the in-progress episode."""
         if self._traj_store is None:
             raise ResetRequiredError("Must call reset() before reading the trajectory")
         return self._traj_store.to_trajectory()
 
+    def _surface(self) -> ToolSurface:
+        return ToolSurface(
+            self.action_types,
+            self._tool_specs,
+            (self.mcp_use, self.rest_use, self.orpc_use, self.computer_use, self.browser_use),
+        )
+
     def tool_surface(self) -> list[ToolSpec]:
         """Every tool the agent may call, with params — bare spec if undocumented."""
-        specs = []
-        for name in sorted(self.action_types):
-            if name == SUBMIT_ACTION:
-                specs.append(ToolSpec(
-                    name=SUBMIT_ACTION,
-                    description="Finish the episode and grade the current state",
-                ))
-            else:
-                specs.append(self._tool_specs.get(name, ToolSpec(name=name)))
-        return specs
+        return self._surface().tool_specs()
 
     @property
     def tool_use(self) -> ToolUse:
@@ -227,24 +238,11 @@ class ForgeEnv(gym.Env, Environment):
         an env exposes exactly the modalities its domain needs (MCP tools, REST
         endpoints, oRPC procedures, OS shell, browser).
         """
-        modes = ["tool_use"]
-        for cap in (self.mcp_use, self.rest_use, self.orpc_use, self.computer_use, self.browser_use):
-            if cap is not None:
-                modes.append(cap.name)
-        return modes
+        return self._surface().capabilities()
 
     def capability_surface(self) -> dict[str, list[ToolSpec]]:
-        """Every action the agent can take, grouped by interaction modality.
-
-        The full tool surface across modalities: core tool calls plus any
-        attached MCP tools, REST endpoints, oRPC procedures, OS primitives, and
-        browser primitives — each rendered as ``ToolSpec`` entries.
-        """
-        surface: dict[str, list[ToolSpec]] = {"tool_use": self.tool_surface()}
-        for cap in (self.mcp_use, self.rest_use, self.orpc_use, self.computer_use, self.browser_use):
-            if cap is not None:
-                surface[cap.name] = cap.schema.tool_specs()
-        return surface
+        """Every action the agent can take, grouped by interaction modality."""
+        return self._surface().by_modality()
 
     def reset(
         self, seed: int | None = None, options: dict | None = None
@@ -278,7 +276,7 @@ class ForgeEnv(gym.Env, Environment):
         self._step_count = 0
         self._invalid_action_count = 0
         self._total_reward = 0.0
-        self._evaluation = None
+        self._grader.reset()
         # The cast is resolved from the episode seed, so the same seed always
         # puts the same colleagues in the room.
         self._personas.reset(actual_seed)
@@ -293,6 +291,33 @@ class ForgeEnv(gym.Env, Environment):
         if self._personas.enabled:
             info["personas"] = self._personas.describe()
         return self._observe(self._state_store.get()), info
+
+    def checkpoint(self) -> EnvCheckpoint:
+        """Copy everything the next step depends on, for snapshot recovery."""
+        if self._ctx is None or self._traj_store is None:
+            raise ResetRequiredError("Must call reset() before taking a checkpoint")
+        return EnvCheckpoint(
+            state=copy.deepcopy(self._state_store.get()),
+            context=copy.deepcopy(self._ctx),
+            np_random_state=copy.deepcopy(self.np_random.bit_generator.state),
+            trajectory=copy.deepcopy(self._traj_store),
+            step_count=self._step_count,
+            invalid_action_count=self._invalid_action_count,
+            total_reward=self._total_reward,
+            personas=self._personas.checkpoint(),
+        )
+
+    def restore(self, checkpoint: EnvCheckpoint) -> None:
+        """Return the episode to a checkpoint. The checkpoint itself is left unchanged."""
+        self._state_store = InProcessStateManager(copy.deepcopy(checkpoint.state))
+        self._ctx = copy.deepcopy(checkpoint.context)
+        self.np_random.bit_generator.state = copy.deepcopy(checkpoint.np_random_state)
+        self._traj_store = copy.deepcopy(checkpoint.trajectory)
+        self._step_count = checkpoint.step_count
+        self._invalid_action_count = checkpoint.invalid_action_count
+        self._total_reward = checkpoint.total_reward
+        self._grader.reset()
+        self._personas.restore(checkpoint.personas)
 
     def fingerprint(self) -> str:
         """Return a stable cryptographic fingerprint of the environment's current state."""
@@ -368,20 +393,8 @@ class ForgeEnv(gym.Env, Environment):
         state_after = self._state_store.get()
         hash_after = self._state_store.hash()
 
-        diff = compute_diff(state_before, state_after)
-        self._step_count += 1
-        snapshot = StepSnapshot(
-            episode_id=self._episode_id,
-            step_index=self._step_count - 1,
-            state_hash_before=hash_before,
-            state_hash_after=hash_after,
-            action=action,
-            events=events,
-            reward=0.0,
-            verifier_results=[],
-            diff=diff,
-            terminated=False,
-            truncated=False,
+        snapshot = self._next_snapshot(
+            hash_before, hash_after, action, events, diff=compute_diff(state_before, state_after)
         )
         trajectory = self._traj_store.to_trajectory_with_step(snapshot)
         monitor_results = (
@@ -400,31 +413,6 @@ class ForgeEnv(gym.Env, Environment):
                 verifier_results=monitor_results,
             )
         )
-        terminated = termination is not None and not termination.truncated
-        truncated = termination is not None and termination.truncated
-        reward = 0.0
-        verifier_results = monitor_results
-        reward_breakdown = None
-        if termination is not None:
-            evaluation = self._evaluate_trajectory(
-                state_after, trajectory, termination.reason
-            )
-            reward = evaluation.total_reward
-            verifier_results = evaluation.verification_results
-            reward_breakdown = evaluation.reward
-        snapshot.reward = reward
-        snapshot.verifier_results = [item.model_dump() for item in verifier_results]
-        snapshot.terminated = terminated
-        snapshot.truncated = truncated
-        self._record_snapshot(snapshot)
-        if (terminated or truncated) and self._telemetry:
-            self._telemetry.complete_episode(
-                self._total_reward,
-                bool(self._evaluation and self._evaluation.passed),
-                self._step_count,
-                termination.reason,
-            )
-
         info = {
             "episode_id": self._episode_id,
             "events": events,
@@ -435,13 +423,18 @@ class ForgeEnv(gym.Env, Environment):
             # an author debugging a quiet cast needs to see that a driver left
             # its action space, not just that nobody spoke.
             info["persona_turns"] = [turn.model_dump() for turn in persona_tick.turns]
-        if termination is not None and reward_breakdown is not None:
-            info.update({
-                "passed": self._evaluation.passed,
-                "verifier_results": [item.model_dump() for item in verifier_results],
-                "reward_breakdown": reward_breakdown.model_dump(),
-            })
-        return self._observe(state_after), reward, terminated, truncated, info
+        reward = 0.0
+        snapshot.verifier_results = [item.model_dump() for item in monitor_results]
+        if termination is not None:
+            snapshot.terminated = not termination.truncated
+            snapshot.truncated = termination.truncated
+            evaluation = self._evaluate_trajectory(state_after, trajectory, termination.reason)
+            reward = evaluation.total_reward
+            info.update(self._apply_grade(snapshot, evaluation))
+        self._record_snapshot(snapshot)
+        if termination is not None:
+            self._complete_episode(termination.reason)
+        return self._observe(state_after), reward, snapshot.terminated, snapshot.truncated, info
 
     def finalize_episode(self, reason: str = "external") -> EpisodeEvaluation:
         """Grade the active episode once; repeated calls return the same verdict."""
@@ -452,61 +445,26 @@ class ForgeEnv(gym.Env, Environment):
         )
 
     def _evaluate_trajectory(self, state, trajectory, reason: str) -> EpisodeEvaluation:
-        if self._evaluation is not None:
-            return self._evaluation
-        verifier_results = self._verifier_engine.run_all(
-            state, trajectory, self._current_task
-        )
-        task_with_meta = {
-            **(self._current_task or {}),
-            "invalid_action_count": self._invalid_action_count,
-        }
-        reward = self._reward_engine.compute(
-            state, trajectory, verifier_results, task_with_meta
-        )
-        self._evaluation = EpisodeEvaluation(
-            passed=any(result.passed for result in verifier_results),
-            reward=reward,
-            verification_results=verifier_results,
+        evaluation = self._grader.evaluate(
+            state,
+            trajectory,
+            self._current_task,
+            invalid_action_count=self._invalid_action_count,
             reason=reason,
         )
-        self._total_reward = reward.total_reward
-        return self._evaluation
+        self._total_reward = evaluation.reward.total_reward
+        return evaluation
 
     def _submit(self, state: dict, state_hash: str):
-        self._step_count += 1
-        snapshot = StepSnapshot(
-            episode_id=self._episode_id,
-            step_index=self._step_count - 1,
-            state_hash_before=state_hash,
-            state_hash_after=state_hash,
-            action={"type": SUBMIT_ACTION},
-            events=[],
-            reward=0.0,
-            verifier_results=[],
-            diff={"added": {}, "changed": {}, "removed": {}},
-            terminated=True,
-            truncated=False,
-        )
+        snapshot = self._next_snapshot(state_hash, state_hash, {"type": SUBMIT_ACTION}, [], terminated=True)
         trajectory = self._traj_store.to_trajectory_with_step(snapshot)
         evaluation = self._evaluate_trajectory(state, trajectory, "submitted")
-        snapshot.reward = evaluation.total_reward
-        snapshot.verifier_results = [
-            item.model_dump() for item in evaluation.verification_results
-        ]
+        grade = self._apply_grade(snapshot, evaluation)
         self._record_snapshot(snapshot)
-        if self._telemetry:
-            self._telemetry.complete_episode(
-                evaluation.total_reward,
-                evaluation.passed,
-                self._step_count,
-                "submitted",
-            )
+        self._complete_episode("submitted")
         return self._observe(state), evaluation.total_reward, True, False, {
             "episode_id": self._episode_id,
-            "passed": evaluation.passed,
-            "verifier_results": snapshot.verifier_results,
-            "reward_breakdown": evaluation.reward.model_dump(),
+            **grade,
             "events": [],
             "termination_reason": "submitted",
         }
@@ -522,22 +480,9 @@ class ForgeEnv(gym.Env, Environment):
         invalid: bool = False,
     ) -> tuple[dict, float, bool, bool, dict]:
         """Record a rejected/no-op action while still enforcing episode budgets."""
-        self._step_count += 1
         if invalid:
             self._invalid_action_count += 1
-        snapshot = StepSnapshot(
-            episode_id=self._episode_id,
-            step_index=self._step_count - 1,
-            state_hash_before=state_hash,
-            state_hash_after=state_hash,
-            action=action,
-            events=events,
-            reward=0.0,
-            verifier_results=[],
-            diff={"added": {}, "changed": {}, "removed": {}},
-            terminated=False,
-            truncated=False,
-        )
+        snapshot = self._next_snapshot(state_hash, state_hash, action, events)
         termination = self._termination.check(
             StepOutcome(step_index=snapshot.step_index, state_hash=state_hash)
         )
@@ -546,43 +491,14 @@ class ForgeEnv(gym.Env, Environment):
             snapshot.terminated = not termination.truncated
             snapshot.truncated = termination.truncated
             trajectory = self._traj_store.to_trajectory_with_step(snapshot)
-            evaluation = self._evaluate_trajectory(
-                state, trajectory, termination.reason
-            )
+            evaluation = self._evaluate_trajectory(state, trajectory, termination.reason)
             reward = evaluation.total_reward
-            snapshot.reward = reward
-            snapshot.verifier_results = [
-                item.model_dump() for item in evaluation.verification_results
-            ]
-            info.update({
-                "passed": evaluation.passed,
-                "verifier_results": snapshot.verifier_results,
-                "reward_breakdown": evaluation.reward.model_dump(),
-                "termination_reason": termination.reason,
-            })
+            info.update(self._apply_grade(snapshot, evaluation))
+            info["termination_reason"] = termination.reason
         self._record_snapshot(snapshot)
-        if termination is not None and self._telemetry:
-            self._telemetry.complete_episode(
-                reward, self._evaluation.passed, self._step_count, termination.reason
-            )
-        return (
-            self._observe(state),
-            reward,
-            bool(termination and not termination.truncated),
-            bool(termination and termination.truncated),
-            info,
-        )
-
-    def _record_invalid_step(self, hash_before: str, action: dict) -> None:
-        """Legacy helper retained for callers that only need to record a step."""
-        self._stationary_step_result(
-            self._state_store.get(),
-            hash_before,
-            action,
-            events=[],
-            info={},
-            invalid=True,
-        )
+        if termination is not None:
+            self._complete_episode(termination.reason)
+        return self._observe(state), reward, snapshot.terminated, snapshot.truncated, info
 
     def _policy_violation_result(
         self, state: dict, state_hash: str, action: dict, violations: list
@@ -608,6 +524,49 @@ class ForgeEnv(gym.Env, Environment):
                 violations=violations,
             )
         return result
+
+    def _next_snapshot(
+        self,
+        hash_before: str,
+        hash_after: str,
+        action: dict,
+        events: list[dict],
+        *,
+        diff: dict | None = None,
+        terminated: bool = False,
+    ) -> StepSnapshot:
+        """Count a step and open its record. Reward and verdicts are filled in once graded."""
+        self._step_count += 1
+        return StepSnapshot(
+            episode_id=self._episode_id,
+            step_index=self._step_count - 1,
+            state_hash_before=hash_before,
+            state_hash_after=hash_after,
+            action=action,
+            events=events,
+            reward=0.0,
+            verifier_results=[],
+            diff=diff if diff is not None else {"added": {}, "changed": {}, "removed": {}},
+            terminated=terminated,
+            truncated=False,
+        )
+
+    @staticmethod
+    def _apply_grade(snapshot: StepSnapshot, evaluation: EpisodeEvaluation) -> dict:
+        """Write the verdict onto the step and return it as step info."""
+        snapshot.reward = evaluation.total_reward
+        snapshot.verifier_results = [item.model_dump() for item in evaluation.verification_results]
+        return {
+            "passed": evaluation.passed,
+            "verifier_results": snapshot.verifier_results,
+            "reward_breakdown": evaluation.reward.model_dump(),
+        }
+
+    def _complete_episode(self, reason: str) -> None:
+        if self._telemetry:
+            self._telemetry.complete_episode(
+                self._total_reward, self._evaluation.passed, self._step_count, reason
+            )
 
     def _record_snapshot(self, snapshot: StepSnapshot) -> None:
         self._traj_store.record(snapshot)

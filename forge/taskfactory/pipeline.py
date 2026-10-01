@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Any, Protocol
 
 from forge.taskfactory.contamination import TaskContaminationVerifier
 from forge.taskfactory.pass_k import PassKResult, run_pass_k

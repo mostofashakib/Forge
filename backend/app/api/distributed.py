@@ -7,9 +7,9 @@ from pydantic import BaseModel, Field
 
 from forge.contracts.gpu import (
     APIGatewaySpec,
-    GPUDeviceSpec,
     GPUInferenceContract,
     InferenceMode,
+    compute_status,
 )
 from forge.contracts.inference import (
     InferenceBatchRequest,
@@ -20,7 +20,6 @@ from forge.contracts.inference import (
 from forge.runtime.distributed import (
     DistributedEnvironmentScheduler,
     DurableTaskQueue,
-    MockInferenceProvider,
 )
 from forge.runtime.gpu_inference import HybridGPUInferenceEngine
 
@@ -29,7 +28,6 @@ router = APIRouter(prefix="/api/distributed", tags=["distributed"])
 # Shared singleton instances for distributed orchestration
 _queue = DurableTaskQueue()
 _scheduler = DistributedEnvironmentScheduler(max_concurrent_environments=4)
-_hybrid_engine = HybridGPUInferenceEngine()
 
 
 def _get_inference_engine(
@@ -74,16 +72,7 @@ class ReleaseSlotRequest(BaseModel):
 @router.get("/hardware")
 def get_hardware_status() -> dict[str, Any]:
     """Inspect local GPU accelerators (CUDA/MPS) and cloud gateway connectivity."""
-    hardware = GPUDeviceSpec.probe_hardware()
-    gw_spec = APIGatewaySpec()
-    return {
-        "hardware": hardware,
-        "default_mode": "local_gpu" if hardware.get("cuda_available") or hardware.get("mps_available") else "api_gateway",
-        "api_gateway": {
-            "endpoint_url": gw_spec.endpoint_url,
-            "has_api_key": bool(gw_spec.resolved_api_key()),
-        },
-    }
+    return compute_status()
 
 
 @router.post("/inference", response_model=InferenceResponse)

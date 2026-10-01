@@ -12,9 +12,9 @@ import yaml
 from fastapi.testclient import TestClient
 
 from backend.app.api.personas import _container_endpoints, _environment_actions
-from backend.app.api.sandbox import CreateSandboxRequest
+from backend.app.api.sandbox_schemas import CreateSandboxRequest
 from backend.app.main import app
-from backend.app.worker.tasks import _write_personas
+from backend.app.worker.sandbox_build_tasks import _write_personas
 
 
 @pytest.fixture

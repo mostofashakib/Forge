@@ -40,9 +40,8 @@ def make_runner(pop=None):
         return httpx.Response(200, json={"ok": True})
 
     cfg = EpisodeConfig(base_url="http://c", objective="do it", personas=pop)
-    runner = ContainerEpisodeRunner(cfg)
-    runner._http = httpx.Client(
-        base_url="http://c", transport=httpx.MockTransport(handler)
+    runner = ContainerEpisodeRunner(
+        cfg, http_client=httpx.Client(base_url="http://c", transport=httpx.MockTransport(handler)),
     )
     return runner, posted
 
@@ -134,7 +133,7 @@ def test_reset_clears_the_transcript_between_episodes():
 
 
 def test_the_worker_loads_an_enabled_cast_from_the_environment(tmp_path):
-    from backend.app.worker.tasks import _load_personas
+    from backend.app.worker.env_artifacts import load_personas
 
     custom = tmp_path / "custom"
     custom.mkdir()
@@ -147,33 +146,33 @@ def test_the_worker_loads_an_enabled_cast_from_the_environment(tmp_path):
         "      behavior:\n"
         "        allowed_actions: [/post_message]\n"
     )
-    population = _load_personas(tmp_path)
+    population = load_personas(tmp_path)
     assert population is not None
     assert population.roster[0].profile.id == "nurse"
 
 
 def test_the_worker_treats_a_switched_off_cast_as_no_cast(tmp_path):
-    from backend.app.worker.tasks import _load_personas
+    from backend.app.worker.env_artifacts import load_personas
 
     custom = tmp_path / "custom"
     custom.mkdir()
     (custom / "config.yaml").write_text(
         "personas:\n  enabled: false\n  roster:\n    - id: n\n      name: N\n"
     )
-    assert _load_personas(tmp_path) is None
+    assert load_personas(tmp_path) is None
 
 
 def test_the_worker_survives_an_environment_with_no_config(tmp_path):
-    from backend.app.worker.tasks import _load_personas
+    from backend.app.worker.env_artifacts import load_personas
 
-    assert _load_personas(tmp_path) is None
+    assert load_personas(tmp_path) is None
 
 
 def test_a_malformed_cast_degrades_the_run_rather_than_failing_it(tmp_path):
     """Every episode of a run must not die because one config key is misspelled."""
-    from backend.app.worker.tasks import _load_personas
+    from backend.app.worker.env_artifacts import load_personas
 
     custom = tmp_path / "custom"
     custom.mkdir()
     (custom / "config.yaml").write_text("personas:\n  enabeld: true\n")
-    assert _load_personas(tmp_path) is None
+    assert load_personas(tmp_path) is None

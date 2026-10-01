@@ -37,7 +37,10 @@ def test_train_reports_no_signal_on_all_equal_rewards(tmp_path):
 
 def test_train_rejects_unknown_objective(tmp_path):
     result = runner.invoke(app, [
-        "train", "--data", str(tmp_path), "--base-model", "base", "--objective", "sft",
+        "train", "--data", str(tmp_path), "--base-model", "base", "--objective", "reinforce",
     ])
     assert result.exit_code == 2
     assert "unknown objective" in result.output.lower()
+    # The message lists every objective the trainer accepts.
+    for objective in ("grpo", "dpo", "sft", "ppo"):
+        assert f"'{objective}'" in result.output

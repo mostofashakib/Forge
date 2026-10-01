@@ -3,13 +3,12 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Response, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Response, WebSocket
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
-from fastapi.concurrency import run_in_threadpool
 
-from backend.app.api._pubsub_relay import relay_pubsub
+from backend.app.api._pubsub_relay import stream_channel
 from backend.app.database import get_db, get_session_factory
 from backend.app.models import TaskBatch
 from backend.app.services import task_registry
@@ -148,34 +147,11 @@ def _finished_message(batch_id: str) -> dict | None:
 
 @router.websocket("/ws/progress/{batch_id}")
 async def batch_progress_ws(websocket: WebSocket, batch_id: str) -> None:
-    import redis
-
-    await websocket.accept()
-    channel = channel_for(batch_id)
-    try:
-        connection = redis.asyncio.from_url(redis_url())
-        pubsub = connection.pubsub()
-        await pubsub.subscribe(channel)
-    except Exception:
-        logger.exception("[ws:taskfactory] could not connect to Redis")
-        await websocket.close(code=1011)
-        return
-    try:
-        # Checked after subscribing, so a batch that ends in between still
-        # reaches this client through the channel.
-        finished = await run_in_threadpool(_finished_message, batch_id)
-        if finished is not None:
-            await websocket.send_json(finished)
-        else:
-            await relay_pubsub(websocket, pubsub, is_final=lambda data: bool(data.get("done") or data.get("error")))
-    except WebSocketDisconnect:
-        pass
-    except Exception:
-        logger.exception("[ws:taskfactory] unexpected error for %s", batch_id)
-    finally:
-        await pubsub.unsubscribe(channel)
-        await connection.aclose()
-        try:
-            await websocket.close()
-        except RuntimeError:
-            pass
+    await stream_channel(
+        websocket,
+        redis_url=redis_url(),
+        channel=channel_for(batch_id),
+        finished_message=lambda: _finished_message(batch_id),
+        is_final=lambda data: bool(data.get("done") or data.get("error")),
+        log_tag="taskfactory",
+    )

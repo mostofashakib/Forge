@@ -84,3 +84,21 @@ def test_manifest_serializes_and_round_trips():
     assert m2.fields.keys() == m.fields.keys()
     assert m2.fields["last_updated"].volatile is True
     assert m2.fields["search_results"].derived_from == ["search"]
+
+
+def test_derived_diff_reports_only_changed_derived_fields():
+    from forge.schema.state_schema import FieldSpec, StateSchemaManifest
+
+    manifest = StateSchemaManifest(env_name="mail", fields={
+        "inbox": FieldSpec(type="array"),
+        "unread": FieldSpec(type="integer", derived_from=["inbox"]),
+        "labels": FieldSpec(type="array", derived_from=["inbox"]),
+    })
+
+    diff = manifest.derived_diff(
+        {"inbox": [1], "unread": 1, "labels": ["a"]},
+        {"inbox": [1, 2], "unread": 2, "labels": ["a"]},
+    )
+
+    # `inbox` changed but is not derived; `labels` is derived but unchanged.
+    assert diff == {"unread": {"before": 1, "after": 2}}

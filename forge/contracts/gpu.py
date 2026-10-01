@@ -99,6 +99,25 @@ class APIGatewaySpec(BaseModel):
         return os.environ.get(self.api_key_env) or os.environ.get("OPENAI_API_KEY")
 
 
+def has_local_accelerator(hardware: dict[str, Any]) -> bool:
+    """Whether a `probe_hardware()` result reports a usable CUDA or MPS device."""
+    return bool(hardware.get("cuda_available") or hardware.get("mps_available"))
+
+
+def compute_status() -> dict[str, Any]:
+    """Local accelerators, the default inference mode, and the cloud gateway setup."""
+    hardware = GPUDeviceSpec.probe_hardware()
+    gateway = APIGatewaySpec()
+    return {
+        "hardware": hardware,
+        "default_mode": "local_gpu" if has_local_accelerator(hardware) else "api_gateway",
+        "api_gateway": {
+            "endpoint_url": gateway.endpoint_url,
+            "has_api_key": bool(gateway.resolved_api_key()),
+        },
+    }
+
+
 class GPUInferenceContract(BaseModel):
     """Authoritative contract bridging training & benchmark to local GPU or Cloud Gateway."""
 
@@ -112,7 +131,6 @@ class GPUInferenceContract(BaseModel):
         if self.mode != InferenceMode.AUTO:
             return self.mode
 
-        hardware = GPUDeviceSpec.probe_hardware()
-        if hardware.get("cuda_available") or hardware.get("mps_available"):
+        if has_local_accelerator(GPUDeviceSpec.probe_hardware()):
             return InferenceMode.LOCAL_GPU
         return InferenceMode.API_GATEWAY

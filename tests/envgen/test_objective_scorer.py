@@ -106,13 +106,32 @@ def test_container_episode_with_a_failed_judge_is_not_scored():
     from forge.runtime.errors import GradingError
 
     config = EpisodeConfig(base_url="http://c", objective="do it", max_steps=1)
-    runner = ContainerEpisodeRunner(config, scorer=ObjectiveScorer(client=_FailingClient()))
-    runner._http = httpx.Client(base_url="http://c", transport=httpx.MockTransport(
-        lambda request: httpx.Response(200, json={"n": 1})
-    ))
+    runner = ContainerEpisodeRunner(
+        config,
+        scorer=ObjectiveScorer(client=_FailingClient()),
+        http_client=httpx.Client(base_url="http://c", transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, json={"n": 1})
+        )),
+    )
     result = EpisodeResult(episode_id="cep_fail", config=config)
 
     with pytest.raises(GradingError):
         runner._finalize_result(result, {"n": 1}, {"endpoint": "/act", "payload": {}})
     assert result.total_reward == 0.0
     assert result.llm_verdicts == 0
+
+
+@pytest.mark.parametrize(
+    ("score", "threshold", "passed"),
+    [(0.9, 0.8, True), (0.8, 0.8, True), (0.79, 0.8, False), (0.0, 0.5, False)],
+)
+def test_objective_verification_passes_at_or_above_threshold(score, threshold, passed):
+    from forge.envgen.objective import objective_verification
+
+    verification = objective_verification(score, threshold)
+
+    assert verification.verifier_id == "objective_scorer"
+    assert verification.passed is passed
+    assert [(c.name, c.passed, c.score) for c in verification.checks] == [
+        ("objective_score", passed, score)
+    ]

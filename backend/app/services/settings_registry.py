@@ -14,7 +14,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, fields
 
 from forge.envgen.config import EnvGenConfig
-from forge.envgen.container import (
+from forge.envgen.container_specs import (
     DEFAULT_BROWSER_MEMORY,
     DEFAULT_CLI_MEMORY,
     DEFAULT_CONTAINER_MEMORY,

@@ -1,13 +1,11 @@
 """Unit tests for initial state snapshots and cloned episode containers (Feature Request 5)."""
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 import pytest
 
-from forge.envgen.container import (
-    ContainerRuntime,
-    initial_snapshot_tag,
-)
+from forge.envgen.container import ContainerRuntime
+from forge.envgen.docker_images import initial_snapshot_tag
 from tests.envgen.fake_docker import FakeDocker
 
 
@@ -15,7 +13,7 @@ from tests.envgen.fake_docker import FakeDocker
 def daemon():
     fake = FakeDocker()
     with patch("forge.envgen.container.docker.from_env", return_value=fake), \
-         patch("forge.envgen.container._image_cached_locally", return_value=True):
+         patch("forge.envgen.docker_images.image_cached_locally", return_value=True):
         yield fake
 
 
@@ -33,15 +31,15 @@ def test_initial_snapshot_tag_deterministic():
 
 
 def test_snapshot_initial_state_commits_container():
-    with patch("forge.envgen.container._docker_cli") as cli:
-        tag = ContainerRuntime().snapshot_initial_state("my_app", "base-cont-123", seed=42)
+    cli = MagicMock()
+    tag = ContainerRuntime(cli=cli).snapshot_initial_state("my_app", "base-cont-123", seed=42)
     assert tag == "forge-snapshot-my-app:seed-42"
-    cli.assert_called_once_with("commit", "base-cont-123", tag)
+    cli.run.assert_called_once_with("commit", "base-cont-123", tag)
 
 
 def test_discard_initial_snapshot():
     with patch("subprocess.run") as run_mock:
-        ContainerRuntime.discard_initial_snapshot("forge-snapshot-my-app:seed-42")
+        ContainerRuntime().discard_initial_snapshot("forge-snapshot-my-app:seed-42")
     run_mock.assert_called_once()
     assert "rmi" in run_mock.call_args[0][0]
 
@@ -91,3 +89,19 @@ def test_cloned_episode_cli_delegates(daemon):
         assert ep_container.kwargs["image"] == snapshot
 
     assert cid not in daemon.containers._by_id
+
+
+def test_a_clone_whose_port_never_binds_leaves_no_containers_behind(daemon):
+    runtime = ContainerRuntime()
+    snapshot = initial_snapshot_tag("webapp", seed=0)
+
+    with patch(
+        "forge.envgen.episode_snapshots.wait_for_port_binding",
+        side_effect=RuntimeError("no host-port binding"),
+    ), pytest.raises(RuntimeError, match="no host-port binding"):
+        with runtime.cloned_episode("webapp", snapshot, env_type="general", episode_id="ep2"):
+            pass
+
+    names = _containers(daemon)
+    assert "forge-webapp-ep-ep2" not in names
+    assert "forge-webapp-ep-ep2-gw" not in names

@@ -19,9 +19,9 @@ def _runner_with_capture() -> tuple[ContainerEpisodeRunner, dict]:
             return httpx.Response(200, json={"todos": []})
         return httpx.Response(404, json={"error": "unknown"})
 
-    runner = ContainerEpisodeRunner(EpisodeConfig(base_url="http://c", objective="do it"))
-    runner._http = httpx.Client(
-        base_url="http://c", transport=httpx.MockTransport(handler)
+    runner = ContainerEpisodeRunner(
+        EpisodeConfig(base_url="http://c", objective="do it"),
+        http_client=httpx.Client(base_url="http://c", transport=httpx.MockTransport(handler)),
     )
     return runner, captured
 

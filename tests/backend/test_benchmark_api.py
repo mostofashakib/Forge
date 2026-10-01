@@ -173,7 +173,7 @@ def test_evaluation_rejects_paths_outside_forge(api_client):
 
 
 def test_harbor_command_does_not_use_a_shell(tmp_path):
-    from backend.app.worker.tasks import _harbor_command
+    from backend.app.worker.benchmark_tasks import _harbor_command
 
     task_path = tmp_path / "task_manager"
     command, working_dir = _harbor_command({

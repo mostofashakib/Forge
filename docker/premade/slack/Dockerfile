@@ -5,7 +5,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir --require-hashes -r requirements.txt
 
-COPY app.py ui.html ./
+COPY app.py slack_seed.py ui.html ./
 
 EXPOSE 8000
 

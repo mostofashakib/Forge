@@ -67,7 +67,7 @@ def _prewarm_base_images_on_boot(**_kwargs) -> None:
 
     def _run():
         try:
-            from forge.envgen.container import ensure_cli_image, prewarm_standard_base_images
+            from forge.envgen.docker_images import ensure_cli_image, prewarm_standard_base_images
             log.info("[prewarm] starting base-image pre-warm")
             results = prewarm_standard_base_images()
             log.info("[prewarm] complete: %s", results)

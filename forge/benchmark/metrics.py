@@ -21,9 +21,14 @@ def compute_pass_at_k(n: int, c: int, k: int) -> float:
         n: Total number of samples generated per problem.
         c: Number of correct (passing) samples.
         k: Sample threshold (k <= n).
+
+    Raises:
+        ValueError: when n or k is not positive, or c is outside [0, n].
     """
     if n <= 0 or k <= 0:
-        return 0.0
+        raise ValueError(f"pass@k needs n >= 1 and k >= 1, got n={n}, k={k}")
+    if not 0 <= c <= n:
+        raise ValueError(f"pass@k needs 0 <= c <= n, got c={c}, n={n}")
     if n < k:
         return float(c >= 1)
     if c >= n:
@@ -145,112 +150,33 @@ def generate_benchmark_graphs(
     limit_k = max(1, limit_k)
     k_range = list(range(1, limit_k + 1))
 
-    # Compute pass@k and pass^k curves across all tasks
-    pass_at_k_series: list[float] = []
-    pass_pow_k_series: list[float] = []
-    gap_series: list[float] = []
+    pass_at_k_series, pass_pow_k_series, gap_series = _pass_curves(trials, k_range)
+    kappa, has_verifier_pairs, orig_binary, para_binary = _agreement(trials)
 
-    for k in k_range:
-        scores_at_k = [
-            compute_pass_at_k(t.total_samples, t.passed_samples, k) for t in trials
-        ]
-        scores_pow_k = [
-            compute_pass_pow_k(t.total_samples, t.passed_samples, k) for t in trials
-        ]
-        mean_at_k = sum(scores_at_k) / len(scores_at_k)
-        mean_pow_k = sum(scores_pow_k) / len(scores_pow_k)
-        pass_at_k_series.append(round(mean_at_k, 4))
-        pass_pow_k_series.append(round(mean_pow_k, 4))
-        gap_series.append(round(mean_at_k - mean_pow_k, 4))
-
-    # Compute Cohen's kappa agreement
-    # Priority 1: verifier vs ground_truth passes
-    # Priority 2: original vs paraphrased binary outcomes
-    all_v_passes: list[bool] = []
-    all_gt_passes: list[bool] = []
-    for t in trials:
-        if t.verifier_passes and t.ground_truth_passes:
-            all_v_passes.extend(t.verifier_passes)
-            all_gt_passes.extend(t.ground_truth_passes)
-
-    orig_binary: list[bool] = []
-    para_binary: list[bool] = []
-    for t in trials:
-        if t.paraphrased_total_samples is not None and t.paraphrased_passed_samples is not None:
-            orig_binary.append(t.passed_samples > 0)
-            para_binary.append(t.paraphrased_passed_samples > 0)
-
-    if all_v_passes and len(all_v_passes) == len(all_gt_passes):
-        kappa = compute_cohens_kappa(all_v_passes, all_gt_passes)
-    elif orig_binary:
-        kappa = compute_cohens_kappa(orig_binary, para_binary)
-    else:
-        # Measure inter-seed/trial consistency across tasks
-        first_half = [t.passed_samples >= (t.total_samples / 2) for t in trials]
-        second_half = [t.passed_samples > 0 for t in trials]
-        kappa = compute_cohens_kappa(first_half, second_half)
-
-    # Diagnostic Signals:
-    # 1. Reward Hacking Risk:
-    # High gap between pass@k and pass^k (> 0.5) OR verifier/ground truth kappa < 0.4
+    # Reward hacking: a large gap between pass@k and pass^k, or verifiers that
+    # disagree with ground truth.
     pass1 = pass_at_k_series[0] if pass_at_k_series else 0.0
-    pass_k_max = pass_at_k_series[-1] if pass_at_k_series else 0.0
     pass_pow_max = pass_pow_k_series[-1] if pass_pow_k_series else 0.0
-    gap_max = pass_k_max - pass_pow_max
-
-    if gap_max > 0.6 or (all_v_passes and kappa < 0.3):
+    gap_max = (pass_at_k_series[-1] if pass_at_k_series else 0.0) - pass_pow_max
+    if gap_max > 0.6 or (has_verifier_pairs and kappa < 0.3):
         reward_hacking_risk = "high"
-    elif gap_max > 0.35 or (all_v_passes and kappa < 0.6):
+    elif gap_max > 0.35 or (has_verifier_pairs and kappa < 0.6):
         reward_hacking_risk = "moderate"
     else:
         reward_hacking_risk = "low"
 
-    # 2. Memorization Risk:
-    # Large performance drop from original to paraphrased items
+    # Memorization: performance drops from original to paraphrased items.
     mem_gap = 0.0
     if orig_binary and para_binary:
-        orig_rate = sum(orig_binary) / len(orig_binary)
-        para_rate = sum(para_binary) / len(para_binary)
-        mem_gap = max(0.0, orig_rate - para_rate)
-
-    if mem_gap > 0.3:
-        memorization_risk = "high"
-    elif mem_gap > 0.15:
-        memorization_risk = "moderate"
-    else:
-        memorization_risk = "low"
-
-    # 3. Contamination Risk:
-    # Positive correlation between n-gram overlap and pass rate
-    high_overlap_passes = [
-        t.passed_samples / t.total_samples
-        for t in trials
-        if t.ngram_overlap is not None and t.ngram_overlap > 0.5
-    ]
-    low_overlap_passes = [
-        t.passed_samples / t.total_samples
-        for t in trials
-        if t.ngram_overlap is not None and t.ngram_overlap <= 0.5
-    ]
-    if high_overlap_passes and low_overlap_passes:
-        diff = (sum(high_overlap_passes) / len(high_overlap_passes)) - (
-            sum(low_overlap_passes) / len(low_overlap_passes)
-        )
-        if diff > 0.35:
-            contamination_risk = "high"
-        elif diff > 0.15:
-            contamination_risk = "moderate"
-        else:
-            contamination_risk = "low"
-    else:
-        contamination_risk = "low"
+        mem_gap = max(0.0, sum(orig_binary) / len(orig_binary) - sum(para_binary) / len(para_binary))
+    memorization_risk = _tier(mem_gap, high=0.3, moderate=0.15)
+    contamination_risk = _contamination_risk(trials)
 
     # Genuine learning index: balances high pass@1, robustness (pass^k), and generalization (1 - mem_gap)
     genuine_learning_index = round(
         max(0.0, min(1.0, (pass1 * 0.4 + pass_pow_max * 0.3 + (1.0 - mem_gap) * 0.3))),
         4,
     )
-
     diagnostics = {
         "reward_hacking_risk": reward_hacking_risk,
         "memorization_risk": memorization_risk,
@@ -260,18 +186,111 @@ def generate_benchmark_graphs(
         "robustness_gap_k": round(gap_max, 4),
         "genuine_learning_index": genuine_learning_index,
     }
+    chart_configs = _chart_configs(
+        k_range, pass_at_k_series, pass_pow_k_series, gap_series,
+        kappa=kappa, genuine_learning_index=genuine_learning_index,
+        risks=(reward_hacking_risk, memorization_risk, contamination_risk), gap_max=gap_max,
+    )
 
-    # Chart configurations formatted for frontend graphs (Chart.js / JSON schema)
-    chart_configs = {
+    return BenchmarkGraphData(
+        k_labels=k_range,
+        pass_at_k=pass_at_k_series,
+        pass_pow_k=pass_pow_k_series,
+        cohens_kappa=round(kappa, 4),
+        gap_pass_vs_pow=gap_series,
+        diagnostics=diagnostics,
+        chart_configs=chart_configs,
+    )
+
+
+def _pass_curves(trials: list[TaskTrial], k_range: list[int]) -> tuple[list[float], list[float], list[float]]:
+    """Mean pass@k, pass^k and their gap across tasks, for each k."""
+    pass_at_k: list[float] = []
+    pass_pow_k: list[float] = []
+    gaps: list[float] = []
+    for k in k_range:
+        mean_at_k = sum(compute_pass_at_k(t.total_samples, t.passed_samples, k) for t in trials) / len(trials)
+        mean_pow_k = sum(compute_pass_pow_k(t.total_samples, t.passed_samples, k) for t in trials) / len(trials)
+        pass_at_k.append(round(mean_at_k, 4))
+        pass_pow_k.append(round(mean_pow_k, 4))
+        gaps.append(round(mean_at_k - mean_pow_k, 4))
+    return pass_at_k, pass_pow_k, gaps
+
+
+def _agreement(trials: list[TaskTrial]) -> tuple[float, bool, list[bool], list[bool]]:
+    """Cohen's kappa, preferring verifier vs ground truth, then original vs paraphrased.
+
+    Returns (kappa, whether verifier/ground-truth pairs exist, original outcomes,
+    paraphrased outcomes).
+    """
+    verifier: list[bool] = []
+    ground_truth: list[bool] = []
+    for t in trials:
+        if t.verifier_passes and t.ground_truth_passes:
+            verifier.extend(t.verifier_passes)
+            ground_truth.extend(t.ground_truth_passes)
+    paraphrased = [
+        t for t in trials
+        if t.paraphrased_total_samples is not None and t.paraphrased_passed_samples is not None
+    ]
+    original_binary = [t.passed_samples > 0 for t in paraphrased]
+    paraphrased_binary = [t.paraphrased_passed_samples > 0 for t in paraphrased]
+
+    if verifier and len(verifier) == len(ground_truth):
+        kappa = compute_cohens_kappa(verifier, ground_truth)
+    elif original_binary:
+        kappa = compute_cohens_kappa(original_binary, paraphrased_binary)
+    else:
+        # Measure inter-seed/trial consistency across tasks
+        kappa = compute_cohens_kappa(
+            [t.passed_samples >= (t.total_samples / 2) for t in trials],
+            [t.passed_samples > 0 for t in trials],
+        )
+    return kappa, bool(verifier), original_binary, paraphrased_binary
+
+
+def _tier(value: float, *, high: float, moderate: float) -> str:
+    if value > high:
+        return "high"
+    if value > moderate:
+        return "moderate"
+    return "low"
+
+
+def _contamination_risk(trials: list[TaskTrial]) -> str:
+    """Tasks with high n-gram overlap passing more often suggests contamination."""
+    high = [t.passed_samples / t.total_samples for t in trials if t.ngram_overlap is not None and t.ngram_overlap > 0.5]
+    low = [t.passed_samples / t.total_samples for t in trials if t.ngram_overlap is not None and t.ngram_overlap <= 0.5]
+    if not (high and low):
+        return "low"
+    return _tier(sum(high) / len(high) - sum(low) / len(low), high=0.35, moderate=0.15)
+
+
+_SEVERITY = {"high": 1.0, "moderate": 0.5, "low": 0.1}
+
+
+def _chart_configs(
+    k_range: list[int],
+    pass_at_k: list[float],
+    pass_pow_k: list[float],
+    gaps: list[float],
+    *,
+    kappa: float,
+    genuine_learning_index: float,
+    risks: tuple[str, str, str],
+    gap_max: float,
+) -> dict:
+    """Chart configurations formatted for frontend graphs (Chart.js / JSON schema)."""
+    return {
         "pass_curve": {
             "type": "line",
             "title": "Pass@k vs Pass^k Robustness Curve",
             "xAxis": {"title": "k (Samples Drawn)", "categories": [f"k={k}" for k in k_range]},
             "yAxis": {"title": "Probability", "min": 0.0, "max": 1.0},
             "series": [
-                {"name": "pass@k (At least 1 pass)", "data": pass_at_k_series, "color": "#10b981"},
-                {"name": "pass^k (All k pass)", "data": pass_pow_k_series, "color": "#6366f1"},
-                {"name": "Robustness Gap (pass@k - pass^k)", "data": gap_series, "color": "#f59e0b"},
+                {"name": "pass@k (At least 1 pass)", "data": pass_at_k, "color": "#10b981"},
+                {"name": "pass^k (All k pass)", "data": pass_pow_k, "color": "#6366f1"},
+                {"name": "Robustness Gap (pass@k - pass^k)", "data": gaps, "color": "#f59e0b"},
             ],
         },
         "agreement_bar": {
@@ -289,32 +308,12 @@ def generate_benchmark_graphs(
         "risk_breakdown": {
             "type": "radar",
             "title": "Risk Diagnostics",
-            "categories": [
-                "Reward Hacking",
-                "Memorization",
-                "Contamination",
-                "Robustness Gap",
-            ],
+            "categories": ["Reward Hacking", "Memorization", "Contamination", "Robustness Gap"],
             "series": [
                 {
                     "name": "Risk Severity",
-                    "data": [
-                        1.0 if reward_hacking_risk == "high" else (0.5 if reward_hacking_risk == "moderate" else 0.1),
-                        1.0 if memorization_risk == "high" else (0.5 if memorization_risk == "moderate" else 0.1),
-                        1.0 if contamination_risk == "high" else (0.5 if contamination_risk == "moderate" else 0.1),
-                        min(1.0, round(gap_max, 2)),
-                    ],
+                    "data": [*(_SEVERITY[risk] for risk in risks), min(1.0, round(gap_max, 2))],
                 }
             ],
         },
     }
-
-    return BenchmarkGraphData(
-        k_labels=k_range,
-        pass_at_k=pass_at_k_series,
-        pass_pow_k=pass_pow_k_series,
-        cohens_kappa=round(kappa, 4),
-        gap_pass_vs_pow=gap_series,
-        diagnostics=diagnostics,
-        chart_configs=chart_configs,
-    )

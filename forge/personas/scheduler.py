@@ -38,6 +38,22 @@ class PersonaScheduleState:
         self.last_acted.clear()
         self.action_count.clear()
 
+    def snapshot(self) -> dict[str, dict]:
+        """A copy of the bookkeeping, for a checkpoint."""
+        return {
+            "woken_at": dict(self.woken_at),
+            "wake_trigger": dict(self.wake_trigger),
+            "last_acted": dict(self.last_acted),
+            "action_count": dict(self.action_count),
+        }
+
+    def load(self, snapshot: dict[str, dict]) -> None:
+        """Replace the bookkeeping in place; the scheduler keeps its reference."""
+        for name, values in snapshot.items():
+            current = getattr(self, name)
+            current.clear()
+            current.update(values)
+
     def record_action(self, persona_id: str, step_index: int) -> None:
         self.last_acted[persona_id] = step_index
         self.action_count[persona_id] = self.action_count.get(persona_id, 0) + 1

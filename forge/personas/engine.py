@@ -25,6 +25,7 @@ from __future__ import annotations
 import random
 from collections.abc import Sequence
 from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from forge.contracts.persona import (
@@ -69,6 +70,16 @@ class PersonaTickResult:
     @property
     def blocked(self) -> list[PersonaTurn]:
         return [turn for turn in self.turns if turn.blocked]
+
+
+@dataclass(frozen=True)
+class PersonaCheckpoint:
+    """The engine's per-episode state at one step."""
+
+    roster: tuple[PersonaSpec, ...]
+    schedule: dict[str, dict]
+    rng_state: tuple
+    transcript: tuple[PersonaTurn, ...]
 
 
 class PersonaEngine:
@@ -157,6 +168,22 @@ class PersonaEngine:
         # continues rollout N-1 and two same-seed episodes diverge.
         self._driver.reset(self._rng)
         return self.roster
+
+    def checkpoint(self) -> PersonaCheckpoint:
+        """Capture the per-episode state. A model-backed driver's own memory is not included."""
+        return PersonaCheckpoint(
+            roster=tuple(self._roster),
+            schedule=self._schedule_state.snapshot(),
+            rng_state=self._rng.getstate(),
+            transcript=tuple(self._transcript),
+        )
+
+    def restore(self, checkpoint: PersonaCheckpoint) -> None:
+        """Return to a checkpoint. The RNG is rewound in place because the driver shares it."""
+        self._roster = list(checkpoint.roster)
+        self._schedule_state.load(checkpoint.schedule)
+        self._rng.setstate(checkpoint.rng_state)
+        self._transcript = list(checkpoint.transcript)
 
     @contextmanager
     def deterministic_driver(self):

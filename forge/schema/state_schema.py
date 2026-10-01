@@ -37,3 +37,11 @@ class StateSchemaManifest(BaseModel):
             if before.get(field) != after.get(field):
                 return True
         return False
+
+    def derived_diff(self, before: dict, after: dict) -> dict[str, dict]:
+        """Derived fields whose value changed, as {name: {"before", "after"}}."""
+        return {
+            name: {"before": before.get(name), "after": after.get(name)}
+            for name, spec in self.fields.items()
+            if spec.derived_from and before.get(name) != after.get(name)
+        }

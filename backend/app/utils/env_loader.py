@@ -13,7 +13,7 @@ def load_forge_env(env_name: str, telemetry):
     # Verify before telemetry injection so check steps are never recorded.
     if determinism_enabled():
         run_determinism_check(env)
-    env._telemetry = telemetry
+    env.attach_telemetry(telemetry)
     return env
 
 

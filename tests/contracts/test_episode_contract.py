@@ -83,3 +83,18 @@ def test_rollout_success_comes_from_verdict_not_termination_reason():
     assert record.passed is True
     assert record.outcome == "success"
     assert record.termination_reason == "submitted"
+
+
+def test_read_trajectory_steps_skips_blank_corrupt_and_summary_lines(tmp_path):
+    from forge.contracts.episode import read_trajectory_steps
+
+    path = tmp_path / "ep.jsonl"
+    path.write_text(
+        '{"step_index": 0}\n'
+        "\n"
+        "{not json\n"
+        '{"step_index": 1}\n'
+        '{"type": "episode_summary", "total_steps": 2}\n'
+    )
+
+    assert list(read_trajectory_steps(path)) == [{"step_index": 0}, {"step_index": 1}]

@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { API_BASE } from "@/lib/api";
-import { Cpu, Cloud, Zap, CheckCircle2, AlertCircle, ArrowUpRight, Play, RefreshCw } from "lucide-react";
+import { CheckCircle2, AlertCircle, ArrowUpRight, Play, RefreshCw } from "lucide-react";
+import { InferenceModePicker, type InferenceMode } from "@/components/InferenceModePicker";
 
 interface TrainingRun {
   id: string;
@@ -83,7 +84,7 @@ export default function TrainingPage() {
   const [dataDir, setDataDir] = useState("exports");
   const [outputDir, setOutputDir] = useState("forge_policy");
   const [maxSteps, setMaxSteps] = useState(500);
-  const [inferenceMode, setInferenceMode] = useState<"auto" | "local_gpu" | "api_gateway">("auto");
+  const [inferenceMode, setInferenceMode] = useState<InferenceMode>("auto");
   const [apiGatewayUrl, setApiGatewayUrl] = useState("https://api.openai.com/v1");
   const [gpuPrecision, setGpuPrecision] = useState<"bf16" | "fp16" | "fp32" | "fp8">("bf16");
   const [submitting, setSubmitting] = useState(false);
@@ -301,68 +302,13 @@ export default function TrainingPage() {
             </div>
           </div>
 
-          {/* Inference Target (GPU Contract) */}
-          <div className="benchmark-field">
-            <div className="benchmark-field__label">
-              <span>Inference</span>
-              <small>Local GPU vs Cloud Gateway</small>
-            </div>
-            <div className="benchmark-domain-grid" style={{ gridTemplateColumns: "repeat(3, 1fr)" }}>
-              <label className="benchmark-domain">
-                <input
-                  type="radio"
-                  name="inference_mode"
-                  checked={inferenceMode === "auto"}
-                  onChange={() => setInferenceMode("auto")}
-                  disabled={submitting}
-                />
-                <span className="benchmark-domain__check">✓</span>
-                <span>
-                  <div className="flex items-center gap-1">
-                    <Zap size={13} className="text-amber-500" />
-                    <strong>Auto</strong>
-                  </div>
-                  <small>Detect local GPU or fallback</small>
-                </span>
-              </label>
-
-              <label className="benchmark-domain">
-                <input
-                  type="radio"
-                  name="inference_mode"
-                  checked={inferenceMode === "local_gpu"}
-                  onChange={() => setInferenceMode("local_gpu")}
-                  disabled={submitting}
-                />
-                <span className="benchmark-domain__check">✓</span>
-                <span>
-                  <div className="flex items-center gap-1">
-                    <Cpu size={13} className="text-emerald-500" />
-                    <strong>Local GPU</strong>
-                  </div>
-                  <small>CUDA / Apple Silicon MPS</small>
-                </span>
-              </label>
-
-              <label className="benchmark-domain">
-                <input
-                  type="radio"
-                  name="inference_mode"
-                  checked={inferenceMode === "api_gateway"}
-                  onChange={() => setInferenceMode("api_gateway")}
-                  disabled={submitting}
-                />
-                <span className="benchmark-domain__check">✓</span>
-                <span>
-                  <div className="flex items-center gap-1">
-                    <Cloud size={13} className="text-blue-500" />
-                    <strong>API Gateway</strong>
-                  </div>
-                  <small>Cloud OpenAI/REST gateway</small>
-                </span>
-              </label>
-            </div>
-          </div>
+          <InferenceModePicker
+            name="inference_mode"
+            value={inferenceMode}
+            onChange={setInferenceMode}
+            disabled={submitting}
+            gatewayHint="Cloud OpenAI/REST gateway"
+          />
 
           {/* Base Model */}
           <label className="benchmark-field">

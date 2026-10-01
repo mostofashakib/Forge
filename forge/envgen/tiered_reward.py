@@ -44,7 +44,7 @@ from typing import Sequence
 
 from pydantic import BaseModel, Field
 
-from forge.envgen.container import grading_sandbox
+from forge.envgen.grading_sandbox import grading_sandbox
 from forge.extraction.llm_client import LLMClient, get_judge_client
 from forge.envgen.config import envgen_config
 from forge.reward_presets import RewardPreset, reward_preset_spec

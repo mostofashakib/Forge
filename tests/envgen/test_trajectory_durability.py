@@ -113,12 +113,11 @@ class _SubmitThirdAgent:
 
 
 def _runner(scorer, tmp_path) -> ContainerEpisodeRunner:
-    runner = ContainerEpisodeRunner(
+    return ContainerEpisodeRunner(
         EpisodeConfig(base_url="http://c", objective="increment n", max_steps=10),
         scorer=scorer,
+        http_client=httpx.Client(base_url="http://c", transport=httpx.MockTransport(_counter_app())),
     )
-    runner._http = httpx.Client(base_url="http://c", transport=httpx.MockTransport(_counter_app()))
-    return runner
 
 
 def test_crash_mid_episode_leaves_replayable_partial_trace(tmp_path):

@@ -9,7 +9,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from forge.contracts import (
-    CheckResult,
     DeadEndTerminationPolicy,
     EpisodeController,
     EpisodeEvaluation,
@@ -17,7 +16,6 @@ from forge.contracts import (
     RewardBreakdown,
     RewardComponent,
     StepOutcome,
-    VerificationResult,
 )
 from forge.envgen.episode_base import (
     BaseEpisodeConfig,
@@ -25,7 +23,7 @@ from forge.envgen.episode_base import (
     TerminationMonitor as TerminationMonitor,
     TrajectoryWriter,
 )
-from forge.envgen.objective import ObjectiveScorer
+from forge.envgen.objective import ObjectiveScorer, objective_verification
 from forge.runtime.context import SimClock
 from forge.runtime.interaction import BrowserUse, BrowserUseSchema
 from forge.runtime.control import is_submit_action
@@ -286,14 +284,7 @@ class BrowserEpisodeRunner(EpisodeController):
         """Issue the single authoritative visual verdict for the episode."""
         score = self._scorer.score_with_image(screenshot, url, self._cfg.objective)
         result.llm_verdicts += 1
-        verification = VerificationResult.from_checks(
-            "objective_scorer",
-            [CheckResult(
-                name="objective_score",
-                passed=score >= self._cfg.success_threshold,
-                score=score,
-            )],
-        )
+        verification = objective_verification(score, self._cfg.success_threshold)
         reward = RewardBreakdown(
             total_reward=score,
             components=[RewardComponent(name="objective_score", value=score)],
