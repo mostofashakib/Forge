@@ -1,7 +1,8 @@
-"""Settings page API: the task writer and validator models.
+"""Settings page API: every editable platform setting, saved to backend/.env.
 
-The validator is saved to backend/.env. API keys stay in that file only:
-this API reports whether each provider has one, never the key itself.
+API keys stay in that file only. This API never reads a key's value and
+refuses to write one. It reports whether each provider has a key, so the
+page can warn before you pick a provider that cannot run.
 """
 from __future__ import annotations
 
@@ -12,11 +13,17 @@ from pydantic import BaseModel
 
 from backend.app.services import env_file
 from backend.app.services.ollama_catalog import OllamaUnavailable, list_ollama_models
+from backend.app.services.settings_registry import (
+    DEFAULT_OLLAMA_URL,
+    KEYS,
+    SETTINGS,
+    SettingsError,
+    check_models,
+    check_value,
+    setting,
+)
 from forge.taskfactory.model_settings import (
     SUPPORTED_PROVIDERS,
-    VALIDATOR_MODEL_VAR,
-    VALIDATOR_PROVIDER_VAR,
-    VALIDATOR_VARS,
     ModelSpec,
     TaskFactoryConfigError,
     require_sdks,
@@ -27,9 +34,6 @@ from forge.taskfactory.model_settings import (
 
 router = APIRouter(prefix="/api/settings")
 
-# The same default the Ollama client uses.
-DEFAULT_OLLAMA_URL = "http://localhost:11434"
-
 # Any one of these variables holding a value means the provider has a key.
 PROVIDER_KEY_VARS: dict[str, tuple[str, ...]] = {
     "anthropic": ("ANTHROPIC_API_KEY",),
@@ -39,9 +43,8 @@ PROVIDER_KEY_VARS: dict[str, tuple[str, ...]] = {
 }
 
 
-class TaskValidatorUpdate(BaseModel):
-    provider: str
-    model: str
+class SettingsUpdate(BaseModel):
+    values: dict[str, str]
 
 
 def _spec_view(spec: ModelSpec) -> dict:
@@ -79,14 +82,42 @@ def _ollama(env: dict[str, str]) -> dict:
         return {"models": [], "error": str(exc)}
 
 
+def _effective(saved: dict[str, str]) -> dict[str, str]:
+    """What each setting is now: the saved file, else the process, else the default."""
+    return {spec.key: saved.get(spec.key, os.environ.get(spec.key, spec.default)) for spec in SETTINGS}
+
+
+def _setting_rows(saved: dict[str, str], effective: dict[str, str]) -> list[dict]:
+    return [
+        {
+            "key": spec.key,
+            "group": spec.group,
+            "label": spec.label,
+            "kind": spec.kind,
+            "help": spec.help,
+            "choices": list(spec.choices),
+            "minimum": spec.minimum,
+            "optional": spec.optional,
+            "default": spec.default,
+            "value": effective[spec.key],
+            "live": spec.live,
+            # Saved, but the running API and workers still hold the old value.
+            "pending_restart": not spec.live and spec.key in saved and saved[spec.key] != os.environ.get(spec.key),
+        }
+        for spec in SETTINGS
+    ]
+
+
 def _settings_body() -> dict:
     key_vars = [var for names in PROVIDER_KEY_VARS.values() for var in names]
-    env = env_file.environ_with_saved([*VALIDATOR_VARS, *key_vars])
+    saved = env_file.read_env_values(env_file.BACKEND_ENV_FILE, KEYS)
+    env = {**os.environ, **env_file.read_env_values(env_file.BACKEND_ENV_FILE, key_vars), **saved}
     return {
         "writer": _spec_view(writer_spec(env)),
         "task_validator": _validator_view(env),
         "providers": _providers(env),
         "ollama": _ollama(env),
+        "settings": _setting_rows(saved, _effective(saved)),
     }
 
 
@@ -95,19 +126,14 @@ def get_settings() -> dict:
     return _settings_body()
 
 
-@router.put("/task-validator")
-def update_task_validator(body: TaskValidatorUpdate) -> dict:
-    candidate = {
-        **os.environ,
-        VALIDATOR_PROVIDER_VAR: body.provider.strip().lower(),
-        VALIDATOR_MODEL_VAR: body.model.strip(),
-    }
+@router.put("")
+def update_settings(body: SettingsUpdate) -> dict:
+    """Check every value and the model families together, then save them in one write."""
     try:
-        resolve_models(candidate)
-        env_file.update_env_file(
-            env_file.BACKEND_ENV_FILE,
-            {VALIDATOR_PROVIDER_VAR: candidate[VALIDATOR_PROVIDER_VAR], VALIDATOR_MODEL_VAR: candidate[VALIDATOR_MODEL_VAR]},
-        )
-    except (TaskFactoryConfigError, ValueError) as exc:
+        updates = {key: check_value(setting(key), raw) for key, raw in body.values.items()}
+        saved = env_file.read_env_values(env_file.BACKEND_ENV_FILE, KEYS)
+        check_models({**_effective(saved), **updates})
+        env_file.update_env_file(env_file.BACKEND_ENV_FILE, updates)
+    except (SettingsError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return _settings_body()

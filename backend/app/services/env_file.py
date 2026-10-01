@@ -17,7 +17,7 @@ from dotenv import dotenv_values
 BACKEND_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 
 _KEY = re.compile(r"[A-Z_][A-Z0-9_]*")
-_VALUE = re.compile(r"[A-Za-z0-9._:/@+-]*")
+_VALUE = re.compile(r"[A-Za-z0-9._:/@+,-]*")
 _ASSIGNMENT = re.compile(r"^(\s*(?:export\s+)?)([A-Za-z_][A-Za-z0-9_]*)(\s*=)")
 
 
@@ -34,7 +34,7 @@ def update_env_file(path: Path, updates: Mapping[str, str]) -> None:
         if not _KEY.fullmatch(key):
             raise ValueError(f"{key!r} is not a valid setting name")
         if not _VALUE.fullmatch(value):
-            raise ValueError(f"{key} may only contain letters, digits and . _ : / @ + -")
+            raise ValueError(f"{key} may only contain letters, digits and . _ : / @ + , -")
     lines = path.read_text().splitlines(keepends=True) if path.exists() else []
     remaining = dict(updates)
     rewritten = []

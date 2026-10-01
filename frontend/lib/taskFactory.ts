@@ -15,6 +15,25 @@ export type Settings = {
   task_validator: ModelView & { configured: boolean; error: string | null };
   providers: { name: string; needs_key: boolean; key_set: boolean }[];
   ollama: { models: OllamaModel[]; error: string | null };
+  settings: SettingRow[];
+};
+
+export type SettingGroup = "models" | "runtime" | "containers" | "budgets";
+
+export type SettingRow = {
+  key: string;
+  group: SettingGroup;
+  label: string;
+  kind: "text" | "choice" | "integer" | "number" | "memory" | "url" | "quorum";
+  help: string;
+  choices: string[];
+  minimum: number | null;
+  optional: boolean;
+  default: string;
+  value: string;
+  // Read when each job starts. Everything else waits for an API and worker restart.
+  live: boolean;
+  pending_restart: boolean;
 };
 
 export type OllamaModel = { name: string; family: string; parameters: string | null; cloud: boolean };
