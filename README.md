@@ -500,16 +500,16 @@ Generate training data without running live agents:
 
 ### Task Factory
 
-Create versioned batches of realistic, executable tasks for any environment, apart from environment building. Open **Tasks** (`/tasks`), pick an environment, choose how many tasks you want (1 to 100) and how many times each golden solution must pass (k, 1 to 10), and start a batch. Each batch runs four steps in a Celery job and streams progress to the page.
+Create versioned batches of realistic, executable tasks for any environment, apart from environment building. Open **Tasks** (`/tasks`), pick an environment, choose how many tasks you want (1 to 20,000) and how many times each golden solution must pass (k, 1 to 10), and start a batch. Each batch runs four steps in a Celery job and streams progress to the page.
 
-1. **Taxonomy.** The writer model maps 4 to 12 categories of real work in this environment, across at least 3 difficulty levels. Code checks the spread (level coverage, duplicate names, overlapping descriptions, tools the environment lacks) and asks for one retry before failing the batch. Every batch builds a fresh taxonomy.
-2. **Writer.** Code turns the taxonomy into an exact slot plan, so 30 requested tasks means 30 slots spread evenly across levels and categories. The writer fills five slots per call. Each task carries an objective, seed data, a golden solution, machine-checkable checks, and for difficulty 4 and 5, at least 3 reflection points where the agent has to stop and rethink.
+1. **Taxonomy.** The writer model maps 4 to 12 categories of real work in this environment (up to 40 for large batches), across at least 3 difficulty levels. Code checks the spread (level coverage, duplicate names, overlapping descriptions, tools the environment lacks) and asks for one retry before failing the batch. Every batch builds a fresh taxonomy.
+2. **Writer.** Code turns the taxonomy into an exact slot plan, so 30 requested tasks means 30 slots spread evenly across levels and categories. Each round runs 10 slots at a time: write, check, run, review. Results land steadily, and the environment lock is held for one chunk's golden runs at a time. The writer fills five slots per call and sees the last 50 titles from the same categories, and a draft repeating an accepted title is rejected. Each task carries an objective, seed data, a golden solution, machine-checkable checks, and for difficulty 4 and 5, at least 3 reflection points where the agent has to stop and rethink.
 3. **Validation**, in three layers:
    - A static check in code: the task fits its schema, names only real tools and state, and its golden solution fits the difficulty (1: 1 to 5 steps, 2: 5 to 12, 3: 12 to 30, 4 and 5: 30 or more).
    - Golden pass^k: the golden solution runs k times, each from a fresh seeded start. Before it runs, at least one outcome check must fail, so no task starts solved. After it runs, every check must pass, and every run must end in the same final state.
    - LLM review by a model from a different family than the writer, judging each task realistic, fair, and sensible. The job refuses to start, before any LLM call, if the two models share a family or a provider's Python package is missing (`openai` and `google-genai` are not installed by default).
 
-   Rejected slots go back to the writer with the reason, for up to 3 rounds. A batch that still falls short is saved as `short` with every rejection reason, never padded.
+   A draft whose only problem is its golden solution's length goes back to the writer in the same round, with the draft and a target length, to widen or narrow its scope without padding. Other rejected slots go back to the writer with the reason, for up to 3 rounds. A batch that still falls short is saved as `short` with every rejection reason, never padded.
 4. **Registry.** One transaction saves the batch as the next version for its environment, with its creation date, the models that ran it, the accepted tasks, every rejection, and its own copy of the taxonomy. A saved batch never changes. Deleting one keeps its version number retired.
 
 What a task's seed, golden solution, and checks look like depends on the environment:
@@ -522,9 +522,11 @@ What a task's seed, golden solution, and checks look like depends on the environ
 
 Golden runs reuse the episode machinery: a fresh in-process environment, an app reset in place, a CLI fork from a snapshot taken for the round, or a fresh browser context. Browser tasks need no server. Playwright answers requests to `http://task.local` from the task's stored pages and aborts everything else. Seeds merge into, and checks read, an app's full restorable state. Premade apps expose it at `GET /forge/dump`, because their `/forge/state` is a view that hides archived and sent mail. A round holds the environment's lock, so agent runs on that environment wait until it finishes. An app's state is saved before each round and restored after it.
 
+A freshly compiled in-process environment has stub transitions that leave the state unchanged until `custom/transitions.py` overrides them (see [Environment Customization](#environment-customization)). The factory rejects every task for such an environment, because no golden solution changes anything.
+
 Each version page (`/tasks/<batch>`) shows the taxonomy, every task with its golden solution, checks, and the validator's reasons, and every rejection with its stage. **Export JSON** downloads the batch as `<env>-v<version>-<date>.json`. Agent runs and the benchmark do not draw from batches yet.
 
-**Settings** (`/settings`) sets the validator model. Saving rewrites only the `FORGE_TASK_VALIDATOR_PROVIDER` and `FORGE_TASK_VALIDATOR_MODEL` lines in `backend/.env`, through a temporary file swapped into place, and refuses a model from the writer's family. Each batch reads those two lines when it starts, so a change needs no restart. API keys stay in `backend/.env`. The page shows only whether each provider has one.
+**Settings** (`/settings`) sets the validator model. Picking Ollama lists every model the local server has pulled, with its family and size, disables the writer's family, and labels Ollama cloud models. Saving rewrites only the `FORGE_TASK_VALIDATOR_PROVIDER` and `FORGE_TASK_VALIDATOR_MODEL` lines in `backend/.env`, through a temporary file swapped into place, and refuses a model from the writer's family. Each batch reads those two lines when it starts, so a change needs no restart. API keys stay in `backend/.env`. The page shows only whether each provider has one.
 
 ### Dataset Export
 
