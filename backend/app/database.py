@@ -98,6 +98,30 @@ def init_db() -> None:
         for column_name, statement in benchmark_migrations.items():
             if column_name not in benchmark_columns:
                 conn.execute(text(statement))
+
+        table_names = set(inspect(conn).get_table_names())
+        if "task_batches" in table_names:
+            batch_columns = {
+                column["name"] for column in inspect(conn).get_columns("task_batches")
+            }
+            batch_migrations = {
+                "data_type": "ALTER TABLE task_batches ADD COLUMN data_type TEXT DEFAULT 'rl_tasks'",
+            }
+            for col_name, stmt in batch_migrations.items():
+                if col_name not in batch_columns:
+                    conn.execute(text(stmt))
+
+        if "training_runs" in table_names:
+            training_columns = {
+                column["name"] for column in inspect(conn).get_columns("training_runs")
+            }
+            training_migrations = {
+                "training_mode": "ALTER TABLE training_runs ADD COLUMN training_mode TEXT DEFAULT 'online'",
+                "inference_mode": "ALTER TABLE training_runs ADD COLUMN inference_mode TEXT DEFAULT 'auto'",
+            }
+            for col_name, stmt in training_migrations.items():
+                if col_name not in training_columns:
+                    conn.execute(text(stmt))
         conn.commit()
 
 
