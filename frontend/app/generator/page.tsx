@@ -155,8 +155,7 @@ export default function TaskFactoryPage() {
           <span className="benchmark-run__eyebrow">Synthetic data generator</span>
           <h1>FORGE THE<br /><em>WORK.</em></h1>
           <p>
-            Build a taxonomy, write executable tasks with golden solutions, prove each one passes every
-            run, and have a model from another family judge it. Every batch is saved as a dated version.
+            Build a taxonomy, build synthetic datasets. Every batch is saved as a dated version.
           </p>
         </div>
         <div className="benchmark-run__readout" aria-label="Batch configuration">
