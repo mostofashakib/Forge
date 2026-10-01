@@ -163,16 +163,6 @@ export default function LandingPage() {
       {/* 1. HERO SECTION */}
       <section className="landing-hero mt-4">
         <div className="relative z-10 max-w-4xl space-y-6">
-          <div className="flex flex-wrap items-center gap-3">
-            <span className="font-mono text-[0.62rem] font-semibold uppercase tracking-[0.24em] text-primary">
-              FORGE // RLVR & POST-TRAINING PLATFORM
-            </span>
-            <span className="inline-flex items-center gap-1.5 border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 font-mono text-[0.56rem] font-medium uppercase tracking-[0.16em] text-emerald-600 dark:text-emerald-400">
-              <span className="size-1.5 rounded-full bg-emerald-500 animate-pulse" />
-              SYSTEM ACTIVE
-            </span>
-          </div>
-
           <h1 className="text-[clamp(2.4rem,6vw,5.2rem)] font-semibold leading-[0.88] tracking-[-0.07em]">
             WHERE WORK BECOMES<br />
             <em className="not-italic text-primary">VERIFIABLE INTELLIGENCE.</em>
