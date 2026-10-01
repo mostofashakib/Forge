@@ -161,14 +161,14 @@ export default function LandingPage() {
   return (
     <div className="space-y-12 pb-16 app-width">
       {/* 1. HERO SECTION */}
-      <section className="landing-hero mt-4">
-        <div className="relative z-10 max-w-4xl space-y-6">
+      <section className="landing-hero mt-4 text-center">
+        <div className="relative z-10 mx-auto max-w-4xl space-y-6 flex flex-col items-center">
           <h1 className="text-[clamp(2.4rem,6vw,5.2rem)] font-semibold leading-[0.88] tracking-[-0.07em]">
             WHERE WORK BECOMES<br />
             <em className="not-italic text-primary">VERIFIABLE INTELLIGENCE.</em>
           </h1>
 
-          <p className="max-w-2xl text-xs leading-5 text-muted-foreground sm:text-sm sm:leading-6">
+          <p className="mx-auto max-w-2xl text-xs leading-5 text-muted-foreground sm:text-sm sm:leading-6">
             Forge is the complete platform for post-training reasoning models and autonomous agents.
             Synthesize noise-free datasets with automated <span className="font-mono font-medium text-foreground">pass^k</span> code execution,
             train policies using <span className="font-mono font-medium text-foreground">RLVR</span> and preference alignment,
