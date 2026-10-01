@@ -283,14 +283,24 @@ class ForgeEnv(gym.Env, Environment):
         # puts the same colleagues in the room.
         self._personas.reset(actual_seed)
 
+        self._fingerprint = self.fingerprint()
         info = {
             "episode_id": self._episode_id,
             "task": self._current_task,
             "seed": actual_seed,
+            "fingerprint": self._fingerprint,
         }
         if self._personas.enabled:
             info["personas"] = self._personas.describe()
         return self._observe(self._state_store.get()), info
+
+    def fingerprint(self) -> str:
+        """Return a stable cryptographic fingerprint of the environment's current state."""
+        from forge.taskfactory.runner import fingerprint_of
+        try:
+            return fingerprint_of(self._state_store.get())
+        except Exception:
+            return fingerprint_of({})
 
     def step(self, action: dict) -> tuple[dict, float, bool, bool, dict]:
         if self._ctx is None:

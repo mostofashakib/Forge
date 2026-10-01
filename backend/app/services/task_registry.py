@@ -23,7 +23,14 @@ def _label(spec: ModelSpec) -> str:
 
 
 def create_batch(
-    db: Session, *, env_name: str, requested: int, pass_k: int, writer: ModelSpec, validator: ModelSpec
+    db: Session,
+    *,
+    env_name: str,
+    requested: int,
+    pass_k: int,
+    writer: ModelSpec,
+    validator: ModelSpec,
+    data_type: str = "rl_tasks",
 ) -> str:
     batch = TaskBatch(
         id=f"tb_{uuid.uuid4().hex[:12]}",
@@ -31,6 +38,7 @@ def create_batch(
         status="queued",
         requested=requested,
         pass_k=pass_k,
+        data_type=data_type,
         writer_model=_label(writer),
         validator_model=_label(validator),
     )
@@ -71,6 +79,7 @@ def save_result(db: Session, batch_id: str, result: PipelineResult) -> int:
     batch.version = (latest or 0) + 1
     batch.status = result.status
     batch.delivered = len(result.tasks)
+    batch.data_type = getattr(result, "data_type", getattr(batch, "data_type", "rl_tasks"))
     batch.taxonomy_json = result.taxonomy.model_dump_json()
     batch.completed_at = datetime.now(timezone.utc)
     db.add_all(
@@ -102,6 +111,7 @@ def _summary(batch: TaskBatch) -> dict:
         "env_name": batch.env_name,
         "version": batch.version,
         "status": batch.status,
+        "data_type": getattr(batch, "data_type", "rl_tasks"),
         "requested": batch.requested,
         "delivered": batch.delivered,
         "shortfall": batch.requested - batch.delivered if batch.version is not None else None,

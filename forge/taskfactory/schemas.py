@@ -194,6 +194,44 @@ class SyntheticTask(BaseModel):
     fingerprint: str
     contamination_report: Any | None = None
 
+    @property
+    def task_prompt(self) -> str:
+        """Prompt specifying the task for the agent."""
+        return self.objective
+
+    @property
+    def verifiers(self) -> list[Check]:
+        """Verification suite / checks evaluating task success."""
+        return self.checks
+
+    @property
+    def golden_solution_patch(self) -> list[dict[str, Any]]:
+        """Golden reference solution patch / steps."""
+        return [step.model_dump() for step in self.golden]
+
+
+class PreferencePair(BaseModel):
+    """Pair of preferred and dispreferred responses produced from pipeline verification."""
+
+    id: str
+    task_prompt: str
+    preferred: dict[str, Any]
+    dispreferred: dict[str, Any]
+    rejection_reason: str = ""
+    category: str = ""
+    difficulty: int = 1
+
+
+class SFTItem(BaseModel):
+    """Imitation learning sample with task prompt and golden reference patch."""
+
+    id: str
+    task_prompt: str
+    golden_solution: list[dict[str, Any]]
+    golden_solution_patch: list[dict[str, Any]]
+    category: str = ""
+    difficulty: int = 1
+
 
 class TaskRejection(BaseModel):
     slot: int

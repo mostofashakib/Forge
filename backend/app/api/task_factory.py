@@ -27,9 +27,11 @@ _FINISHED = {"complete", "short", "failed"}
 
 
 class CreateBatchRequest(BaseModel):
-    env_name: str
+    env_name: str | None = None
+    target_env: str | None = None
     count: int = Field(ge=MIN_COUNT, le=MAX_COUNT)
     k: int = Field(default=3, ge=MIN_K, le=MAX_K)
+    data_type: str = Field(default="rl_tasks")
 
 
 @router.get("/environments")
@@ -39,9 +41,12 @@ def environments(db: Session = Depends(get_db)) -> list[dict]:
 
 @router.post("/batches", status_code=202)
 def create_batch(body: CreateBatchRequest, db: Session = Depends(get_db)) -> dict:
-    target = next((t for t in list_targets(db) if t.name == body.env_name), None)
+    env = body.target_env or body.env_name
+    if not env:
+        raise HTTPException(status_code=422, detail="env_name or target_env is required")
+    target = next((t for t in list_targets(db) if t.name == env), None)
     if target is None:
-        raise HTTPException(status_code=404, detail=f"no environment named {body.env_name!r}")
+        raise HTTPException(status_code=404, detail=f"no environment named {env!r}")
     if not target.ready:
         raise HTTPException(status_code=409, detail=target.reason)
     try:
@@ -50,11 +55,24 @@ def create_batch(body: CreateBatchRequest, db: Session = Depends(get_db)) -> dic
     except TaskFactoryConfigError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     batch_id = task_registry.create_batch(
-        db, env_name=body.env_name, requested=body.count, pass_k=body.k, writer=writer, validator=validator,
+        db,
+        env_name=env,
+        requested=body.count,
+        pass_k=body.k,
+        writer=writer,
+        validator=validator,
+        data_type=body.data_type,
     )
     create_task_batch_task.delay(batch_id=batch_id)
-    logger.info("[taskfactory] queued %s for %s: %d tasks, pass^%d", batch_id, body.env_name, body.count, body.k)
-    return {"batch_id": batch_id}
+    logger.info(
+        "[taskfactory] queued %s for %s (type=%s): %d tasks, pass^%d",
+        batch_id,
+        env,
+        body.data_type,
+        body.count,
+        body.k,
+    )
+    return {"batch_id": batch_id, "data_type": body.data_type, "env_name": env}
 
 
 @router.get("/batches")
@@ -77,8 +95,31 @@ def export_batch(batch_id: str, db: Session = Depends(get_db)) -> JSONResponse:
         raise HTTPException(status_code=404, detail="batch not found")
     if detail["version"] is None:
         raise HTTPException(status_code=409, detail="only a saved batch can be exported")
+    data_type = detail.get("data_type", "rl_tasks")
+    if data_type == "preference_pairs":
+        pairs = []
+        for task in detail.get("tasks", []):
+            rej = next((r for r in detail.get("rejections", []) if r.get("slot_index") == task.get("slot_index")), None)
+            pairs.append({
+                "prompt": task.get("objective", ""),
+                "preferred_response": "\n".join(s.get("command") or s.get("tool", "") for s in task.get("golden", [])),
+                "dispreferred_response": rej.get("reason", "rejected") if rej else "Execution failed validation",
+                "metadata": {"task_id": task.get("id"), "difficulty": task.get("difficulty")},
+            })
+        detail["preference_pairs"] = pairs
+    elif data_type == "sft":
+        sft_items = []
+        for task in detail.get("tasks", []):
+            sft_items.append({
+                "prompt": task.get("objective", ""),
+                "completion": "\n".join(s.get("command") or s.get("tool", "") for s in task.get("golden", [])),
+                "trajectory": task.get("golden", []),
+                "metadata": {"task_id": task.get("id"), "difficulty": task.get("difficulty")},
+            })
+        detail["sft_items"] = sft_items
+
     date = (detail["created_at"] or "")[:10]
-    filename = f"{detail['env_name']}-v{detail['version']}-{date}.json"
+    filename = f"{detail['env_name']}-{data_type}-v{detail['version']}-{date}.json"
     return JSONResponse(detail, headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
 

@@ -724,35 +724,75 @@ def run_container_episode_task(self, run_id: str, episode_index: int, seed: int)
                 elif env_type == "browser":
                     from forge.envgen.browser_runner import BrowserEpisodeRunner, BrowserEpisodeConfig
                     from forge.envgen.agents.browser_agent import make_browser_agent
-                    cfg = BrowserEpisodeConfig(
-                        cdp_url=f"http://localhost:{cdp_port}",
-                        objective=objective,
-                        max_steps=max_steps,
-                        dead_end_patience=dead_end_patience,
-                        success_threshold=success_threshold,
-                    )
+                    from forge.envgen.container import ContainerRuntime, initial_snapshot_tag
+                    runtime = ContainerRuntime()
+                    snap = initial_snapshot_tag(env_name, seed)
+                    if not runtime.image_exists(snap):
+                        snap = initial_snapshot_tag(env_name, 0)
+
                     agent = make_browser_agent(agent_id, seed=experiment_seed(attempt_seed))
-                    return BrowserEpisodeRunner(cfg).run_episode(
-                        agent, episode_id=episode_id, jsonl_path=jsonl_path
-                    )
+
+                    if runtime.image_exists(snap):
+                        with runtime.cloned_episode(env_name, snap, env_type="browser", episode_id=episode_id) as (_, ep_port):
+                            cfg = BrowserEpisodeConfig(
+                                cdp_url=f"http://localhost:{ep_port}",
+                                objective=objective,
+                                max_steps=max_steps,
+                                dead_end_patience=dead_end_patience,
+                                success_threshold=success_threshold,
+                            )
+                            return BrowserEpisodeRunner(cfg).run_episode(
+                                agent, episode_id=episode_id, jsonl_path=jsonl_path
+                            )
+                    else:
+                        cfg = BrowserEpisodeConfig(
+                            cdp_url=f"http://localhost:{cdp_port}",
+                            objective=objective,
+                            max_steps=max_steps,
+                            dead_end_patience=dead_end_patience,
+                            success_threshold=success_threshold,
+                        )
+                        return BrowserEpisodeRunner(cfg).run_episode(
+                            agent, episode_id=episode_id, jsonl_path=jsonl_path
+                        )
 
                 else:  # general / premade (both run FastAPI over HTTP)
                     from forge.envgen.episode_runner import ContainerEpisodeRunner, EpisodeConfig
                     from forge.envgen.agents.container_agent import make_container_agent
-                    if container_port is None:
-                        raise RuntimeError(f"General sandbox {env_name} has no container_port")
-                    cfg = EpisodeConfig(
-                        base_url=f"http://localhost:{container_port}",
-                        objective=objective,
-                        max_steps=max_steps,
-                        dead_end_patience=dead_end_patience,
-                        success_threshold=success_threshold,
-                        personas=_load_personas(envs_root / env_name),
-                    )
-                    manifest = _load_manifest(envs_root / env_name)
+                    from forge.envgen.container import ContainerRuntime, initial_snapshot_tag
+                    runtime = ContainerRuntime()
+                    snap = initial_snapshot_tag(env_name, seed)
+                    if not runtime.image_exists(snap):
+                        snap = initial_snapshot_tag(env_name, 0)
+
                     agent = make_container_agent(agent_id, seed=experiment_seed(attempt_seed))
-                    with ContainerEpisodeRunner(cfg, manifest=manifest) as runner:
-                        return runner.run_episode(agent, episode_id=episode_id, jsonl_path=jsonl_path)
+                    manifest = _load_manifest(envs_root / env_name)
+
+                    if runtime.image_exists(snap):
+                        with runtime.cloned_episode(env_name, snap, env_type="general", episode_id=episode_id) as (_, ep_port):
+                            cfg = EpisodeConfig(
+                                base_url=f"http://localhost:{ep_port}",
+                                objective=objective,
+                                max_steps=max_steps,
+                                dead_end_patience=dead_end_patience,
+                                success_threshold=success_threshold,
+                                personas=_load_personas(envs_root / env_name),
+                            )
+                            with ContainerEpisodeRunner(cfg, manifest=manifest) as runner:
+                                return runner.run_episode(agent, episode_id=episode_id, jsonl_path=jsonl_path)
+                    else:
+                        if container_port is None:
+                            raise RuntimeError(f"General sandbox {env_name} has no container_port")
+                        cfg = EpisodeConfig(
+                            base_url=f"http://localhost:{container_port}",
+                            objective=objective,
+                            max_steps=max_steps,
+                            dead_end_patience=dead_end_patience,
+                            success_threshold=success_threshold,
+                            personas=_load_personas(envs_root / env_name),
+                        )
+                        with ContainerEpisodeRunner(cfg, manifest=manifest) as runner:
+                            return runner.run_episode(agent, episode_id=episode_id, jsonl_path=jsonl_path)
 
             with SessionLocal() as db_rel:
                 result, attempts = execute_reliable_episode(

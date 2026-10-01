@@ -47,6 +47,7 @@ export type BatchSummary = {
   delivered: number;
   shortfall: number | null;
   pass_k: number;
+  data_type?: string | null;
   writer_model: string;
   validator_model: string;
   error: string | null;

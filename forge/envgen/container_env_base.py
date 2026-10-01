@@ -407,7 +407,8 @@ class ContainerEnvBase(gymnasium.Env, Environment):
         obs = self._observations.encode(state, self._runtime_ctx).payload
         self._step_count = 0
         self._personas.reset(actual_seed)
-        info = {}
+        self._fingerprint = self.fingerprint()
+        info = {"fingerprint": self._fingerprint}
         if self._current_task is not None:
             info["task"] = task_payload(self._current_task)
         if seed is not None:
@@ -415,6 +416,14 @@ class ContainerEnvBase(gymnasium.Env, Environment):
         if self._personas.enabled:
             info["personas"] = self._personas.describe()
         return obs, info
+
+    def fingerprint(self) -> str:
+        """Return a stable cryptographic fingerprint of the container environment's state."""
+        from forge.taskfactory.runner import fingerprint_of
+        try:
+            return fingerprint_of(self._state_manager.get())
+        except Exception:
+            return fingerprint_of({})
 
     def step(self, action: dict) -> tuple[dict, float, bool, bool, dict]:
         # Delegates to `self.backend` — see `_HttpExecutionBackend` — so there

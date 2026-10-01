@@ -174,6 +174,7 @@ export default function BatchPage({ params }: { params: Promise<{ batchId: strin
         </div>
         <div className="benchmark-run__readout">
           <div><span>Delivered</span><strong>{batch.delivered}/{batch.requested}</strong></div>
+          <div><span>Data Type</span><strong>{batch.data_type === "preference_pairs" ? "Pair" : batch.data_type === "sft" ? "SFT" : "RL"}</strong></div>
           <div><span>Rejected drafts</span><strong>{String(batch.rejections.length).padStart(2, "0")}</strong></div>
           <div><span>pass^k</span><strong>{String(batch.pass_k).padStart(2, "0")}</strong></div>
           <div className={`benchmark-run__state benchmark-run__state--${batch.status === "failed" ? "error" : finished ? "done" : "running"}`}>

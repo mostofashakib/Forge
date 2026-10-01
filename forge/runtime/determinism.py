@@ -1,12 +1,18 @@
 from __future__ import annotations
 import hashlib
 from dataclasses import dataclass, field
+from typing import Any, Callable
 
 from forge.runtime.canonical import canonical_hash
 from forge.runtime.errors import DeterminismError
 from forge.runtime.policy import seeded_random_policy
 
-__all__ = ["DeterminismError", "DeterminismReport", "run_determinism_check"]
+__all__ = [
+    "DeterminismError",
+    "DeterminismReport",
+    "run_determinism_check",
+    "check_fingerprint_determinism",
+]
 
 
 @dataclass
@@ -16,6 +22,61 @@ class DeterminismReport:
     observation_hash: str
     actions: list[dict] = field(default_factory=list)
     total_reward: float = 0.0
+    fingerprint: str = ""
+    recreated_fingerprint: str = ""
+    fingerprint_matched: bool = True
+    task: str | None = None
+
+
+def check_fingerprint_determinism(
+    env,
+    task: Any = None,
+    seed: int = 42,
+    recreate_fn: Callable[..., Any] | None = None,
+) -> tuple[str, str, bool]:
+    """Compare fingerprint generated during initial environment creation with recreated snapshot fingerprint.
+
+    For each (task, seed) pair, these two fingerprints must match exactly.
+    """
+    options = {"task": task} if task is not None else None
+    if hasattr(env, "reset"):
+        try:
+            env.reset(seed=seed, options=options)
+        except TypeError:
+            env.reset(seed=seed)
+
+    initial_fp = env.fingerprint() if hasattr(env, "fingerprint") else ""
+
+    if recreate_fn is not None:
+        try:
+            recreated_env = recreate_fn(task=task, seed=seed)
+        except TypeError:
+            recreated_env = recreate_fn()
+        recreated_fp = (
+            recreated_env.fingerprint() if hasattr(recreated_env, "fingerprint") else ""
+        )
+    elif hasattr(env, "snapshot") and hasattr(env, "restore_snapshot"):
+        snap = env.snapshot()
+        env.restore_snapshot(snap)
+        recreated_fp = env.fingerprint() if hasattr(env, "fingerprint") else ""
+    elif hasattr(env, "reset"):
+        try:
+            env.reset(seed=seed, options=options)
+        except TypeError:
+            env.reset(seed=seed)
+        recreated_fp = env.fingerprint() if hasattr(env, "fingerprint") else ""
+    else:
+        recreated_fp = initial_fp
+
+    if initial_fp != recreated_fp:
+        raise DeterminismError(
+            seed,
+            initial_fp,
+            recreated_fp,
+            reason=f"fingerprint mismatch for (task={task}, seed={seed}): {initial_fp} != {recreated_fp}",
+        )
+
+    return initial_fp, recreated_fp, True
 
 
 def _rollout(
@@ -86,18 +147,21 @@ def run_determinism_check(
     seed: int = 42,
     num_steps: int = 5,
     actions: list[dict] | None = None,
+    task: Any = None,
+    recreate_fn: Callable[..., Any] | None = None,
 ) -> DeterminismReport:
-    """Verify the env produces identical observations across two seeded rollouts.
+    """Verify the env produces identical observations across two seeded rollouts
+    and identical fingerprints between creation and snapshot recreation.
 
     Runs a rollout with `seed` recording every observation, resets, replays the
-    same actions with the same seed, hashes both observation streams, and
-    raises DeterminismError if the hashes differ. Leaves the env in a stepped
-    state — callers must reset() before normal use.
-
-    Callers run this check by default. The explicit ``FORGE_DETERMINISM=off``
-    experiment path skips it so repeated same-seed trajectories can quantify
-    the value of deterministic clocks and RNGs.
+    same actions with the same seed, hashes both observation streams, checks
+    environment fingerprint consistency for `(task, seed)` pairs, and raises
+    DeterminismError if hashes or fingerprints differ.
     """
+    initial_fp, recreated_fp, fp_ok = check_fingerprint_determinism(
+        env, task=task, seed=seed, recreate_fn=recreate_fn
+    )
+
     first_hashes, taken, first_total = _rollout(env, seed, num_steps, actions)
     second_hashes, _, _second_total = _rollout(env, seed, num_steps, taken if actions is None else actions)
 
@@ -117,4 +181,8 @@ def run_determinism_check(
         observation_hash=first_hash,
         actions=taken,
         total_reward=first_total,
+        fingerprint=initial_fp,
+        recreated_fingerprint=recreated_fp,
+        fingerprint_matched=fp_ok,
+        task=str(task) if task is not None else None,
     )

@@ -124,20 +124,26 @@ class DeterminismError(ForgeError, RuntimeError):
         first_hash: str,
         second_hash: str,
         divergent_step: int | None = None,
+        reason: str | None = None,
     ) -> None:
         self.seed = seed
         self.first_hash = first_hash
         self.second_hash = second_hash
         self.divergent_step = divergent_step
-        location = (
-            f"first divergence at observation {divergent_step}"
-            if divergent_step is not None
-            else "observation counts differ"
-        )
-        super().__init__(
-            f"Environment is not deterministic for seed {seed}: "
-            f"{first_hash} != {second_hash} ({location})"
-        )
+        self.reason = reason
+        if reason:
+            msg = f"Environment is not deterministic for seed {seed}: {reason}"
+        else:
+            location = (
+                f"first divergence at observation {divergent_step}"
+                if divergent_step is not None
+                else "observation counts differ"
+            )
+            msg = (
+                f"Environment is not deterministic for seed {seed}: "
+                f"{first_hash} != {second_hash} ({location})"
+            )
+        super().__init__(msg)
 
 
 # ---------------------------------------------------------------------------

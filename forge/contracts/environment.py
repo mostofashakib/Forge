@@ -77,3 +77,11 @@ class Environment(ABC):
         raise NotImplementedError(
             f"{type(self).__name__} finalizes through its EpisodeController"
         )
+
+    def fingerprint(self) -> str:
+        """Return a stable cryptographic fingerprint of the environment's state."""
+        from forge.taskfactory.runner import fingerprint_of
+        try:
+            return fingerprint_of(self.state.get())
+        except Exception:
+            return ""

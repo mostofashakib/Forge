@@ -17,6 +17,7 @@ from backend.app.database import get_db, get_session_factory
 from backend.app.models import BenchmarkRun
 from forge.paths import confined_relative_path
 from forge.settings import redis_url
+from forge.benchmark.metrics import TaskTrial, generate_benchmark_graphs
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,7 @@ class CreateEvaluationRequest(BaseModel):
     harbor_task_path: str | None = "example_tasks/task_manager"
     harbor_agent: str | None = "agent.harbor_agent:TrackerAgent"
     harbor_model: str | None = "ollama/qwen3.6:35b"
+    inference_mode: Literal["auto", "local_gpu", "api_gateway"] = "auto"
 
     @model_validator(mode="after")
     def validate_engine_fields(self):
@@ -109,6 +111,9 @@ def list_benchmark_runs(db: Session = Depends(get_db)):
 @router.get("/evals/capabilities")
 def evaluation_capabilities():
     bundled_harbor = Path.cwd() / "example_tasks" / ".venv" / "bin" / "harbor"
+    from forge.contracts.gpu import APIGatewaySpec, GPUDeviceSpec
+    hardware = GPUDeviceSpec.probe_hardware()
+    gw_spec = APIGatewaySpec()
     return {
         "engines": {
             "forge": {"available": True},
@@ -116,7 +121,16 @@ def evaluation_capabilities():
                 "available": bool(shutil.which("harbor") or bundled_harbor.is_file()),
                 "setup_hint": "Run `uv tool install harbor` to enable Harbor.",
             },
-        }
+        },
+        "compute": {
+            "hardware": hardware,
+            "local_gpu_available": bool(hardware.get("cuda_available") or hardware.get("mps_available")),
+            "api_gateway": {
+                "endpoint_url": gw_spec.endpoint_url,
+                "has_api_key": bool(gw_spec.resolved_api_key()),
+            },
+            "supported_modes": ["auto", "local_gpu", "api_gateway"],
+        },
     }
 
 
@@ -215,6 +229,78 @@ def download_benchmark_csv(run_id: str, db: Session = Depends(get_db)):
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="env_quality_{run_id}.csv"'},
     )
+
+
+class GenerateGraphsRequest(BaseModel):
+    trials: list[TaskTrial]
+    max_k: int | None = 10
+    graph_type: Literal["all", "pass_curve", "agreement_bar", "risk_breakdown"] = "all"
+
+
+@router.get("/runs/{run_id}/graphs")
+def get_benchmark_graphs(
+    run_id: str,
+    graph_type: Literal["all", "pass_curve", "agreement_bar", "risk_breakdown"] = "all",
+    max_k: int = 10,
+    db: Session = Depends(get_db),
+):
+    """Retrieve benchmark graph options (pass@1, pass@k, pass^k, Cohen's kappa, diagnostics)."""
+    run = db.get(BenchmarkRun, run_id)
+    if run is None or run.report_json is None:
+        raise HTTPException(status_code=404, detail="Benchmark run or report not found")
+
+    raw_data = json.loads(run.report_json)
+    trials: list[TaskTrial] = []
+
+    if isinstance(raw_data, dict) and "trials" in raw_data:
+        trials = [TaskTrial(**t) for t in raw_data["trials"]]
+    elif isinstance(raw_data, list):
+        for idx, item in enumerate(raw_data):
+            num_episodes = max(1, item.get("num_episodes", 10))
+            reward_density = item.get("reward_density", 0.5)
+            coverage = item.get("state_coverage_score", 0.5)
+            diversity = item.get("action_diversity", 0.5)
+            passed = max(0, int(round(reward_density * num_episodes)))
+            para_passed = max(0, int(round(coverage * num_episodes)))
+            v_passes = [True] * passed + [False] * (num_episodes - passed)
+            gt_passes = [True] * para_passed + [False] * (num_episodes - para_passed)
+
+            trials.append(
+                TaskTrial(
+                    task_id=item.get("env_name", f"env_{idx}"),
+                    passed_samples=passed,
+                    total_samples=num_episodes,
+                    paraphrased_passed_samples=para_passed,
+                    paraphrased_total_samples=num_episodes,
+                    verifier_passes=v_passes,
+                    ground_truth_passes=gt_passes,
+                    ngram_overlap=max(0.0, min(1.0, 1.0 - diversity)),
+                )
+            )
+    elif isinstance(raw_data, dict):
+        trials.append(
+            TaskTrial(
+                task_id=raw_data.get("task_path", run_id),
+                passed_samples=1 if raw_data.get("status") == "completed" else 0,
+                total_samples=1,
+            )
+        )
+
+    graph_data = generate_benchmark_graphs(trials, max_k=max_k)
+    res = graph_data.model_dump()
+    if graph_type != "all" and graph_type in res["chart_configs"]:
+        res["chart_configs"] = {graph_type: res["chart_configs"][graph_type]}
+    return res
+
+
+@router.post("/graphs")
+def create_benchmark_graphs(body: GenerateGraphsRequest) -> dict:
+    """Calculate and render benchmark graphs (pass@1, pass@k, pass^k, Cohen's kappa, diagnostics)."""
+    graph_data = generate_benchmark_graphs(body.trials, max_k=body.max_k)
+    res = graph_data.model_dump()
+    if body.graph_type != "all" and body.graph_type in res["chart_configs"]:
+        res["chart_configs"] = {body.graph_type: res["chart_configs"][body.graph_type]}
+    return res
 
 
 def _finished_run_message(run_id: str) -> dict | None:

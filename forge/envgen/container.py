@@ -2,6 +2,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import secrets
 import subprocess
 import time
 from contextlib import contextmanager
@@ -94,6 +95,12 @@ def cli_snapshot_tag(env_name: str, run_id: str) -> str:
     repo = re.sub(r"[^a-z0-9._-]", "-", env_name.lower())
     tag = re.sub(r"[^A-Za-z0-9_.-]", "-", run_id)[:128]
     return f"forge-cli-snapshot-{repo}:{tag}"
+
+
+def initial_snapshot_tag(env_name: str, seed: int = 0) -> str:
+    """The immutable Docker image snapshot of initial state with seed data."""
+    repo = re.sub(r"[^a-z0-9.-]", "-", env_name.lower().replace("_", "-"))
+    return f"forge-snapshot-{repo}:seed-{seed}"
 
 
 # Every process in the CLI container starts its clock at the SimClock epoch.
@@ -666,23 +673,30 @@ class ContainerRuntime:
             # Another worker created it between our lookup and create.
             return self._docker.networks.get(name)
 
-    def _start_gateway(self, env_name: str, forwards: dict[int, int], network):
-        """Publish each port on loopback, forwarding it to a port on the environment only."""
-        target = self._container_name(env_name)
+    def _start_custom_gateway(
+        self,
+        env_name: str,
+        target_name: str,
+        gateway_name: str,
+        forwards: dict[int, int],
+        network,
+        role: str = "gateway",
+    ):
+        """Publish each port on loopback, forwarding it to target_name."""
         ports = tuple(forwards)
         script = " & ".join(
-            f"socat TCP-LISTEN:{port},fork,reuseaddr TCP:{target}:{target_port}"
+            f"socat TCP-LISTEN:{port},fork,reuseaddr TCP:{target_name}:{target_port}"
             for port, target_port in forwards.items()
         ) + " & wait"
         gateway = self._docker.containers.run(
             image=FORGE_GATEWAY_IMAGE,
-            name=self._gateway_name(env_name),
+            name=gateway_name,
             entrypoint=["/bin/sh", "-c"],
             command=[script],
             detach=True,
             ports={f"{port}/tcp": _loopback_port() for port in ports},
-            labels={"forge.env": env_name, "forge.managed": "true", "forge.role": "gateway"},
-            restart_policy={"Name": "unless-stopped"},
+            labels={"forge.env": env_name, "forge.managed": "true", "forge.role": role},
+            restart_policy={"Name": "unless-stopped" if role == "gateway" else "no"},
             mem_limit=_GATEWAY_MEMORY_LIMIT,
             nano_cpus=_CPU_LIMIT,
             pids_limit=_PID_LIMIT,
@@ -691,6 +705,17 @@ class ContainerRuntime:
         )
         network.connect(gateway)
         return gateway
+
+    def _start_gateway(self, env_name: str, forwards: dict[int, int], network):
+        """Publish each port on loopback, forwarding it to a port on the environment only."""
+        return self._start_custom_gateway(
+            env_name=env_name,
+            target_name=self._container_name(env_name),
+            gateway_name=self._gateway_name(env_name),
+            forwards=forwards,
+            network=network,
+            role="gateway",
+        )
 
     def _remove_network(self, env_name: str) -> None:
         try:
@@ -832,6 +857,129 @@ class ContainerRuntime:
             container.remove(force=True)
             if refill:
                 self.warm_cli(env_name, snapshot)
+
+    def snapshot_initial_state(self, env_name: str, container_id: str, seed: int = 0) -> str:
+        """Freeze the environment container with seed data into an immutable snapshot image."""
+        tag = initial_snapshot_tag(env_name, seed)
+        _docker_cli("commit", container_id, tag)
+        return tag
+
+    @staticmethod
+    def discard_initial_snapshot(snapshot: str) -> None:
+        """Drop an initial state snapshot image. A missing image is fine."""
+        subprocess.run(["docker", "rmi", "-f", snapshot], capture_output=True, check=False)
+
+    @contextmanager
+    def cloned_episode(
+        self,
+        env_name: str,
+        snapshot: str,
+        *,
+        env_type: str = "general",
+        episode_id: str | None = None,
+        refill: bool = False,
+    ) -> Iterator[str | tuple[str, int]]:
+        """Yield an isolated container cloned from an immutable snapshot, then discard it.
+
+        Each episode gets its own world cloned from the immutable snapshot and is
+        destroyed once the episode is done.
+        For CLI environments, yields container_id.
+        For general (HTTP) and browser environments, yields (container_id, host_port).
+        """
+        if env_type == "cli":
+            with self.cli_episode(env_name, snapshot, refill=refill) as cid:
+                yield cid
+            return
+
+        base = self._container_name(env_name)
+        ep_token = re.sub(r"[^a-zA-Z0-9_.-]", "-", episode_id or secrets.token_hex(4))
+        ep_name = f"{base}-ep-{ep_token}"
+        network = self._sandbox_network(env_name)
+
+        try:
+            self._docker.containers.get(ep_name).remove(force=True)
+        except docker.errors.NotFound:
+            pass
+
+        gateway = None
+        if env_type == "browser":
+            container = self._docker.containers.run(
+                image=snapshot,
+                name=ep_name,
+                detach=True,
+                network=network.name,
+                environment={
+                    "PUID": "1000",
+                    "PGID": "1000",
+                    "TZ": "UTC",
+                    "FORGE_DETERMINISM": os.environ.get("FORGE_DETERMINISM", "on"),
+                    "CHROME_CLI": "--remote-debugging-port=9222 --remote-debugging-address=0.0.0.0 --no-sandbox",
+                },
+                shm_size="1g",
+                labels={"forge.env": env_name, "forge.managed": "true", "forge.type": "browser", "forge.role": "episode"},
+                restart_policy={"Name": "no"},
+                mem_limit=_BROWSER_MEMORY_LIMIT,
+                nano_cpus=_CPU_LIMIT,
+                pids_limit=_PID_LIMIT,
+                cap_drop=["ALL"],
+                security_opt=["no-new-privileges:true"],
+                init=True,
+            )
+            ep_gw_name = f"{ep_name}-gw"
+            gateway = self._start_custom_gateway(
+                env_name=env_name,
+                target_name=ep_name,
+                gateway_name=ep_gw_name,
+                forwards={_BROWSER_UI_PORT: _BROWSER_UI_PORT, _BROWSER_CDP_PORT: _BROWSER_CDP_RELAY_PORT},
+                network=network,
+                role="episode-gateway",
+            )
+            port = _wait_for_port_binding(gateway, f"{_BROWSER_UI_PORT}/tcp", attempts=10, interval=0.3)
+        else:  # general / premade HTTP
+            container = self._docker.containers.run(
+                image=snapshot,
+                name=ep_name,
+                detach=True,
+                network=network.name,
+                environment={
+                    "TZ": "UTC",
+                    "PYTHONHASHSEED": _PYTHON_HASH_SEED,
+                    "REDIS_URL": self._redis_url,
+                    "FORGE_ENV_NAME": env_name,
+                    "FORGE_DETERMINISM": os.environ.get("FORGE_DETERMINISM", "on"),
+                },
+                labels={"forge.env": env_name, "forge.managed": "true", "forge.type": "general", "forge.role": "episode"},
+                restart_policy={"Name": "no"},
+                mem_limit=_GENERAL_MEMORY_LIMIT,
+                nano_cpus=_CPU_LIMIT,
+                pids_limit=_PID_LIMIT,
+                cap_drop=["ALL"],
+                security_opt=["no-new-privileges:true"],
+                init=True,
+            )
+            ep_gw_name = f"{ep_name}-gw"
+            gateway = self._start_custom_gateway(
+                env_name=env_name,
+                target_name=ep_name,
+                gateway_name=ep_gw_name,
+                forwards={FORGE_APP_PORT: FORGE_APP_PORT},
+                network=network,
+                role="episode-gateway",
+            )
+            port = _wait_for_port_binding(gateway, f"{FORGE_APP_PORT}/tcp", attempts=10, interval=0.3)
+
+        try:
+            yield container.id, port
+        finally:
+            try:
+                container.remove(force=True)
+            except Exception:
+                pass
+            if gateway is not None:
+                try:
+                    gateway.remove(force=True)
+                except Exception:
+                    pass
 
     def run_browser(self, env_name: str) -> tuple[str, int]:
         """Spin up a Chromium+KasmVNC container with no route out.

@@ -46,6 +46,7 @@ export default function TaskFactoryPage() {
   const [countText, setCountText] = useState("20");
   const { count, error: countError } = parseCount(countText);
   const [k, setK] = useState(3);
+  const [dataType, setDataType] = useState<"rl_tasks" | "preference_pairs" | "sft">("rl_tasks");
   const [phase, setPhase] = useState<Phase>("idle");
   const [stage, setStage] = useState<string | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
@@ -110,7 +111,7 @@ export default function TaskFactoryPage() {
     try {
       ({ batch_id: batchId } = await apiJson<{ batch_id: string }>("/api/task-factory/batches", {
         method: "POST",
-        body: JSON.stringify({ env_name: envName, count, k }),
+        body: JSON.stringify({ env_name: envName, target_env: envName, count, k, data_type: dataType }),
       }));
     } catch (err) {
       setPhase("error");
@@ -161,6 +162,7 @@ export default function TaskFactoryPage() {
         <div className="benchmark-run__readout" aria-label="Batch configuration">
           <div><span>Tasks</span><strong>{count ? count.toLocaleString() : "—"}</strong></div>
           <div><span>pass^k</span><strong>{String(k).padStart(2, "0")}</strong></div>
+          <div><span>Type</span><strong>{dataType === "rl_tasks" ? "RL" : dataType === "preference_pairs" ? "Pair" : "SFT"}</strong></div>
           <div><span>Versions</span><strong>{String(batches.filter((b) => b.version).length).padStart(2, "0")}</strong></div>
           <div className={`benchmark-run__state benchmark-run__state--${phase}`}>
             <span>System state</span><strong><i />{phase}</strong>
@@ -207,6 +209,35 @@ export default function TaskFactoryPage() {
               </div>
             )}
             {selected && !selected.ready && <p className="tasks-hint tasks-hint--warn">{selected.reason}</p>}
+          </div>
+
+          <div className="benchmark-field">
+            <div className="benchmark-field__label">
+              <span>Synthetic data type</span>
+              <small>Format to generate</small>
+            </div>
+            <div className="benchmark-domain-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))" }}>
+              {[
+                { key: "rl_tasks", label: "RL Tasks", desc: "Prompts, verifiers & golden patch" },
+                { key: "preference_pairs", label: "Preference Pairs", desc: "Preferred vs dispreferred pairs" },
+                { key: "sft", label: "SFT Imitation", desc: "Supervised expert trajectories" },
+              ].map((item) => (
+                <label key={item.key} className="benchmark-domain">
+                  <input
+                    type="radio"
+                    name="synthetic_data_type"
+                    checked={dataType === item.key}
+                    disabled={phase === "running"}
+                    onChange={() => setDataType(item.key as "rl_tasks" | "preference_pairs" | "sft")}
+                  />
+                  <span className="benchmark-domain__check" aria-hidden="true">✓</span>
+                  <span>
+                    <strong>{item.label}</strong>
+                    <small>{item.desc}</small>
+                  </span>
+                </label>
+              ))}
+            </div>
           </div>
 
           <label className="benchmark-field">
@@ -324,7 +355,7 @@ export default function TaskFactoryPage() {
             <table className="tasks-table">
               <thead>
                 <tr>
-                  <th>Version</th><th>Created</th><th>Status</th><th>Tasks</th><th>pass^k</th><th>Validator</th><th />
+                  <th>Version</th><th>Created</th><th>Status</th><th>Type</th><th>Tasks</th><th>pass^k</th><th>Validator</th><th />
                 </tr>
               </thead>
               <tbody>
@@ -333,6 +364,7 @@ export default function TaskFactoryPage() {
                     <td className="tasks-table__version">{b.version ? `v${b.version}` : "—"}</td>
                     <td>{formatDate(b.created_at)}</td>
                     <td><span className={`tasks-status tasks-status--${b.status}`}>{b.status}</span></td>
+                    <td><span className="tasks-difficulty tasks-difficulty--1">{b.data_type === "preference_pairs" ? "Pair" : b.data_type === "sft" ? "SFT" : "RL"}</span></td>
                     <td>{b.version ? `${b.delivered} / ${b.requested}` : `— / ${b.requested}`}</td>
                     <td>{b.pass_k}</td>
                     <td className="tasks-table__mono">{b.validator_model}</td>

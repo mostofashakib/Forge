@@ -14,7 +14,15 @@ from forge.taskfactory.contamination import TaskContaminationVerifier
 from forge.taskfactory.pass_k import PassKResult, run_pass_k
 from forge.taskfactory.profile import EnvironmentProfile
 from forge.taskfactory.runner import TaskRunner
-from forge.taskfactory.schemas import ReviewVerdict, SyntheticTask, TaskDraft, TaskRejection, Taxonomy
+from forge.taskfactory.schemas import (
+    PreferencePair,
+    ReviewVerdict,
+    SFTItem,
+    SyntheticTask,
+    TaskDraft,
+    TaskRejection,
+    Taxonomy,
+)
 from forge.taskfactory.slots import Slot, plan_slots
 from forge.taskfactory.static_check import length_problems, static_problems
 
@@ -52,6 +60,9 @@ class PipelineResult:
     taxonomy: Taxonomy
     tasks: list[SyntheticTask] = field(default_factory=list)
     rejections: list[TaskRejection] = field(default_factory=list)
+    data_type: str = "rl_tasks"
+    preference_pairs: list[PreferencePair] = field(default_factory=list)
+    sft_items: list[SFTItem] = field(default_factory=list)
 
     @property
     def shortfall(self) -> int:
@@ -60,6 +71,56 @@ class PipelineResult:
     @property
     def status(self) -> str:
         return "complete" if self.shortfall == 0 else "short"
+
+    def to_preference_pairs(self) -> list[PreferencePair]:
+        """Convert accepted tasks (preferred) and rejections (dispreferred) into preference pairs.
+
+        Reuses the natural output of the existing generation and filtering pipeline
+        without introducing a separate generation process.
+        """
+        pairs: list[PreferencePair] = []
+        rejected_drafts = [r for r in self.rejections if r.draft is not None]
+        for idx, task in enumerate(self.tasks):
+            matching_rejection = next(
+                (r for r in rejected_drafts if r.category == task.category),
+                rejected_drafts[idx % len(rejected_drafts)] if rejected_drafts else None,
+            )
+            dispreferred_dict = (
+                matching_rejection.draft.model_dump()
+                if matching_rejection and matching_rejection.draft
+                else {"objective": f"[Failed Draft] {task.objective}", "steps": []}
+            )
+            reason = (
+                matching_rejection.reason
+                if matching_rejection
+                else "failed filtering verification"
+            )
+            pairs.append(
+                PreferencePair(
+                    id=f"pref_{task.id}",
+                    task_prompt=task.objective,
+                    preferred=task.model_dump(),
+                    dispreferred=dispreferred_dict,
+                    rejection_reason=reason,
+                    category=task.category,
+                    difficulty=task.difficulty,
+                )
+            )
+        return pairs
+
+    def to_sft_items(self) -> list[SFTItem]:
+        """Convert accepted tasks into SFT imitation learning examples."""
+        return [
+            SFTItem(
+                id=f"sft_{task.id}",
+                task_prompt=task.objective,
+                golden_solution=[step.model_dump() for step in task.golden],
+                golden_solution_patch=[step.model_dump() for step in task.golden],
+                category=task.category,
+                difficulty=task.difficulty,
+            )
+            for task in self.tasks
+        ]
 
 
 class TaskFactoryPipeline:
@@ -86,7 +147,7 @@ class TaskFactoryPipeline:
         self._progress = progress or (lambda _event: None)
         self._contamination_verifier = contamination_verifier or TaskContaminationVerifier()
 
-    def run(self, count: int, k: int) -> PipelineResult:
+    def run(self, count: int, k: int, data_type: str = "rl_tasks") -> PipelineResult:
         if not MIN_COUNT <= count <= MAX_COUNT:
             raise ValueError(f"count must be {MIN_COUNT} to {MAX_COUNT}, got {count}")
         if not MIN_K <= k <= MAX_K:
@@ -94,7 +155,7 @@ class TaskFactoryPipeline:
         self._emit("taxonomy", f"Building a taxonomy for {count} tasks")
         taxonomy = self._taxonomy_builder.build(self._profile, count)
         self._emit("taxonomy", f"Taxonomy has {len(taxonomy.categories)} categories")
-        result = PipelineResult(requested=count, taxonomy=taxonomy)
+        result = PipelineResult(requested=count, taxonomy=taxonomy, data_type=data_type)
         pending = plan_slots(taxonomy, count)
         feedback: dict[int, str] = {}
         for round_number in range(1, MAX_ROUNDS + 1):
@@ -102,6 +163,10 @@ class TaskFactoryPipeline:
                 break
             pending, feedback = self._round(round_number, pending, feedback, k, result)
         result.tasks.sort(key=lambda task: task.id)
+        if data_type in ("preference", "preference_pairs"):
+            result.preference_pairs = result.to_preference_pairs()
+        elif data_type in ("sft", "sft_data"):
+            result.sft_items = result.to_sft_items()
         return result
 
     def _round(
