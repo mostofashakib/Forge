@@ -420,30 +420,6 @@ export default function LandingPage() {
           </div>
         </div>
       </section>
-
-      {/* 5. QUICK JUMP FOOTER BAR */}
-      <section className="border border-foreground/30 bg-foreground p-6 text-background flex flex-col md:flex-row items-center justify-between gap-6">
-        <div>
-          <span className="font-mono text-[0.58rem] uppercase tracking-[0.2em] text-background/50">
-            RAPID NAVIGATION
-          </span>
-          <h3 className="text-lg font-semibold tracking-tight text-background">
-            Ready to build or train? Jump directly into any module:
-          </h3>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          {ROUTE_GUIDES.map((item) => (
-            <Link
-              key={item.id}
-              href={item.route}
-              className="border border-background/25 bg-background/10 px-3 py-2 font-mono text-[0.62rem] uppercase tracking-wider text-background hover:bg-background hover:text-foreground transition-all"
-            >
-              {item.title}
-            </Link>
-          ))}
-        </div>
-      </section>
     </div>
   );
 }
