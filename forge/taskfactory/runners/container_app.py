@@ -16,7 +16,7 @@ from typing import Any
 import httpx
 
 from forge.runtime.tools import OpenAPIToolProvider
-from forge.taskfactory.profile import EnvironmentProfile, ToolInfo
+from forge.taskfactory.profile import EnvironmentProfile, ToolInfo, param_hint
 from forge.taskfactory.runner import SeedError, StepResult, fingerprint_of
 from forge.taskfactory.schemas import Check, GoldenStep, TaskDraft
 from forge.taskfactory.state_checks import CheckOutcome, apply_seed, evaluate_state_check
@@ -39,7 +39,10 @@ class ContainerAppRunner:
             ToolInfo(
                 name=action["endpoint"],
                 description=action.get("description", ""),
-                params=tuple((action.get("request_schema") or {}).get("properties", {})),
+                params=tuple(
+                    param_hint(name, spec.get("type"), spec.get("enum"))
+                    for name, spec in (action.get("request_schema") or {}).get("properties", {}).items()
+                ),
             )
             for action in manifest
         )

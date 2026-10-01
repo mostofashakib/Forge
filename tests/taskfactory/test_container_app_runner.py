@@ -55,7 +55,10 @@ class FakeApp:
         if path == "/openapi.json":
             return httpx.Response(200, json={"paths": {
                 "/archive_email": {"post": {"summary": "Archive an email", "requestBody": {"content": {
-                    "application/json": {"schema": {"properties": {"email_id": {"type": "string"}}}}}}}},
+                    "application/json": {"schema": {"properties": {
+                        "email_id": {"type": "string"},
+                        "folder": {"type": "string", "enum": ["archive", "trash"]},
+                    }}}}}}},
                 "/forge/reset": {"post": {}},
             }})
         if path == "/archive_email":
@@ -166,6 +169,6 @@ def test_the_profile_lists_actions_without_the_control_plane_and_samples_the_res
     profile = _runner(app).profile("mail", "premade:gmail")
 
     assert profile.tool_names == ["/archive_email"]
-    assert profile.tools[0].params == ("email_id",)
+    assert profile.tools[0].params == ("email_id: string", "folder: archive|trash")
     assert profile.state_sample == BASELINE
     assert {"id": "user-work", "folder": "inbox"} in app.full["emails"]

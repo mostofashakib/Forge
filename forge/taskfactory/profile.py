@@ -31,7 +31,14 @@ _SAMPLE_CHARS = 6000
 class ToolInfo:
     name: str
     description: str = ""
+    # Each as "name: type", or "name: a|b|c" when only those values are allowed.
     params: tuple[str, ...] = ()
+
+
+def param_hint(name: str, kind: str | None, values: list | None) -> str:
+    if values:
+        return f"{name}: {'|'.join(str(v) for v in values)}"
+    return f"{name}: {kind or 'value'}"
 
 
 @dataclass(frozen=True)

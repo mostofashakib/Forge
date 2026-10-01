@@ -91,6 +91,7 @@ def test_an_in_process_target_samples_its_reset_state(db, envs_dir):
 
     assert isinstance(runner, InProcessRunner)
     assert profile.tool_names == ["increment"]
+    assert profile.tools[0].params == ()
     assert "counter" in profile.state_sample
 
 
@@ -130,3 +131,26 @@ def test_an_app_without_its_gateway_is_unavailable(db, envs_dir, daemon):
     with pytest.raises(TargetUnavailable, match="Start"):
         with open_target(db, "mail", "tb_1"):
             pass
+
+
+def test_in_process_tools_show_parameter_types_and_allowed_values(db, envs_dir, monkeypatch):
+    from forge.extraction.schemas import ActionDef, ActionParam, CompilerInput, EntityDef, FieldDef
+
+    _write_env(envs_dir, "ledger", _DETERMINISTIC_WRAPPER)
+    compiled = CompilerInput(
+        project_name="ledger", domain="test",
+        entities=[EntityDef(name="counter", fields=[FieldDef(name="id", type="string")])],
+        actions=[ActionDef(name="increment", params=[
+            ActionParam(name="counter_id", type="string"),
+            ActionParam(name="mode", type="enum", values=["fast", "slow"]),
+        ])],
+        policies=[], tasks=[],
+    )
+    monkeypatch.setattr(
+        "forge.benchmark.compiled_tasks.db_compiler_input_loader", lambda factory: lambda name: compiled,
+    )
+
+    with open_target(db, "ledger", "tb_1") as target:
+        tool = target.profile().tools[0]
+
+    assert tool.params == ("counter_id: string", "mode: fast|slow")

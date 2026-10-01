@@ -20,7 +20,7 @@ from backend.app.models import SandboxEnvironment
 from forge.contracts.transport import DEFAULT_TIMEOUT_S
 from forge.envgen.container import ContainerRuntime
 from forge.settings import generated_envs_root
-from forge.taskfactory.profile import BROWSER_NOTES, CLI_NOTES, EnvironmentProfile, ToolInfo
+from forge.taskfactory.profile import BROWSER_NOTES, CLI_NOTES, EnvironmentProfile, ToolInfo, param_hint
 from forge.taskfactory.runner import TaskRunner
 from forge.taskfactory.runners.browser import BrowserRunner
 from forge.taskfactory.runners.cli import CliRunner
@@ -140,7 +140,10 @@ def _in_process_target(env_name: str) -> Target:
         state = env.state.get()
         compiler_input = db_compiler_input_loader(get_session_factory())(env_name)
         if compiler_input is not None:
-            tools = tuple(ToolInfo(name=a.name, params=tuple(p.name for p in a.params)) for a in compiler_input.actions)
+            tools = tuple(
+                ToolInfo(name=a.name, params=tuple(param_hint(p.name, p.type, p.values) for p in a.params))
+                for a in compiler_input.actions
+            )
         else:
             tools = tuple(ToolInfo(name=name) for name in sorted(env.backend.action_types))
         return EnvironmentProfile(
