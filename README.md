@@ -702,9 +702,12 @@ The responsive Next.js control surface uses an industrial foundry visual system 
 
 | Page | What it does |
 |---|---|
-| **Run** | Select which active environments to benchmark, max difficulty (1–5), seeds per task, and output dir; launch with live log streaming and a progress bar. A snackbar prompts you if no environment is available or selected |
+| **Overview** | Platform entry point illustrating the Forge flywheel pipeline, verifiable reasoning principles, and quick module navigation |
+| **Generator** | Synthesize task taxonomies and datasets with automated golden pass^k validation and dated batch versioning |
+| **Training** | Configure and run Online/Offline policy training (GRPO, DPO, PPO, SFT) with live terminal execution streaming |
+| **Run** | Select which active environments to benchmark, max difficulty (1–5), seeds per task, inference target, and output dir; launch with live log streaming and progress |
 | **Report** | Table of quality metrics per environment for the most recent completed run; CSV download |
-| **Transfer** | Reserved for a future external transfer benchmark |
+| **Transfer** | Configure cross-distribution transfer benchmark runs with hardware inference routing and live execution streaming |
 | **Eval** | Evaluate a policy checkpoint on the declarative internal held-out split |
 
 ### CLI
