@@ -208,16 +208,6 @@ export default function LandingPage() {
                   {s.desc}
                 </p>
               </div>
-
-              <div className="mt-5 border-t border-border/60 pt-3">
-                <Link
-                  href={s.target}
-                  className="inline-flex items-center gap-1.5 font-mono text-[0.62rem] uppercase tracking-wider text-primary hover:underline"
-                >
-                  <span>Go to stage</span>
-                  <ArrowRight size={11} />
-                </Link>
-              </div>
             </div>
           ))}
         </div>
