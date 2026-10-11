@@ -31,9 +31,10 @@ Forge generates training data for autonomous agents and reasoning models. It bui
 | Type | What runs | Good for |
 |---|---|---|
 | **Premade** | Pre-built Gmail or Slack replica | Ready-to-use evaluation; seeded with realistic emails, threads, and DMs |
-| **Custom** | LLM-generated FastAPI app | Simulate any business app from a plain-English description |
+| **Custom** | LLM-generated FastAPI app | Simulate any business app from a plain-English description or by dropping a product URL (where the user research agent inspects the real product) |
 | **CLI** | Ubuntu 22.04 shell, no network, frozen clock | Shell scripting, sysadmin, and file tasks |
 | **Browser** | Chromium + KasmVNC, no internet | Automating pages the environment serves, form filling, navigation |
+
 
 ### Environment Contracts
 
@@ -106,8 +107,9 @@ Both apps serve the same Forge protocol (`/forge/health`, `/forge/state`, `/forg
 
 - **4-option creation flow**: CLI, Browser, Custom, and Premade on the new-environment page
 - **Headless or UI environments**: custom environments are API-only by default; opt into **With UI** on the creation form to also generate a browsable single-page app. A headless build skips the UI specialist entirely: no `ui.html`, no `/ui` route, and no UI review gate, so it builds faster and exposes only the RL surface. The toggle applies to custom environments; CLI is always headless, and Browser and Premade always ship a UI.
-- **Custom environment generator**: describe any app in plain English; choose headless or with-UI
+- **Custom environment generator**: describe any app in plain English or drop a real product URL (where the user research agent inspects the product to extract workflows and specs); choose headless or with-UI
 - **User research agent**: given an original product name and URL, fetches documentation to extract workflows, data requirements, UI states, and verified citations, then publishes role-specific briefs for downstream specialists
+
 - **Prompt planner agent**: creates a dependency-aware task graph for dedicated backend, UI, telemetry, state-bridge, policy, reward, correctness, and review agents
 - **Agent-to-Agent context protocol**: specialists exchange typed task and artifact messages while scoped channels expose only each task's declared inputs
 - **Reviewer quality gate**: static checks and semantic review verify syntax, required APIs, UI action coverage, RL artifacts, code quality, and the original user requirements before files are written
