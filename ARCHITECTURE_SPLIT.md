@@ -8,7 +8,7 @@ This document defines the architectural split of the system into two independent
 
 | Project | Location | Focus | Core Value Proposition |
 |---|---|---|---|
-| **Forge** | `/Users/adibshakib/Coding/Forge` | Synthetic Data & Agent Verification Engine | Generates grounded, execution-verified agent trajectories and multi-turn datasets at scale. |
+| **Forge** | `/Users/adibshakib/Coding/Forge` | Synthetic Data Engine for Real-World AI | Generates grounded, execution-verified agent trajectories and multi-turn datasets at scale. |
 | **Autotune** | `/Users/adibshakib/Coding/Autotune` | Autonomous AI Training & Benchmarking Engine | Zero-friction, plug-and-play fine-tuning (LoRA + 4-bit QLoRA) and rigorous model evaluation. |
 
 ---

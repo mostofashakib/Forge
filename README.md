@@ -1,6 +1,6 @@
 # Forge
 
-**The Synthetic Data & Agent Verification Engine for Real-World AI.**
+**Synthetic Data Engine for Real-World AI**
 
 Forge generates high-volume, execution-verified training data for autonomous agents and reasoning models. It synthesizes full mock application environments from plain-English descriptions, generates multi-turn tasks with golden solutions, simulates human colleagues with dynamic personas, runs agents in isolated sandboxes, and exports production-grade datasets (SFT, DPO, RL/GRPO).
 
