@@ -321,3 +321,52 @@ def test_the_switch_on_an_unknown_environment_is_a_404(client, ward):
         client.put("/api/envs/nope/personas/enabled", json={"enabled": True}).status_code
         == 404
     )
+
+
+# --- generation -----------------------------------------------------------
+
+
+def test_generate_single_persona_returns_valid_spec(client, ward):
+    res = client.post(
+        "/api/envs/ward/personas/generate",
+        json={
+            "role": "Charge Nurse",
+            "context": "Emergency ward",
+            "count": 1,
+            "seed": 42,
+        },
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert "personas" in data
+    assert len(data["personas"]) == 1
+    p = data["personas"][0]
+    assert p["role"] == "Charge Nurse"
+    assert "name" in p and len(p["name"]) > 0
+    assert "traits" in p
+    assert p["behavior"]["allowed_actions"] == ["post_message", "review_chart"]
+
+
+def test_generate_multi_persona_team(client, ward):
+    res = client.post(
+        "/api/envs/ward/personas/generate",
+        json={
+            "role": "Nurse, Doctor, Pharmacist",
+            "context": "Hospital ICU",
+            "count": 3,
+            "seed": 100,
+        },
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert len(data["personas"]) == 3
+    names = [p["name"] for p in data["personas"]]
+    assert len(set(names)) == 3  # distinct personas
+
+
+def test_generate_personas_on_unknown_env_is_404(client, ward):
+    res = client.post(
+        "/api/envs/nonexistent_env/personas/generate",
+        json={"role": "Analyst"},
+    )
+    assert res.status_code == 404

@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { PersonaCard } from "@/components/persona-editor/PersonaCard";
+import { PersonaGeneratorCard } from "@/components/persona-editor/PersonaGeneratorCard";
 import { driverChoices, isScriptedDriver } from "@/lib/personaDrivers";
 import { DEFAULT_TRAITS } from "@/lib/personaTraits";
 import type { Behavior, PersonaEntry, Population, Payload } from "@/components/persona-editor/types";
@@ -248,6 +249,17 @@ export default function PersonaEditor({
           </div>
         </CardContent>
       </Card>
+
+      <PersonaGeneratorCard
+        envName={envName}
+        environmentActions={actions}
+        onAddPersonas={(generated) => {
+          setRoster([...population.roster, ...generated]);
+        }}
+        onReplaceRoster={(generated) => {
+          setRoster(generated);
+        }}
+      />
 
       <section className="persona-roster">
         <div className="persona-roster__head">

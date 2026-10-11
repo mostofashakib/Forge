@@ -99,6 +99,20 @@ class PreviewResponse(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class GeneratePersonaRequest(BaseModel):
+    """Configuration for dynamic persona synthesis."""
+
+    role: str = ""
+    context: str = ""
+    count: int = 1
+    allowed_actions: list[str] = Field(default_factory=list)
+    seed: int | None = None
+
+
+class GeneratePersonaResponse(BaseModel):
+    personas: list[dict]
+
+
 def _environment_actions(env_name: str) -> list[str]:
     """The action types this environment implements.
 
@@ -249,6 +263,49 @@ def preview_personas(env_name: str, payload: PreviewRequest) -> PreviewResponse:
     return PreviewResponse(
         roster=[dump_spec(spec) for spec in roster],
         warnings=_warnings(env_name, roster),
+    )
+
+
+@router.post("/{env_name}/personas/generate", response_model=GeneratePersonaResponse)
+def generate_personas(
+    env_name: str, payload: GeneratePersonaRequest
+) -> GeneratePersonaResponse:
+    """Dynamically synthesize realistic, context-specific personas for this environment."""
+    _config_path(env_name)
+    from forge.personas.generator import PersonaGenerator
+
+    actions = payload.allowed_actions or _environment_actions(env_name)
+    context = payload.context.strip() or f"Environment '{env_name}' simulated space"
+
+    generator = PersonaGenerator()
+
+    if payload.count <= 1:
+        role = payload.role.strip() or "Colleague"
+        spec = generator.generate_persona(
+            role=role,
+            context=context,
+            allowed_actions=actions,
+            seed=payload.seed,
+        )
+        return GeneratePersonaResponse(personas=[dump_spec(spec)])
+
+    raw_roles = (
+        [r.strip() for r in payload.role.split(",") if r.strip()]
+        if payload.role
+        else []
+    )
+    if not raw_roles:
+        raw_roles = ["Colleague"]
+
+    pop = generator.generate_population(
+        scenario=context,
+        roles=raw_roles,
+        count=payload.count,
+        allowed_actions=actions,
+        seed=payload.seed,
+    )
+    return GeneratePersonaResponse(
+        personas=[dump_spec(spec) for spec in pop.roster]
     )
 
 
