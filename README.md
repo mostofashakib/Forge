@@ -1,10 +1,12 @@
 # Forge
 
-**AI training infrastructure for agents that work in real-world apps.**
+**The Synthetic Data & Agent Verification Engine for Real-World AI.**
 
-Forge covers the whole training loop in one platform. It generates environments from a plain-English description, synthesizes validated task datasets, runs agents in isolated sandboxes, grades every episode, exports training data, trains policies, and benchmarks them on environments they never saw.
+Forge generates high-volume, execution-verified training data for autonomous agents and reasoning models. It synthesizes full mock application environments from plain-English descriptions, generates multi-turn tasks with golden solutions, simulates human colleagues with dynamic personas, runs agents in isolated sandboxes, and exports production-grade datasets (SFT, DPO, RL/GRPO).
 
-Environments range from Gmail and Slack replicas to custom LLM-generated apps, Linux shells, and live browser sessions. Every action is logged, every state transition is verifiable, and every result traces back to the data and grader that produced it.
+> [!TIP]
+> **Looking to train and benchmark models on your data?**
+> Use [**Autotune**](https://github.com/mostofashakib/Autotune), the plug-and-play LLM post-training and benchmarking engine supporting **LoRA**, **4-bit QLoRA**, and **GRPO**.
 
 ---
 
@@ -13,12 +15,12 @@ Environments range from Gmail and Slack replicas to custom LLM-generated apps, L
 | Stage | What you get | Where |
 |---|---|---|
 | **Environment generation** | Docker sandboxes for premade apps, LLM-generated apps, shells, and browsers, each with full state access, snapshots, and a Gymnasium-compatible API | [Environment Types](#environment-types), [Custom Generation Pipeline](#custom-generation-pipeline) |
-| **Synthetic data** | Versioned task batches with golden solutions that must pass k fresh runs, reviewed by a model from a different family; exported as RL tasks, SFT data, or preference pairs | [Task Factory](#task-factory), [Synthetic Data Engine](#synthetic-data-engine) |
-| **Agent runs** | Random, scripted, or LLM agents acting through the app's own API, with every step written durably as it happens | [Agent Runs & Data Collection](#agent-runs--data-collection) |
-| **Grading** | One authoritative verdict per episode from layered verifiers, with reward-hacking audits and generator/grader independence checks | [Reward Engine](#reward-engine), [Verifiers](#verifiers) |
-| **Dataset export** | SFT pairs, preference pairs, GRPO rollouts, failure datasets, and raw trajectories in one shared rollout shape | [Dataset Export](#dataset-export) |
-| **Training** | `forge train` runs GRPO, DPO, SFT, or PPO on graded data and writes a checkpoint the runtime agents load back | [Policy Training](#policy-training) |
-| **Benchmarking** | Environment quality metrics, held-out evaluation, and a transfer benchmark that reports pass@1 and pass@3 on environments the policy never trained on | [Benchmark](#benchmark) |
+| **Synthetic task synthesis** | Versioned task batches with golden solutions that must pass k fresh runs, reviewed by a model from a different family; exported as RL tasks, SFT data, or preference pairs | [Task Factory](#task-factory), [Synthetic Data Engine](#synthetic-data-engine) |
+| **Dynamic personas** | Synthesize simulated human colleagues and users on demand with authentic behavioral traits, communication quirks, and delay tolerances | [Personas](#personas) |
+| **Agent execution** | Headless agent rollouts through real application APIs, logging every step, state hash, and tool call durably | [Agent Runs & Data Collection](#agent-runs--data-collection) |
+| **Grading & Verifiers** | Authoritative verdicts from layered verifiers with reward-hacking audits and generator/grader independence checks | [Reward Engine](#reward-engine), [Verifiers](#verifiers) |
+| **Dataset export** | SFT chat pairs, preference pairs, GRPO rollouts, failure datasets, and raw trajectories with standard `dataset_manifest.json` | [Dataset Export](#dataset-export) |
+| **Model Training & Eval** | Handled natively by [Autotune](https://github.com/mostofashakib/Autotune) — drop your Forge exports in to fine-tune and evaluate models | [Autotune Repo](https://github.com/mostofashakib/Autotune) |
 
 The loop closes: generate environments, synthesize tasks, run agents, grade, export,
 train, evaluate on held-out environments, then reload the checkpoint and collect again.

@@ -1,29 +1,22 @@
-"""The serializable checkpoint contract produced by policy training.
-
-A trained policy is a directory containing a `policy_checkpoint.json` manifest
-that records what was trained, from how many graded examples, and the model
-path/name the runtime agent should serve. Runtime loading intentionally lives
-outside this training package so training never depends on an agent.
-"""
+"""The serializable checkpoint contract produced by policy training."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
-
 from pydantic import BaseModel, Field
 
 MANIFEST_NAME = "policy_checkpoint.json"
 
 
 class PolicyCheckpoint(BaseModel):
-    """Manifest describing a policy trained from graded rollouts."""
+    """Manifest describing a policy checkpoint for runtime agent loading."""
 
-    objective: str            # "grpo" | "dpo"
-    training_mode: str = "online"  # "online" | "offline"
-    base_model: str
-    model_path: str           # what the runtime agent serves (local path or served name)
-    num_examples: int
-    mean_reward: float
+    objective: str = "sft"
+    training_mode: str = "online"
+    base_model: str = ""
+    model_path: str = ""
+    num_examples: int = 0
+    mean_reward: float = 0.0
     created_at: str = ""
     experiment_config: dict = Field(default_factory=dict)
     train_envs: list[str] = Field(default_factory=list)

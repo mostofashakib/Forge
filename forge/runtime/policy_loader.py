@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from forge.contracts.checkpoint import PolicyCheckpoint
 from forge.runtime.agents.vllm_agent import vLLMAgent
-from forge.training.checkpoint import PolicyCheckpoint
 
 
 def load_policy_agent(checkpoint_dir: Path, client=None, environment=None, task=None) -> vLLMAgent:

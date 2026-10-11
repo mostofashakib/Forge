@@ -1,46 +1,26 @@
-"""`forge train` CLI: end-to-end wiring and error surfacing."""
-from __future__ import annotations
-
-import json
-
-import pandas as pd
+"""`forge train` CLI command redirects to Autotune."""
+from pathlib import Path
 from typer.testing import CliRunner
-
 from forge.cli.main import app
 
 runner = CliRunner()
 
 
-def _write_grpo(data_dir, rows):
-    data_dir.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame(rows).to_parquet(data_dir / "grpo_rollouts.parquet", index=False)
+def test_train_redirects_to_autotune(tmp_path: Path):
+    result = runner.invoke(app, ["train", "--data", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "autotune" in result.output.lower()
+    assert "https://github.com/mostofashakib/Autotune" in result.output
 
 
-def _row(reward, completion="c"):
-    return {
-        "episode_id": f"ep-{reward}-{completion}", "task_name": "t", "prompt": "Task: t",
-        "completion": completion, "total_reward": reward, "passed": reward > 0,
-        "per_step_rewards": json.dumps([reward]),
-    }
+def test_train_missing_data_flag_rejected():
+    """Negative case: missing required --data option is rejected."""
+    result = runner.invoke(app, ["train"])
+    assert result.exit_code != 0
+    assert "error" in result.output.lower() or "missing" in result.output.lower()
 
 
-def test_train_reports_no_signal_on_all_equal_rewards(tmp_path):
-    data_dir = tmp_path / "data"
-    _write_grpo(data_dir, [_row(0.5, "a"), _row(0.5, "b")])
-    result = runner.invoke(app, [
-        "train", "--data", str(data_dir), "--base-model", "base",
-        "--output", str(tmp_path / "out"), "--objective", "grpo",
-    ])
-    assert result.exit_code == 1
-    assert "no training signal" in result.output.lower()
-
-
-def test_train_rejects_unknown_objective(tmp_path):
-    result = runner.invoke(app, [
-        "train", "--data", str(tmp_path), "--base-model", "base", "--objective", "reinforce",
-    ])
-    assert result.exit_code == 2
-    assert "unknown objective" in result.output.lower()
-    # The message lists every objective the trainer accepts.
-    for objective in ("grpo", "dpo", "sft", "ppo"):
-        assert f"'{objective}'" in result.output
+def test_train_rejects_extra_unexpected_argument(tmp_path: Path):
+    """False-positive case: look-valid invocation with extra unexpected argument is rejected."""
+    result = runner.invoke(app, ["train", "--data", str(tmp_path), "unexpected_positional_arg"])
+    assert result.exit_code != 0

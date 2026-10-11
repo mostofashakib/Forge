@@ -7,6 +7,7 @@ composes the ten that describe an environment's state and behavior.
 from the outside — the same environment may be run by different controllers.
 """
 from forge.contracts.backend import ExecutionBackend, TransitionHandler
+from forge.contracts.checkpoint import PolicyCheckpoint
 from forge.contracts.dataset import TaskSource, normalize_task
 from forge.contracts.environment import Environment
 from forge.contracts.episode import (
@@ -110,6 +111,7 @@ __all__ = [
     "PersonaTraits",
     "PersonaTurn",
     "PersonaView",
+    "PolicyCheckpoint",
     "PromptTemplate",
     "RewardBreakdown",
     "RewardComponent",

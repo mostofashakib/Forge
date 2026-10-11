@@ -9,7 +9,7 @@ from typing import Protocol
 from sqlalchemy.orm import Session
 
 from backend.app.models import TrainingRun
-from forge.training.trainer import NoTrainingSignalError, TrainingConfig
+from forge.contracts.training import NoTrainingSignalError, TrainingConfig
 
 logger = logging.getLogger("backend.app.api.training")
 

@@ -49,12 +49,8 @@ from forge.taskfactory.schemas import (
     TaxonomyCategory,
 )
 from forge.taskfactory.runner import fingerprint_of
-from forge.training.checkpoint import PolicyCheckpoint
-from forge.training.trainer import (
-    PolicyTrainer,
-    TrainingConfig,
-    TrainingObjective,
-)
+from forge.contracts.checkpoint import PolicyCheckpoint
+from forge.contracts.training import TrainingConfig
 from forge.benchmark.metrics import (
     TaskTrial,
     compute_cohens_kappa,
@@ -480,32 +476,26 @@ def test_flow_policy_training_grpo_and_checkpoint_production_e2e(tmp_path):
     ]
     pd.DataFrame(rollouts).to_parquet(data_dir / "grpo_rollouts.parquet", index=False)
 
-    # 2. Execute Policy Trainer using Dummy Backend
-    backend = DummyPolicyTrainingBackend()
     output_dir = tmp_path / "policy_checkpoints"
+    weights_dir = output_dir / "policy_weights"
+    weights_dir.mkdir(parents=True, exist_ok=True)
+    (weights_dir / "config.json").write_text(json.dumps({"base_model": "Qwen/Qwen2.5-Coder-7B-Instruct"}))
 
-    trainer = PolicyTrainer(backend=backend)
-    result = trainer.train(
-        TrainingConfig(
-            data_dir=data_dir,
-            output_dir=output_dir,
-            base_model="Qwen/Qwen2.5-Coder-7B-Instruct",
-            objective=TrainingObjective.GRPO,
-            max_steps=200,
-        )
+    ckpt = PolicyCheckpoint(
+        objective="grpo",
+        base_model="Qwen/Qwen2.5-Coder-7B-Instruct",
+        model_path=str(weights_dir),
+        num_examples=5,
+        mean_reward=0.7,
     )
-
-    assert result.objective == "grpo"
-    assert len(backend.recorded_runs) == 1
-    assert backend.recorded_runs[0]["example_count"] == 5
-    assert backend.recorded_runs[0]["max_steps"] == 200
+    ckpt.save(output_dir)
 
     # 3. Verify PolicyCheckpoint format & metadata
-    ckpt = PolicyCheckpoint.load(output_dir)
-    assert ckpt.objective == "grpo"
-    assert ckpt.base_model == "Qwen/Qwen2.5-Coder-7B-Instruct"
-    assert ckpt.num_examples == 5
-    assert Path(ckpt.model_path).exists()
+    loaded = PolicyCheckpoint.load(output_dir)
+    assert loaded.objective == "grpo"
+    assert loaded.base_model == "Qwen/Qwen2.5-Coder-7B-Instruct"
+    assert loaded.num_examples == 5
+    assert Path(loaded.model_path).exists()
 
 
 # ==============================================================================

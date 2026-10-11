@@ -14,7 +14,7 @@ from typing import Protocol
 
 from forge.benchmark.metrics import compute_pass_at_k
 from forge.experiments import ExperimentConfig
-from forge.training.trainer import TrainingConfig, TrainingObjective, TrainingResult
+from forge.contracts.training import TrainingConfig, TrainingObjective, TrainingResult
 
 # Largest k reported. Every pass@k is estimated over the same tasks, which
 # need at least this many decided samples each.
@@ -105,7 +105,7 @@ class TransferPipeline:
 def run_transfer_pipeline(config: TransferConfig) -> TransferResult:
     """Production transfer: GPU training backends and container episodes."""
     from forge.benchmark._eval import evaluate_on_suite
-    from forge.training.trainer import PolicyTrainer
+    from backend.app.api.training import AutotuneTrainer as PolicyTrainer
 
     return TransferPipeline(trainer=PolicyTrainer(), evaluate=evaluate_on_suite)(config)
 

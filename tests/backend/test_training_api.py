@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from backend.app.main import app
 from backend.app.models import TrainingRun
 from backend.app.database import get_session_factory, init_db
-from forge.training.checkpoint import PolicyCheckpoint
+from forge.contracts.checkpoint import PolicyCheckpoint
 
 
 @pytest.fixture

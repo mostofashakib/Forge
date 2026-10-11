@@ -13,7 +13,7 @@ from forge.benchmark._eval import (
 )
 from forge.benchmark.task_suite import Task
 from forge.grading_provenance import GraderContaminationError
-from forge.training.checkpoint import PolicyCheckpoint
+from forge.contracts.checkpoint import PolicyCheckpoint
 
 
 class _Provider:

@@ -20,7 +20,7 @@ from forge.grading_provenance import (
 from forge.reward_presets import reward_preset_spec
 from forge.settings import determinism_enabled
 from forge.runtime.policy_loader import load_policy_agent
-from forge.training.checkpoint import MANIFEST_NAME, PolicyCheckpoint
+from forge.contracts.checkpoint import MANIFEST_NAME, PolicyCheckpoint
 
 
 @dataclass(frozen=True)

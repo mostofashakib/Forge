@@ -9,7 +9,8 @@ import pytest
 from forge.benchmark._eval import EpisodeOutcome, evaluate_on_suite
 from forge.benchmark.task_suite import Task
 from forge.benchmark.transfer_pipeline import TransferConfig, TransferPipeline
-from forge.training.trainer import NoTrainingSignalError, PolicyTrainer
+from forge.contracts.training import NoTrainingSignalError
+from backend.app.api.training import AutotuneTrainer as PolicyTrainer
 
 
 class _RecordingBackend:

@@ -212,4 +212,11 @@ def test_run_export_honours_envs_dir_set_after_import(db_with_episodes, tmp_path
     db_with_episodes.commit()
     run_export("ex_cfg00001", db_with_episodes)
     db_with_episodes.refresh(job)
-    assert Path(job.output_path) == target / "test_env" / "exports" / "ex_cfg00001"
+    out_dir = Path(job.output_path)
+    assert out_dir == target / "test_env" / "exports" / "ex_cfg00001"
+    manifest_file = out_dir / "dataset_manifest.json"
+    assert manifest_file.exists()
+    manifest_data = json.loads(manifest_file.read_text())
+    assert manifest_data["manifest_version"] == "1.0.0"
+    assert manifest_data["formats"] == ["rewards"]
+    assert "rewards.jsonl" in manifest_data["files"]

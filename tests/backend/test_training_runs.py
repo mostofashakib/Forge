@@ -9,7 +9,7 @@ import pytest
 
 from backend.app.models import TrainingRun
 from backend.app.services.training_runs import execute_training_run
-from forge.training.trainer import NoTrainingSignalError, TrainingConfig, TrainingObjective
+from forge.contracts.training import NoTrainingSignalError, TrainingConfig, TrainingObjective
 
 
 @pytest.fixture

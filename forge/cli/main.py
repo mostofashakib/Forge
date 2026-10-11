@@ -302,75 +302,13 @@ def train(
     exported from graded episodes and writes a policy checkpoint the runtime
     agents can load. Requires trl + transformers on a GPU node.
     """
-    from forge.training.trainer import (
-        NoTrainingSignalError,
-        PolicyTrainer,
-        TrainingConfig,
-        TrainingObjective,
-    )
-    from forge.training.dataset import MalformedExportError
-
-    experiment_config = None
-    train_envs = None
-    run_id = ""
-    if experiment is not None:
-        from datetime import datetime, timezone
-        from forge.experiments import ExperimentConfig
-
-        try:
-            experiment_config = ExperimentConfig.load(experiment)
-        except (FileNotFoundError, ValueError) as exc:
-            typer.echo(f"Invalid experiment: {exc}", err=True)
-            raise typer.Exit(2)
-        if seed is None:
-            if len(experiment_config.seeds) != 1:
-                typer.echo("Error: --seed is required when the experiment lists multiple seeds", err=True)
-                raise typer.Exit(2)
-            seed = experiment_config.seeds[0]
-        if seed not in experiment_config.seeds:
-            typer.echo(f"Error: seed {seed} is not declared by {experiment}", err=True)
-            raise typer.Exit(2)
-        if base_model is not None and base_model != experiment_config.base_model:
-            typer.echo("Error: --base-model conflicts with the experiment config", err=True)
-            raise typer.Exit(2)
-        base_model = experiment_config.base_model
-        train_envs = experiment_config.train_envs
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-        run_id = f"{experiment.stem}-s{seed}-{timestamp}"
-    elif base_model is None:
-        typer.echo("Error: provide --base-model or --experiment", err=True)
-        raise typer.Exit(2)
-
-    try:
-        obj = TrainingObjective(objective.lower())
-    except ValueError:
-        valid = ", ".join(repr(o.value) for o in TrainingObjective)
-        typer.echo(f"Error: unknown objective {objective!r}; use one of {valid}", err=True)
-        raise typer.Exit(2)
-
-    try:
-        result = PolicyTrainer().train(TrainingConfig(
-            data_dir=data_dir, base_model=base_model, output_dir=output,
-            objective=obj, max_steps=max_steps, train_envs=train_envs,
-            experiment_config=(experiment_config.model_dump(mode="json") if experiment_config else None),
-            seed=seed, run_id=run_id,
-        ))
-    except NoTrainingSignalError as exc:
-        typer.echo(f"No training signal: {exc}", err=True)
-        raise typer.Exit(1)
-    except MalformedExportError as exc:
-        typer.echo(f"Malformed export: {exc}", err=True)
-        raise typer.Exit(1)
-    except (RuntimeError, NotImplementedError) as exc:
-        typer.echo(f"Error: {exc}", err=True)
-        raise typer.Exit(1)
-
     typer.echo(
-        f"Trained {result.objective} policy on {result.num_examples} examples "
-        f"(mean reward {result.mean_reward:.3f}) → {result.checkpoint_path}"
+        "Notice: Policy training and benchmarking have been decoupled from Forge into Autotune.\n"
+        "Forge is now focused purely on synthetic data generation and agent verification.\n\n"
+        "To train models on Forge exported datasets with LoRA / QLoRA:\n"
+        f"  uv run autotune train {data_dir} --output-dir {output}\n\n"
+        "Repository: https://github.com/mostofashakib/Autotune"
     )
-    if run_id:
-        typer.echo(f"Run ID: {run_id}")
 
 
 from forge.cli.benchmark import benchmark_app  # noqa: E402  (registered after the core commands)

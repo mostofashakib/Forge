@@ -45,6 +45,7 @@ from forge.personas.population import (
     population_seed,
     resolve_roster,
 )
+from forge.personas.generator import PersonaGenerator, PersonaLLMClient
 from forge.personas.prompting import PersonaPromptTemplate, describe_traits
 from forge.personas.scheduler import PersonaScheduleState, TraitScheduler
 
@@ -56,6 +57,8 @@ __all__ = [
     "PersonaBehavior",
     "PersonaDriver",
     "PersonaEngine",
+    "PersonaGenerator",
+    "PersonaLLMClient",
     "PersonaPopulation",
     "PersonaPopulationError",
     "PersonaProfile",
