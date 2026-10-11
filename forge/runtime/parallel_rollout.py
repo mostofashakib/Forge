@@ -39,6 +39,83 @@ class RolloutBatch:
         return [r for r in self.records if r.outcome == outcome]
 
 
+def classify_rollout_outcome(
+    passed: bool, total_reward: float, invalid_actions: int, error: str | None
+) -> str:
+    """Classify the rollout outcome into a standardized taxonomy bucket."""
+    if error is not None:
+        return "edge_case"
+    if passed:
+        return "success"
+    if invalid_actions > 0:
+        return "edge_case"
+    if total_reward > 0:
+        return "partial_success"
+    return "failure"
+
+
+def execute_single_rollout(
+    env_factory: Callable[[], object],
+    spec: RolloutSpec,
+    *,
+    propagate_exception: bool = False,
+) -> RolloutRecord:
+    """Execute a single episode rollout using an isolated environment instance."""
+    episode_id = None
+    total_reward = 0.0
+    steps = 0
+    invalid_actions = 0
+    terminated = truncated = False
+    passed = False
+    termination_reason = "unknown"
+    verification_results: list[dict] = []
+    reward_breakdown: dict = {}
+    error: str | None = None
+
+    env = env_factory()
+    policy = spec.policy or seeded_random_policy(spec.seed)
+    try:
+        options = {"task": spec.task} if spec.task is not None else None
+        obs, info = env.reset(seed=spec.seed, options=options)
+        episode_id = info.get("episode_id")
+        for _ in range(env.env_spec.max_steps):
+            action = policy(obs, env.action_types)
+            obs, reward, terminated, truncated, step_info = env.step(action)
+            steps += 1
+            total_reward += reward
+            if "error" in step_info:
+                invalid_actions += 1
+            if terminated or truncated:
+                passed = bool(step_info.get("passed", False))
+                termination_reason = step_info.get("termination_reason") or "unknown"
+                verification_results = step_info.get("verifier_results", [])
+                reward_breakdown = step_info.get("reward_breakdown", {})
+                break
+    except Exception as exc:
+        error = repr(exc)
+        if propagate_exception:
+            raise exc
+    finally:
+        if hasattr(env, "close"):
+            env.close()
+
+    return RolloutRecord(
+        seed=spec.seed,
+        episode_id=episode_id or f"rollout-{spec.seed}",
+        outcome=classify_rollout_outcome(passed, total_reward, invalid_actions, error),
+        total_reward=total_reward,
+        steps=steps,
+        terminated=terminated,
+        truncated=truncated,
+        invalid_actions=invalid_actions,
+        error=error,
+        passed=passed,
+        termination_reason=termination_reason,
+        verification_results=verification_results,
+        reward_breakdown=reward_breakdown,
+    )
+
+
 class ParallelRolloutRunner:
     """Runs many rollouts of the same task on isolated env copies.
 
@@ -72,75 +149,17 @@ class ParallelRolloutRunner:
         ])
 
     def _run_one(self, spec: RolloutSpec) -> RolloutRecord:
-        episode_id = None
-        total_reward = 0.0
-        steps = 0
-        invalid_actions = 0
-        terminated = truncated = False
-        passed = False
-        termination_reason = "unknown"
-        verification_results: list[dict] = []
-        reward_breakdown: dict = {}
-        error: str | None = None
+        return execute_single_rollout(self._env_factory, spec, propagate_exception=False)
 
-        env = self._env_factory()
-        policy = spec.policy or seeded_random_policy(spec.seed)
-        try:
-            options = {"task": spec.task} if spec.task is not None else None
-            obs, info = env.reset(seed=spec.seed, options=options)
-            episode_id = info.get("episode_id")
-            for _ in range(env.env_spec.max_steps):
-                action = policy(obs, env.action_types)
-                obs, reward, terminated, truncated, step_info = env.step(action)
-                steps += 1
-                total_reward += reward
-                if "error" in step_info:
-                    invalid_actions += 1
-                if terminated or truncated:
-                    passed = bool(step_info.get("passed", False))
-                    termination_reason = step_info.get("termination_reason") or "unknown"
-                    verification_results = step_info.get("verifier_results", [])
-                    reward_breakdown = step_info.get("reward_breakdown", {})
-                if terminated or truncated:
-                    break
-        except Exception as exc:
-            error = repr(exc)
-        finally:
-            env.close()
-
-        return RolloutRecord(
-            seed=spec.seed,
-            episode_id=episode_id or f"rollout-{spec.seed}",
-            outcome=self._classify(passed, total_reward, invalid_actions, error),
-            total_reward=total_reward,
-            steps=steps,
-            terminated=terminated,
-            truncated=truncated,
-            invalid_actions=invalid_actions,
-            error=error,
-            passed=passed,
-            termination_reason=termination_reason,
-            verification_results=verification_results,
-            reward_breakdown=reward_breakdown,
-        )
-
-    @staticmethod
-    def _classify(
-        passed: bool, total_reward: float, invalid_actions: int, error: str | None
-    ) -> str:
-        if error is not None:
-            return "edge_case"
-        if passed:
-            return "success"
-        if invalid_actions > 0:
-            return "edge_case"
-        if total_reward > 0:
-            return "partial_success"
-        return "failure"
+    _classify = staticmethod(classify_rollout_outcome)
 
 
-# Re-export distributed parallel rollout runner
-from forge.runtime.distributed import (  # noqa: E402
-    DistributedParallelRolloutRunner,
-    DistributedRolloutBatch,
-)
+
+
+def __getattr__(name: str):
+    if name in ("DistributedParallelRolloutRunner", "DistributedRolloutBatch"):
+        import forge.runtime.distributed as dist
+
+        return getattr(dist, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+

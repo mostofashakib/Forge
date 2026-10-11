@@ -757,40 +757,55 @@ Browser / API Client
         ▼
   FastAPI Backend (:8000)
         │
-        ├── SQLite (forge.db)      , environments, runs, episodes, benchmark_runs, audit log
+        ├── Centralized Platform Services
+        │     ├── Config:        forge.config.yaml (versioned prompts, verifiers, datasets)
+        │     ├── Observability: DevLogger (contextual binding, timers, redaction)
+        │     └── Resilience:    CentralizedErrorHandler (system-wide error catalog)
         │
-        └── Celery Worker          , async tasks
+        ├── SQLite (forge.db)    environments, runs, episodes, benchmark_runs, audit log
+        │
+        ├── Distributed Parallel Runner (Multi-Worker Pool)
+        │     ├── DurableTaskQueue: burst queue, 10m TTL, 3-retry Dead-Letter Queue (DLQ)
+        │     ├── Seed Partitioner: deterministic round-robin worker assignment
+        │     └── Aggregation:      DistributedRolloutBatch & run-level statistics
+        │
+        └── Celery Worker        async background tasks
               │
-              ├── CLI:       docker run ubuntu:22.04
-              ├── Browser:   docker run linuxserver/chromium
-              ├── Premade:   docker run pre-built image (gmail / slack)
-              ├── Custom:    planner → scoped specialist DAG → reviewer → docker build/run
-              │                       │
-              │                       ▼
-              │           Reverse Proxy → Sandbox Hub (App / Terminal / Observability)
-              │                       │
-              │                       ▼
-              │           Environment facade (Gymnasium-compatible)
-              │           ┌─────────────────────────────────┐
-              │           │  reset()                        │
-              │           │    InitialStateProvider         │
-              │           │    StateManager                 │
-              │           │    ObservationEncoder (RBAC)    │
-              │           │                                 │
-              │           │  step(action)                   │
-              │           │    ActionValidator              │
-              │           │    PolicyEngine  ──→ AuditLog   │
-              │           │    ExecutionBackend             │
-              │           │    PersonaEngine  ──→ ActionGuard│
-              │           │    Verifier → Rubric            │
-              │           │    TerminationPolicy            │
-              │           │    TelemetryClient              │
-              │           └─────────────────────────────────┘
-              │                       │
-              │                       ▼
-              │           Export (7 formats: SFT / DPO / RL / Failure / Raw)
+              ├── Execution Runtimes (Dual-Engine)
+              │     ├── Firecracker MicroVM: Jailer hardware virtualization & sandbox
+              │     └── Docker Container:    fallback container isolation
               │
-              └── Benchmark: TaskSuite → DataCollector → EnvQualityMetrics
+              ├── Workloads:
+              │     ├── CLI:       ubuntu:22.04 MicroVM / container
+              │     ├── Browser:   chromium MicroVM / container
+              │     ├── Premade:   pre-built apps (Gmail, Slack)
+              │     └── Custom:    User Researcher → Planner → Specialist DAG → Reviewer
+              │
+              ▼
+  Reverse Proxy → Sandbox Hub (App / Terminal / Observability)
+              │
+              ▼
+  Environment facade (Gymnasium-compatible)
+  ┌────────────────────────────────────────────────────────┐
+  │  reset()                                               │
+  │    InitialStateProvider                                │
+  │    StateManager                                        │
+  │    ObservationEncoder (RBAC)                           │
+  │                                                        │
+  │  step(action)                                          │
+  │    ActionValidator                                     │
+  │    PolicyEngine ───────────────► AuditLog              │
+  │    ExecutionBackend (Firecracker / Docker)             │
+  │    PersonaEngine ──────────────► ActionGuard           │
+  │    Trust Boundary Adapters (CUA, TU, Code, Data)       │
+  │    Verifier → Layered Rubric & Independent Grader      │
+  │    TerminationPolicy                                   │
+  │    TelemetryClient                                     │
+  └────────────────────────────────────────────────────────┘
+              │
+              ├──► Export (7 formats: SFT / DPO / RL / Failure / Raw)
+              │
+              └──► Benchmark: TaskSuite → DataCollector → EnvQualityMetrics
                                                 │
                                                 ▼
                                          BenchmarkReport → report.json / CSV
@@ -802,6 +817,8 @@ Browser / API Client
 
 ```
 forge/
+  config.py            # CentralizedConfig: forge.config.yaml registry & versions
+  dev_logger.py        # DevLogger: contextual binding, timers, PII/secret redaction
   contracts/           # The interfaces every environment family implements
     types.py           # Shared shapes: Task, Action, Observation, ToolSpec, results
     environment.py     # Environment facade composing ten of the eleven contracts
@@ -810,6 +827,11 @@ forge/
     reward.py          # Verifier and Rubric; termination.py, episode.py
     rollout.py         # RolloutRecord: the shared collector → exporter → trainer record
   runtime/             # Gymnasium env, state, trajectory, verifiers, agents
+    distributed/       # Distributed parallel runs: DurableTaskQueue, DLQ, scheduler, partitioner, runner
+    trust_boundary/    # Domain evaluation adapters (CUA, TU, Code, Data)
+    versioning/        # Prompt, verifier, and dataset version registry
+    error_handling.py  # CentralizedErrorHandler catalog and tracking
+    parallel_rollout.py # ParallelRolloutRunner, execute_single_rollout, classify_rollout_outcome
     prompting.py       # ForgeAgentPromptTemplate: the default PromptTemplate
     tools.py           # Spec / Capability / OpenAPI ToolProviders
     tasks.py           # Seeded, reproducible task selection from a TaskSource
@@ -825,6 +847,7 @@ forge/
     generators/        # Jinja2 compiler, package builder
   envgen/              # LLM orchestration, container runtime, episode/CLI/browser runners
     agents/            # Backend, UI, assembly, telemetry, state, scenario, policy, reward, correctness, reviewer
+    research.py        # Dedicated User Research agent: product profiling, personas, user journeys
     planning.py        # Typed task plans and dependency validation
     executor.py        # Dependency-aware specialist task execution
     a2a.py             # Typed Agent-to-Agent messages and scoped context permissions
@@ -837,6 +860,7 @@ forge/
     error_handling.py  # GenerationErrorHandler: normalized specialist failures
     episode_runner.py  # Container episode loop; cli_runner.py / browser_runner.py
     telemetry/         # Telemetry client and collectors
+    firecracker/       # Firecracker MicroVM runtime, rootfs, kernel, Jailer sandboxing
     container.py       # ContainerRuntime lifecycle; docker_cli.py, docker_images.py,
     │                  #   dockerfile.py, container_specs.py, sandbox_network.py,
     │                  #   episode_snapshots.py hold the injected collaborators
@@ -868,6 +892,7 @@ forge/
   grading_provenance.py  # Generator/grader independence: model families, enforcement, record
   logging_utils.py     # Credential-safe redaction for logs
   paths.py             # Confined-path helpers for generated-env file access
+
   cli/
     main.py            # forge CLI: compile, validate, run, replay, diagnose, train
     benchmark.py       # forge benchmark run / transfer / report / eval
