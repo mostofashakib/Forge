@@ -19,7 +19,7 @@ Forge generates high-volume, execution-verified training data for autonomous age
 |---|---|---|
 | **Environment generation** | Docker sandboxes for premade apps, LLM-generated apps, shells, and browsers, each with full state access, snapshots, and a Gymnasium-compatible API | [Environment Types](#environment-types), [Custom Generation Pipeline](#custom-generation-pipeline) |
 | **Synthetic task synthesis** | Versioned task batches with golden solutions that must pass k fresh runs, reviewed by a model from a different family; exported as RL tasks, SFT data, or preference pairs | [Task Factory](#task-factory), [Synthetic Data Engine](#synthetic-data-engine) |
-| **Dynamic personas** | Synthesize simulated human colleagues and users on demand with authentic behavioral traits, communication quirks, and delay tolerances | [Personas](#personas) |
+| **Dynamic personas** | Simulated human colleagues and users on demand with authentic behavioral traits, communication quirks, and delay tolerances | [Personas](#personas) |
 | **Agent execution** | Headless agent rollouts through real application APIs, logging every step, state hash, and tool call durably | [Agent Runs & Data Collection](#agent-runs--data-collection) |
 | **Grading & Verifiers** | Authoritative verdicts from layered verifiers with reward-hacking audits and generator/grader independence checks | [Reward Engine](#reward-engine), [Verifiers](#verifiers) |
 | **Dataset export** | SFT chat pairs, preference pairs, GRPO rollouts, failure datasets, and raw trajectories with standard `dataset_manifest.json` | [Dataset Export](#dataset-export) |
