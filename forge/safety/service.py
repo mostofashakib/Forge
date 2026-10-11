@@ -36,7 +36,12 @@ class DatasetSafetyService:
     def screen(self, record: object) -> ScreenResult:
         """A scrubbed copy of `record`, kept only when nothing flags it."""
         texts = list(_strings(record))
-        findings = [finding for text in texts for finding in detect_threats(text)]
+        # Details quote raw text, so they are scrubbed before anyone stores them.
+        findings = [
+            Finding(finding.rule, self._scrub(finding.detail, Counter()))
+            for text in texts
+            for finding in detect_threats(text)
+        ]
         replacements: Counter[str] = Counter()
         scrubbed = _map_strings(record, lambda text: self._scrub(text, replacements))
         if not findings and self._classifier is not None:
