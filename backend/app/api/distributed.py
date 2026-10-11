@@ -167,6 +167,42 @@ def fail_task(task_id: str, req: FailTaskRequest) -> dict[str, Any]:
     }
 
 
+@router.get("/queue/stats")
+def get_queue_stats() -> dict[str, int]:
+    """Get aggregate statistics for the distributed task queue."""
+    return _queue.stats()
+
+
+@router.get("/queue/dlq")
+def get_dlq_tasks() -> dict[str, Any]:
+    """Retrieve all dead-lettered tasks that failed 3 times."""
+    dlq_items = _queue.get_dlq()
+    return {
+        "dlq_count": len(dlq_items),
+        "items": [
+            {
+                "task_id": it.task_id,
+                "error": it.error,
+                "retries": it.retries,
+                "created_at": it.created_at,
+                "completed_at": it.completed_at,
+                "failure_history": it.failure_history,
+            }
+            for it in dlq_items
+        ],
+    }
+
+
+@router.post("/queue/dlq/redrive")
+def redrive_dlq_tasks(task_id: str | None = None) -> dict[str, Any]:
+    """Re-drive dead-lettered tasks back into the active queue."""
+    redriven = _queue.redrive_dlq(task_id)
+    return {
+        "redriven_count": len(redriven),
+        "task_ids": [it.task_id for it in redriven],
+    }
+
+
 @router.get("/queue/{task_id}")
 def get_task(task_id: str) -> dict[str, Any]:
     """Get the status, retry details, and result of a queued distributed task."""

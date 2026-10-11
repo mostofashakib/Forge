@@ -737,11 +737,7 @@ forge benchmark transfer \
 
 ## Status & Known Gaps
 
-Everything documented above is implemented and covered by the test suite. The following is deliberately *not* built yet:
-
-| Gap | Where | Why it matters |
-|---|---|---|
-| **Distributed parallel runs** | worker layer | `ParallelRolloutRunner` parallelizes within one host; multi-worker distribution with deterministic seed assignment, backpressure, and run-level aggregation is not built |
+Everything documented above is implemented and covered by the test suite, including distributed parallel runs across multi-worker pools with deterministic seed assignment, burst queues, retries, dead-letter queues, and run-level aggregation.
 
 There are also **no published numbers**. The evaluation protocol, metrics, and
 result-record format exist; no reference run has been executed and committed, so

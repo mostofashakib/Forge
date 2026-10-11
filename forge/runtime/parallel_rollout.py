@@ -137,3 +137,10 @@ class ParallelRolloutRunner:
         if total_reward > 0:
             return "partial_success"
         return "failure"
+
+
+# Re-export distributed parallel rollout runner
+from forge.runtime.distributed import (  # noqa: E402
+    DistributedParallelRolloutRunner,
+    DistributedRolloutBatch,
+)
