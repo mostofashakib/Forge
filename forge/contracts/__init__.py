@@ -47,6 +47,12 @@ from forge.contracts.persona import (
 from forge.contracts.prompting import PromptTemplate
 from forge.contracts.reward import Rubric, Verifier
 from forge.contracts.rollout import RolloutOutcome, RolloutRecord
+from forge.contracts.sandbox import (
+    FirecrackerVMConfig,
+    IsolationBackendType,
+    SandboxInstance,
+    SandboxIsolationBackend,
+)
 from forge.contracts.state import StateManager
 from forge.contracts.termination import (
     BUDGET_REASONS,
@@ -118,6 +124,10 @@ __all__ = [
     "RolloutOutcome",
     "RolloutRecord",
     "Rubric",
+    "SandboxInstance",
+    "SandboxIsolationBackend",
+    "FirecrackerVMConfig",
+    "IsolationBackendType",
     "StateManager",
     "StepOutcome",
     "Task",

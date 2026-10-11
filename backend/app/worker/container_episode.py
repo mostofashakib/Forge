@@ -44,10 +44,10 @@ class ContainerEpisode:
 
     def run_attempt(self, attempt: int, attempt_seed: int):
         """Run one attempt. The reliability executor calls this once per retry."""
-        from forge.envgen.container import ContainerRuntime
+        from forge.envgen.runtime_factory import get_sandbox_runtime
 
         runner = _RUNNERS.get(self.env_type, _run_http_attempt)
-        return runner(self, ContainerRuntime(), attempt_seed)
+        return runner(self, get_sandbox_runtime(), attempt_seed)
 
     def limits(self) -> dict:
         """Objective and stopping rules shared by every runner config."""

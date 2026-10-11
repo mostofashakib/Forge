@@ -17,6 +17,7 @@ from pathlib import Path
 import docker
 import docker.errors
 
+from forge.contracts.sandbox import IsolationBackendType, SandboxIsolationBackend
 from forge.envgen import docker_images
 from forge.envgen.container_specs import (
     BROWSER_CDP_PORT,
@@ -51,7 +52,7 @@ from forge.runtime.network_isolation import check_generated_env
 from forge.settings import redis_url
 
 
-class ContainerRuntime:
+class ContainerRuntime(SandboxIsolationBackend):
     def __init__(
         self,
         docker_client: docker.DockerClient | None = None,
@@ -65,6 +66,19 @@ class ContainerRuntime:
         self._cli = cli or SubprocessDockerCLI()
         self._network = network or SandboxNetwork(self._client)
         self._snapshots = snapshots or EpisodeSnapshots(self._client, self._network, self._cli, self._redis_url)
+
+    @property
+    def backend_type(self) -> IsolationBackendType:
+        """The active isolation technology."""
+        return IsolationBackendType.DOCKER
+
+    def is_healthy(self, instance_id: str) -> bool:
+        """Return True if the container is currently running."""
+        try:
+            container = self._docker.containers.get(instance_id)
+            return container.status == "running"
+        except Exception:
+            return False
 
     def _client(self) -> docker.DockerClient:
         if self._docker_client is None:
