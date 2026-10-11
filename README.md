@@ -389,6 +389,7 @@ flag. Omitting the variable (or setting it to `on`) preserves the default behavi
 - **Credential-safe logging**: bearer values and URL query strings are redacted before HTTP, Docker pull, or worker errors reach logs; signed CDN URLs are never emitted intact
 - **Local-only default**: `run.sh` binds the backend to `127.0.0.1` unless `FORGE_HOST` is explicitly changed
 - **PII redaction**: strips emails, phone numbers, and SSNs from LLM input before code generation
+- **Dataset safety gate**: scrubs PII and secrets from every exported row and quarantines adversarial or harmful rows (see [Safety Gate](#safety-gate))
 - **RBAC observation filtering**: removes or restricts state fields per role, applied in `reset()` and `step()`
 - **Policy Violation Viewer**: global filterable table of violations by environment, episode, and severity
 
@@ -563,6 +564,24 @@ Seven export formats from the per-environment **Export Dataset** page:
 | **Raw Trajectories** | `trajectories.jsonl` | Custom pipelines |
 | **Rewards** | `rewards.jsonl` | Analysis, custom reward models |
 | **Verifier Results** | `verifier_results.jsonl` | Debugging, custom reward models |
+
+#### Safety Gate
+
+Every row passes one gate before it is written, in every format above and in training-data staging. Raw rows never touch disk.
+
+1. **Threat rules** run on the raw text: prompt injection, jailbreak phrasing, destructive commands (`rm -rf /`, fork bombs, `mkfs`, `dd` to a disk), `curl | sh`, and secret exfiltration. `rm -rf ./build` passes.
+2. **Secrets** (OpenAI, Anthropic, AWS, GitHub, Slack keys, bearer tokens, private keys, URL passwords) become `[REDACTED_SECRET]`.
+3. **PII** becomes a stable keyed pseudonym, so one person stays one person across a trajectory. Regex covers email, phone, SSN, card (Luhn), IBAN (mod-97), public IPs, and US street addresses. Person names come from [GLiNER2-PII](https://huggingface.co/fastino/gliner2-privacy-filter-PII-multi), run locally. With your key, `sarah@acme.com` becomes something like `user_3f9a2c1d@example.invalid`, and `Sarah Chen` becomes `Person_8b04e6aa`.
+4. **LLM judge** (optional, `FORGE_SAFETY_LLM=1`) reviews the scrubbed row through the `FORGE_JUDGE_*` client. A judge error blocks the row.
+
+A flagged row goes, scrubbed, to `safety_quarantine.jsonl` with its reasons, so you can audit false positives. The quarantine is left out of the manifest's `files` list. `dataset_manifest.json` gains a `safety` block with rows seen, kept, and quarantined, replacements by kind, and quarantined rows by rule.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `FORGE_SCRUB_KEY` | none, required | HMAC key for pseudonyms. Exports fail with a clear error without it. |
+| `FORGE_NER_MODEL` | `fastino/gliner2-privacy-filter-PII-multi` | GLiNER2 checkpoint for names. Downloaded once from the Hugging Face Hub. |
+| `FORGE_NER_THRESHOLD` | `0.5` | Name confidence cutoff, between 0 and 1. |
+| `FORGE_SAFETY_LLM` | `0` | `1` adds the LLM judge. |
 
 All environment-specific episode results convert to the shared
 `forge.contracts.RolloutRecord`. Runtime collectors, Parquet export, and training
@@ -897,6 +916,7 @@ forge/
   reward_presets.py    # Canonical reward-ablation presets shared by every reward path
   grading_provenance.py  # Generator/grader independence: model families, enforcement, record
   logging_utils.py     # Credential-safe redaction for logs
+  safety/              # Dataset safety gate: PII/secret scrubbing, GLiNER2 names, threat rules, LLM judge
   paths.py             # Confined-path helpers for generated-env file access
 
   cli/
