@@ -80,9 +80,15 @@ class PersonaGenerator:
                     context=context,
                     allowed_actions=actions,
                 )
-            except Exception:
-                # Fall back gracefully to deterministic synthesis if LLM fails
-                pass
+            except Exception as exc:
+                from forge.runtime.error_handling import get_error_handler
+                get_error_handler().capture(
+                    exc,
+                    origin="persona_generator",
+                    severity="WARNING",
+                    context={"role": role, "context": context},
+                    reraise=False,
+                )
 
         return self._generate_deterministic(
             role=role,

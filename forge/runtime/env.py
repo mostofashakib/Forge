@@ -324,7 +324,15 @@ class ForgeEnv(gym.Env, Environment):
         from forge.taskfactory.runner import fingerprint_of
         try:
             return fingerprint_of(self._state_store.get())
-        except Exception:
+        except Exception as exc:
+            from forge.runtime.error_handling import get_error_handler
+            get_error_handler().capture(
+                exc,
+                origin="environment",
+                severity="WARNING",
+                context={"action": "fingerprint"},
+                reraise=False,
+            )
             return fingerprint_of({})
 
     def step(self, action: dict) -> tuple[dict, float, bool, bool, dict]:

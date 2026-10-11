@@ -183,3 +183,17 @@ class EpisodeNotFoundError(ForgeError, ValueError):
 
     default_code = "EPISODE_NOT_FOUND"
     origin = "replay"
+
+
+# ---------------------------------------------------------------------------
+# Centralized Error Handling
+# ---------------------------------------------------------------------------
+
+from forge.runtime.error_handling import (  # noqa: E402
+    CentralizedErrorHandler,
+    ErrorHandler,
+    ErrorRecord,
+    ErrorSeverity,
+    get_error_handler,
+    set_default_error_handler,
+)

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
+from forge.runtime.error_handling import get_error_handler
 from forge.runtime.errors import ForgeError
 
 
@@ -23,6 +24,8 @@ class AgentExecutionError(ForgeError, RuntimeError):
 class GenerationErrorHandler:
     """Normalizes and tracks specialist failures without swallowing causes."""
 
+    origin = "environment_generation"
+
     def __init__(self) -> None:
         self._records: list[GenerationErrorRecord] = []
 
@@ -35,6 +38,13 @@ class GenerationErrorHandler:
             created_at=datetime.now(timezone.utc),
         )
         self._records.append(record)
+        get_error_handler().capture(
+            error,
+            origin=self.origin,
+            code=AgentExecutionError.default_code,
+            context={"task_id": task_id, "agent_id": agent_id},
+            reraise=False,
+        )
         return AgentExecutionError(
             f"Agent {agent_id!r} failed task {task_id!r}: {error}",
             cause=error,
