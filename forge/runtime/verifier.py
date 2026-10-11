@@ -5,6 +5,7 @@ from typing import Callable
 
 from forge.contracts import Verifier
 from forge.runtime._signature import require_arity
+from forge.runtime.trust_boundary.boundary import VerifierTrustBoundary
 from forge.runtime.verification import VerificationResult
 
 
@@ -26,8 +27,11 @@ class FunctionVerifier(Verifier):
 
 
 class VerifierEngine:
-    def __init__(self) -> None:
+    """Evaluation engine supporting both one-off verifiers and isolated trust boundary adapters."""
+
+    def __init__(self, trust_boundary: VerifierTrustBoundary | None = None) -> None:
         self._verifiers: dict[str, Verifier] = {}
+        self.trust_boundary = trust_boundary or VerifierTrustBoundary()
 
     def register(self, verifier_id: str, verifier: Verifier) -> None:
         if not isinstance(verifier, Verifier):
@@ -43,6 +47,18 @@ class VerifierEngine:
         if task is None:
             return []
         verifier_id = task.get("verifier_id")
-        if not verifier_id or verifier_id not in self._verifiers:
-            return []
-        return [self._verifiers[verifier_id].verify(state, trajectory, task)]
+        if verifier_id:
+            if verifier_id not in self._verifiers:
+                return []
+            return [self._verifiers[verifier_id].verify(state, trajectory, task)]
+
+        # Route tasks specifying domain groups or conditions through the Trust Boundary
+        if (
+            task.get("verifier_group")
+            or task.get("group")
+            or task.get("group_spec")
+            or task.get("success_conditions")
+        ):
+            return [self.trust_boundary.verify(state, trajectory, task)]
+
+        return []

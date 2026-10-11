@@ -251,6 +251,13 @@ Six built-in verifier types compose into the final `EpisodeEvaluation` and its a
 
 **Per-environment verifier composition**: `VerifierComposer` builds a configured `LayeredVerifier` for each task from its declared success/failure conditions and scenario ground truth, mapping them onto the five tiers (the LLM judge stays off by default). Provenance metadata does not affect runtime matching: the composer unwraps each milestone's `value` before checking action presence, order, and forbidden calls, while also accepting legacy strings and serialized milestone dictionaries. It then scores an episode's result into a `RewardBreakdown` under either mode: **binary** (full credit only when every tier passes) or **partial** (weighted per-tier mean, so a partially-correct trajectory earns graded credit). A right answer reached by an unauthorized side effect or the wrong tool order still fails.
 
+**Verifier Trust Boundary & Group Adapters**:
+Instead of writing one-off verification code for every task, `VerifierTrustBoundary` isolates evaluation inside a protected trust boundary. It checks trajectory integrity (monotonic step ordering, state hash continuity, and policy compliance) and delegates checks to domain group adapters:
+- **CUA (Computer-Use Agents)**: verifies DOM presence, URL navigation routes, visual milestones, and forbidden UI interactions.
+- **TU (Tool-Use Agents)**: verifies tool call sets, parameter constraints, execution sequences, and forbidden calls.
+- **Code (Coding & Terminal Agents)**: verifies exit codes, test suite pass rates, git diff boundaries, and syntax validity.
+- **Data (Database & SQL Agents)**: verifies table row counts, SQL query assertions, schema invariants, and mutation safety.
+
 **Reward-hacking audit**: `RewardHackingAuditor` is a separate audit agent that asks whether a passing verdict was *earned*: it flags passes with skipped milestones, suspiciously short episodes, redundant call patterns, and supports a pluggable LLM audit client. `RewardHackingAuditor.for_verifier(...)` inherits the milestone list straight from a `LayeredVerifier`.
 
 **Reward ablation presets**: set `reward_preset` in an experiment YAML; both
