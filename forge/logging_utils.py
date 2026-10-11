@@ -65,3 +65,10 @@ def install_sensitive_log_filter(*logger_names: str) -> None:
         logger = logging.getLogger(logger_name)
         if not any(isinstance(item, SensitiveLogFilter) for item in logger.filters):
             logger.addFilter(SensitiveLogFilter())
+
+
+def get_dev_logger(name: str = "forge", **kwargs: object) -> object:
+    """Convenience helper to retrieve a DevLogger instance."""
+    from forge.dev_logger import DevLogger
+    return DevLogger.get(name, **kwargs)
+
