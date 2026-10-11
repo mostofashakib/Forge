@@ -2,11 +2,11 @@
 
 **Synthetic Data Engine for Real-World AI**
 
-Forge generates high-volume, execution-verified training data for autonomous agents and reasoning models. It synthesizes full mock application environments from plain-English descriptions, generates multi-turn tasks with golden solutions, simulates human colleagues with dynamic personas, runs agents in isolated sandboxes, and exports production-grade datasets (SFT, DPO, RL/GRPO).
+Forge generates training data for autonomous agents and reasoning models. It builds mock application environments from descriptions, writes multi-turn tasks with verified solutions, simulates human colleagues, runs agents in sandboxes, and exports datasets in SFT, DPO, and RL/GRPO formats.
 
 > [!TIP]
 > **Looking to train and benchmark models on your data?**
-> Use [**Autotune**](https://github.com/mostofashakib/Autotune), the plug-and-play LLM post-training and benchmarking engine supporting **LoRA**, **4-bit QLoRA**, and **GRPO**.
+> Use [**Autotune**](https://github.com/mostofashakib/Autotune) to fine-tune (LoRA, QLoRA, GRPO) and benchmark models on your data.
 >
 > **Example RL Tasks:**
 > Example RL tasks for Forge live in [OpenGym](https://github.com/mostofashakib/OpenGym).
@@ -17,12 +17,12 @@ Forge generates high-volume, execution-verified training data for autonomous age
 
 | Stage | What you get | Where |
 |---|---|---|
-| **Environment generation** | Docker sandboxes for premade apps, LLM-generated apps, shells, and browsers, each with full state access, snapshots, and a Gymnasium-compatible API | [Environment Types](#environment-types), [Custom Generation Pipeline](#custom-generation-pipeline) |
-| **Synthetic task synthesis** | Versioned task batches with golden solutions that must pass k fresh runs, reviewed by a model from a different family; exported as RL tasks, SFT data, or preference pairs | [Task Factory](#task-factory), [Synthetic Data Engine](#synthetic-data-engine) |
-| **Dynamic personas** | Simulated human colleagues and users on demand with authentic behavioral traits, communication quirks, and delay tolerances | [Personas](#personas) |
-| **Agent execution** | Headless agent rollouts through real application APIs, logging every step, state hash, and tool call durably | [Agent Runs & Data Collection](#agent-runs--data-collection) |
-| **Grading & Verifiers** | Authoritative verdicts from layered verifiers with reward-hacking audits and generator/grader independence checks | [Reward Engine](#reward-engine), [Verifiers](#verifiers) |
-| **Dataset export** | SFT chat pairs, preference pairs, GRPO rollouts, failure datasets, and raw trajectories with standard `dataset_manifest.json` | [Dataset Export](#dataset-export) |
+| **Environment generation** | Docker sandboxes for apps, shells, and browsers, with state snapshots and a Gymnasium API | [Environment Types](#environment-types), [Custom Generation Pipeline](#custom-generation-pipeline) |
+| **Synthetic task synthesis** | Task batches with solutions tested over fresh runs, reviewed by a separate model; exported as RL tasks, SFT data, or preference pairs | [Task Factory](#task-factory), [Synthetic Data Engine](#synthetic-data-engine) |
+| **Dynamic personas** | Simulated colleagues and users with distinct traits, communication habits, and response times | [Personas](#personas) |
+| **Agent execution** | Agent rollouts through application APIs, logging steps, state hashes, and tool calls | [Agent Runs & Data Collection](#agent-runs--data-collection) |
+| **Grading & Verifiers** | Verifier scores with checks for reward hacking and grader independence | [Reward Engine](#reward-engine), [Verifiers](#verifiers) |
+| **Dataset export** | SFT chat pairs, preference pairs, GRPO rollouts, failure datasets, and trajectories with `dataset_manifest.json` | [Dataset Export](#dataset-export) |
 
 ---
 
@@ -76,25 +76,25 @@ or vLLM adapters, so the model-facing context cannot drift from the environment.
 
 ## Premade Environments
 
-Premade environments ship with realistic seed data that resembles real products. They're ready to evaluate agents immediately — no configuration needed.
+Premade environments ship with realistic seed data that resembles real products. They're ready to evaluate agents immediately with no configuration needed.
 
 ### Gmail
 - **42 emails** across Inbox, Sent, Drafts, Archive, and Trash, tagged with custom labels (Work, Urgent, Personal, Newsletter, Receipts)
 - **19 contacts** with names and addresses
-- **5 labels** with colour coding
-- Send, receive, reply, archive, label, star, delete — all functional
-- Auto-reply simulation: sending or replying triggers a realistic response from the recipient
+- **5 labels** with color coding
+- Send, receive, reply, archive, label, star, and delete actions
+- Auto-reply simulation: sending or replying triggers a response from the recipient
 - `POST /receive` endpoint lets evaluators inject new emails mid-episode
-- Automatic baseline snapshot saved on first boot for reward drift detection
+- Baseline snapshot saved on boot for drift detection
 
 ### Slack
 - **7 channels**: `#general`, `#engineering`, `#product`, `#random`, `#design`, `#ops-infra`, `#announcements`
-- **38 top-level messages** with multi-sentence, realistic content
-- **88 thread replies** stored with correct parent references — clicking any thread shows full conversation
+- **38 messages** across channels
+- **88 thread replies** stored with parent references
 - **43 reactions** across messages
-- **12 DMs** with realistic back-and-forth
-- Per-channel auto-responders simulate realistic team activity when the agent posts
-- Post, reply, react, DM, pin — all functional
+- **12 direct message threads**
+- Auto-responders simulate team activity when an agent posts
+- Post, reply, react, DM, and pin actions
 
 Both apps serve the same Forge protocol (`/forge/health`, `/forge/state`, `/forge/dump`, `/forge/reset`, `/forge/snapshot`, `/forge/restore/{slot}`, `/forge/restore-state`) from one shared module, `docker/premade/_shared/forge_protocol.py`, along with the virtual clock and deterministic ids. Each build copies the app's folder and that module into a temporary build context, so building never modifies the tracked files.
 
@@ -104,23 +104,23 @@ Both apps serve the same Forge protocol (`/forge/health`, `/forge/state`, `/forg
 
 ### Environment Creation
 
-- **4-option creation flow** — CLI, Browser, Custom, and Premade on the new-environment page
-- **Headless or UI environments** — custom environments are API-only by default; opt into **With UI** on the creation form to also generate a browsable single-page app. A headless build skips the UI specialist entirely — no `ui.html`, no `/ui` route, and no UI review gate — so it builds faster and exposes only the RL surface. The toggle applies to custom environments; CLI is always headless, and Browser and Premade always ship a UI.
-- **Custom environment generator** — describe any app in plain English; choose headless or with-UI; optionally enable the user researcher with an original product name and URL, then a prompt planner creates a dependency-aware task graph for dedicated backend, UI, telemetry, state-bridge, policy, reward, correctness, and review agents
-- **Agent-to-Agent context protocol** — specialists exchange typed task and artifact messages while scoped channels expose only each task's declared inputs
-- **Reviewer quality gate** — static checks and semantic review verify syntax, required APIs, UI action coverage, RL artifacts, code quality, and the original user requirements before files are written
-- **Determinism correctness specialist** — a dedicated gate audits generated code for wall-clock access, unseeded randomness, and nondeterministic identifiers, requiring a counter-based virtual clock (`forge_now()`) and sequential IDs (`_next_id()`) before artifacts are written; after the container boots, a runtime validator proves `/forge/reset` restores the exact initial universe (rows, IDs, counters, database included) and that snapshot/restore round-trips, hard-failing the build on any drift
-- **Real-time build progress** — WebSocket stream shows agent completion, Docker build phase, and live worker logs
-- **Compiler review** — inspect and edit LLM-generated compiler input before the build starts
-- **Self-healing `/start`** — detects stale image tags, missing port bindings, and crash-looped containers; clears bad state and auto-recovers
-- **10-environment cap** — enforced at UI and API level; expired environments cleaned up automatically
+- **4-option creation flow**: CLI, Browser, Custom, and Premade on the new-environment page
+- **Headless or UI environments**: custom environments are API-only by default; opt into **With UI** on the creation form to also generate a browsable single-page app. A headless build skips the UI specialist entirely: no `ui.html`, no `/ui` route, and no UI review gate, so it builds faster and exposes only the RL surface. The toggle applies to custom environments; CLI is always headless, and Browser and Premade always ship a UI.
+- **Custom environment generator**: describe any app in plain English; choose headless or with-UI; optionally enable the user researcher with an original product name and URL, then a prompt planner creates a dependency-aware task graph for dedicated backend, UI, telemetry, state-bridge, policy, reward, correctness, and review agents
+- **Agent-to-Agent context protocol**: specialists exchange typed task and artifact messages while scoped channels expose only each task's declared inputs
+- **Reviewer quality gate**: static checks and semantic review verify syntax, required APIs, UI action coverage, RL artifacts, code quality, and the original user requirements before files are written
+- **Determinism correctness specialist**: a dedicated gate audits generated code for wall-clock access, unseeded randomness, and nondeterministic identifiers, requiring a counter-based virtual clock (`forge_now()`) and sequential IDs (`_next_id()`) before artifacts are written; after the container boots, a runtime validator proves `/forge/reset` restores the exact initial universe (rows, IDs, counters, database included) and that snapshot/restore round-trips, hard-failing the build on any drift
+- **Real-time build progress**: WebSocket stream shows agent completion, Docker build phase, and live worker logs
+- **Compiler review**: inspect and edit LLM-generated compiler input before the build starts
+- **Self-healing `/start`**: detects stale image tags, missing port bindings, and crash-looped containers; clears bad state and auto-recovers
+- **10-environment cap**: enforced at UI and API level; expired environments cleaned up automatically
 
 ### Container Build & Resilience
 
-- **LLM drift guardrails** — every generated file is post-processed before `docker build`: base image normalised, port forced to 8000, install step reduced to the hashed runtime lock
-- **Registry fallback** — four-tier fallback when Docker Hub flakes: canonical pull → AWS ECR → GCR → direct HTTPS via `httpx`. Digest-pinned images skip the HTTPS tier, since it rebuilds the manifest and cannot keep the pinned digest
-- **Worker pre-warm** — Celery pulls base images and builds the CLI image on boot so user builds and CLI runs always hit cache
-- **Crash-loop detection** — `restart_policy=on-failure` with 3-attempt cap; status flips to `error` automatically
+- **LLM drift guardrails**: every generated file is post-processed before `docker build`: base image normalised, port forced to 8000, install step reduced to the hashed runtime lock
+- **Registry fallback**: four-tier fallback when Docker Hub flakes: canonical pull → AWS ECR → GCR → direct HTTPS via `httpx`. Digest-pinned images skip the HTTPS tier, since it rebuilds the manifest and cannot keep the pinned digest
+- **Worker pre-warm**: Celery pulls base images and builds the CLI image on boot so user builds and CLI runs always hit cache
+- **Crash-loop detection**: `restart_policy=on-failure` with 3-attempt cap; status flips to `error` automatically
 
 ### Custom Generation Pipeline
 
@@ -191,9 +191,9 @@ Every generated `custom/scenarios.json` includes an `attribution_report`. It rep
 }
 ```
 
-`TaskExecutor` runs independent tasks concurrently and waits on declared dependencies. Each task receives a scoped artifact channel. The A2A protocol records assignment, completion, failure, review, and artifact-availability messages with correlation IDs, without copying large generated files into message payloads. The reviewer blocks artifact writes when generated code or requirement coverage fails. A dedicated correctness specialist runs alongside it and blocks writes when generated code is nondeterministic — wall-clock reads, unseeded randomness, nondeterministic IDs, or a `/forge/reset` that fails to re-initialize the virtual clock and ID counters — while exempting telemetry event-envelope timestamps that never reach `/forge/state`. When either gate rejects the artifacts, `RepairLoop` does not fail the build immediately: `FindingRouter` attributes each review issue to the specialist that owns the offending artifact, `RepairPlanner` turns the attributed issues into typed correction tasks, and the executor re-runs only those specialists before re-review. It runs at most `FORGE_ENVGEN_MAX_REPAIR_ROUNDS` (default `2`) rounds, de-duplicates findings by fingerprint so an unfixable issue is not retried forever, and raises `UnrepairableFinding` when a finding cannot be attributed to any agent.
+`TaskExecutor` runs independent tasks concurrently and waits on declared dependencies. Each task receives a scoped artifact channel. The A2A protocol records assignment, completion, failure, review, and artifact-availability messages with correlation IDs, without copying large generated files into message payloads. The reviewer blocks artifact writes when generated code or requirement coverage fails. A dedicated correctness specialist runs alongside it and blocks writes when generated code is nondeterministic, wall-clock reads, unseeded randomness, nondeterministic IDs, or a `/forge/reset` that fails to re-initialize the virtual clock and ID counters, while exempting telemetry event-envelope timestamps that never reach `/forge/state`. When either gate rejects the artifacts, `RepairLoop` does not fail the build immediately: `FindingRouter` attributes each review issue to the specialist that owns the offending artifact, `RepairPlanner` turns the attributed issues into typed correction tasks, and the executor re-runs only those specialists before re-review. It runs at most `FORGE_ENVGEN_MAX_REPAIR_ROUNDS` (default `2`) rounds, de-duplicates findings by fingerprint so an unfixable issue is not retried forever, and raises `UnrepairableFinding` when a finding cannot be attributed to any agent.
 
-Once the container is built and running, `CorrectnessValidator` exercises the live endpoints to prove reset fidelity (two resets and a mutate→reset both return the byte-identical pristine baseline) and a snapshot→mutate→restore round-trip before the environment is accepted; any drift hard-fails the build. `PostGenerationValidator` then boots the same container, calls `/forge/reset`, exercises the declared actions, and checks the observed state against the `StateSchemaManifest` — reporting missing fields and a coverage score so a generated app that never populates part of its declared state surfaces before agents run against it.
+Once the container is built and running, `CorrectnessValidator` exercises the live endpoints to prove reset fidelity (two resets and a mutate→reset both return the byte-identical pristine baseline) and a snapshot→mutate→restore round-trip before the environment is accepted; any drift hard-fails the build. `PostGenerationValidator` then boots the same container, calls `/forge/reset`, exercises the declared actions, and checks the observed state against the `StateSchemaManifest`, reporting missing fields and a coverage score so a generated app that never populates part of its declared state surfaces before agents run against it.
 
 Generation prompts are grouped behind prompt catalog classes, and the shared LLM client appends an explicit Pydantic output contract to every structured call. `EnvGenConfig` centralizes model token budgets, research limits, context budgets, and reviewer excerpt sizes; each value can be changed through its `FORGE_ENVGEN_*`, `FORGE_RESEARCH_*`, `FORGE_SPECIALIST_*`, or `FORGE_REVIEW_*` environment variable. `GenerationErrorHandler` normalizes specialist failures and retains task/agent error records for orchestration and A2A diagnostics.
 
@@ -201,24 +201,24 @@ Agent execution and data collection are separate layers. Runtime agents choose a
 
 ### Agent Runs & Data Collection
 
-- **Five agent adapters** — `random`, `scripted:<path>`, `anthropic:<model>`, `openai:<model>`, `vllm:<model>`
-- **AgentContext** — per-episode agent memory with a compact deterministic digest for prompt injection, stuck-vs-context-limit diagnosis, and automatic pruning of error spam and revisited-state noise
-- **Trajectory recording** — every step's state, action, and reward persisted to JSONL and DB
-- **Post-episode objective scoring** — container and browser runners call `ObjectiveScorer` once on the final state; CLI uses its final tiered grader. Cheap state-hash and loop monitors may stop stuck runs without exposing grader feedback to the agent
-- **Cross-run episode selection** — pick episodes from multiple runs, export as a single merged dataset
-- **Parallel rollouts** — launch batched episode rollouts across any compiled environment from the global Rollouts page; `ParallelRolloutRunner` runs the same task across many isolated env copies concurrently (one fresh instance per rollout, millisecond start/teardown) and classifies each outcome as success, failure, partial success, or edge case so a single batch yields diverse training scenarios. A rollout always runs the task it names: if the environment does not declare that task, each episode fails with failure type `configuration` and lists the declared tasks, instead of running a different one
-- **Per-environment dashboard** — pass rate, average reward, step efficiency, termination-reason breakdown
+- **Five agent adapters**: `random`, `scripted:<path>`, `anthropic:<model>`, `openai:<model>`, `vllm:<model>`
+- **AgentContext**: per-episode agent memory with a compact deterministic digest for prompt injection, stuck-vs-context-limit diagnosis, and automatic pruning of error spam and revisited-state noise
+- **Trajectory recording**: every step's state, action, and reward persisted to JSONL and DB
+- **Post-episode objective scoring**: container and browser runners call `ObjectiveScorer` once on the final state; CLI uses its final tiered grader. Cheap state-hash and loop monitors may stop stuck runs without exposing grader feedback to the agent
+- **Cross-run episode selection**: pick episodes from multiple runs, export as a single merged dataset
+- **Parallel rollouts**: launch batched episode rollouts across any compiled environment from the global Rollouts page; `ParallelRolloutRunner` runs the same task across many isolated env copies concurrently (one fresh instance per rollout, millisecond start/teardown) and classifies each outcome as success, failure, partial success, or edge case so a single batch yields diverse training scenarios. A rollout always runs the task it names: if the environment does not declare that task, each episode fails with failure type `configuration` and lists the declared tasks, instead of running a different one
+- **Per-environment dashboard**: pass rate, average reward, step efficiency, termination-reason breakdown
 
 ### Observability & Replay
 
-- **Live event feed** — real-time observability panel streamed from the running container
-- **Unified per-run trace** — `AgentRunLogger` records the agent's LLM layer (prompt, chosen tool call, response) alongside every action, result, and state change as one ordered, step-correlated trace; persisted per run even when the run aborts mid-flight
-- **Per-run loss analysis** — `LossAnalyzer` classifies why a run failed into a fixed seven-mode taxonomy (instruction-following, hallucination, tool-sequencing, early-stopping, context-loss, reward-hacking, surface-overfitting) from the run trace and verifier result, emits a per-run report with evidence and confidence, and aggregates modes across runs. A clean, correct run yields no failure modes
-- **Episode replay** — re-run any recorded episode step-by-step from stored trajectory
-- **Branch replay** — fork from any step index and try alternate action sequences
-- **Failure clustering** — groups failed episodes by trajectory diff similarity
-- **Cross-run anomaly detection** — `POST /api/sandbox/{env}/detect` loads recent completed episodes, compares trajectories across runs, and returns severity-tagged findings in five categories (`reward_hacking`, `distribution_drift`, `policy_gaming`, `anomalous_pattern`, `reward_collapse`), surfaced on the per-environment Violations page next to the rule-based audit log
-- **Environment graph** — visual entity/action relationship map
+- **Live event feed**: real-time observability panel streamed from the running container
+- **Unified per-run trace**: `AgentRunLogger` records the agent's LLM layer (prompt, chosen tool call, response) alongside every action, result, and state change as one ordered, step-correlated trace; persisted per run even when the run aborts mid-flight
+- **Per-run loss analysis**: `LossAnalyzer` classifies why a run failed into a fixed seven-mode taxonomy (instruction-following, hallucination, tool-sequencing, early-stopping, context-loss, reward-hacking, surface-overfitting) from the run trace and verifier result, emits a per-run report with evidence and confidence, and aggregates modes across runs. A clean, correct run yields no failure modes
+- **Episode replay**: re-run any recorded episode step-by-step from stored trajectory
+- **Branch replay**: fork from any step index and try alternate action sequences
+- **Failure clustering**: groups failed episodes by trajectory diff similarity
+- **Cross-run anomaly detection**: `POST /api/sandbox/{env}/detect` loads recent completed episodes, compares trajectories across runs, and returns severity-tagged findings in five categories (`reward_hacking`, `distribution_drift`, `policy_gaming`, `anomalous_pattern`, `reward_collapse`), surfaced on the per-environment Violations page next to the rule-based audit log
+- **Environment graph**: visual entity/action relationship map
 
 ### Reward Engine
 
@@ -244,13 +244,13 @@ Six built-in verifier types compose into the final `EpisodeEvaluation` and its a
 | `PolicyVerifier` | Python expressions against current state |
 | `SemanticVerifier` | LLM-based semantic correctness (with embedding cache) |
 
-**Layered verification** — `LayeredVerifier` composes five layers into one verdict: final-state checks, invariant milestone checks (none skipped, correct order), trajectory checks (necessary tool calls made, no unnecessary ones), LLM-as-judge rubrics for creative tasks, and negative checks for unintended side effects.
+**Layered verification**: `LayeredVerifier` composes five layers into one verdict: final-state checks, invariant milestone checks (none skipped, correct order), trajectory checks (necessary tool calls made, no unnecessary ones), LLM-as-judge rubrics for creative tasks, and negative checks for unintended side effects.
 
-**Per-environment verifier composition** — `VerifierComposer` builds a configured `LayeredVerifier` for each task from its declared success/failure conditions and scenario ground truth, mapping them onto the five tiers (the LLM judge stays off by default). Provenance metadata does not affect runtime matching: the composer unwraps each milestone's `value` before checking action presence, order, and forbidden calls, while also accepting legacy strings and serialized milestone dictionaries. It then scores an episode's result into a `RewardBreakdown` under either mode: **binary** (full credit only when every tier passes) or **partial** (weighted per-tier mean, so a partially-correct trajectory earns graded credit). A right answer reached by an unauthorized side effect or the wrong tool order still fails.
+**Per-environment verifier composition**: `VerifierComposer` builds a configured `LayeredVerifier` for each task from its declared success/failure conditions and scenario ground truth, mapping them onto the five tiers (the LLM judge stays off by default). Provenance metadata does not affect runtime matching: the composer unwraps each milestone's `value` before checking action presence, order, and forbidden calls, while also accepting legacy strings and serialized milestone dictionaries. It then scores an episode's result into a `RewardBreakdown` under either mode: **binary** (full credit only when every tier passes) or **partial** (weighted per-tier mean, so a partially-correct trajectory earns graded credit). A right answer reached by an unauthorized side effect or the wrong tool order still fails.
 
-**Reward-hacking audit** — `RewardHackingAuditor` is a separate audit agent that asks whether a passing verdict was *earned*: it flags passes with skipped milestones, suspiciously short episodes, redundant call patterns, and supports a pluggable LLM audit client. `RewardHackingAuditor.for_verifier(...)` inherits the milestone list straight from a `LayeredVerifier`.
+**Reward-hacking audit**: `RewardHackingAuditor` is a separate audit agent that asks whether a passing verdict was *earned*: it flags passes with skipped milestones, suspiciously short episodes, redundant call patterns, and supports a pluggable LLM audit client. `RewardHackingAuditor.for_verifier(...)` inherits the milestone list straight from a `LayeredVerifier`.
 
-**Reward ablation presets** — set `reward_preset` in an experiment YAML; both
+**Reward ablation presets**: set `reward_preset` in an experiment YAML; both
 `VerifierComposer` and `TieredRewardEngine` resolve the same named contract:
 
 | Preset | Verifier and scoring behavior |
@@ -262,7 +262,7 @@ Six built-in verifier types compose into the final `EpisodeEvaluation` and its a
 
 ### Verification Independence
 
-Forge's environments are authored by an LLM. If the same model family then *graded* the agent, the grade would not be independent evidence — the generator would be marking its own homework. Forge's answer is structural: **the verdict is computed, not asked for.**
+Forge's environments are authored by an LLM. If the same model family then *graded* the agent, the grade would not be independent evidence, the generator would be marking its own homework. Forge's answer is structural: **the verdict is computed, not asked for.**
 
 | Grading path | Who issues the verdict | Contaminable |
 |---|---|---|
@@ -270,18 +270,18 @@ Forge's environments are authored by an LLM. If the same model family then *grad
 | Invariant / milestone checks | Order and presence over the trajectory | No |
 | Trajectory checks | Necessary vs. unnecessary tool calls | No |
 | Negative checks | Forbidden side effects over the trajectory | No |
-| Reward-hacking audit | Milestone, length, and call-pattern rules | No — the optional LLM audit client is off by default |
+| Reward-hacking audit | Milestone, length, and call-pattern rules | No: the optional LLM audit client is off by default |
 | LLM judge (`judge` layer, semantic checks) | A model | **Yes** |
 | Objective progress scoring (reward shaping only) | A model | **Yes** |
 
-Five of the seven paths never consult a model, and a sixth only does so when explicitly given a client. `VerifierComposer` leaves the judge layer off unless a task explicitly declares a semantic check, and the `binary_final_state` preset removes it entirely — so the default reward path is fully structural and needs no independence guarantee at all. This is the reason the layered verifier is built the way it is, not an incidental design choice.
+Five of the seven paths never consult a model, and a sixth only does so when explicitly given a client. `VerifierComposer` leaves the judge layer off unless a task explicitly declares a semantic check, and the `binary_final_state` preset removes it entirely, so the default reward path is fully structural and needs no independence guarantee at all. This is the reason the layered verifier is built the way it is, not an incidental design choice.
 
 For the paths that *do* consult a model, independence is configurable and enforced:
 
-- **Separate judge client** — `FORGE_JUDGE_MODEL` / `FORGE_JUDGE_PROVIDER` configure grading independently of generation. Every grading call site (`TieredRewardEngine`, `ObjectiveScorer`, trajectory anomaly detection) resolves through `get_judge_client()`; generation keeps using `get_client()`. Unset, grading falls back to the generation model — a workable local default, and an explicitly non-independent one.
-- **Family-level comparison** — `model_family()` collapses tiers, so grading Sonnet-authored environments with Haiku does *not* count as separation. Swapping tiers changes cost, not provenance.
-- **Enforced before the run** — experiments declare `require_grader_independence` (default `true`). When a run would issue LLM verdicts under a judge from the generating family, `forge benchmark eval` raises `GraderContaminationError` before spending a single episode, and names the variable that fixes it.
-- **Recorded in the result** — every `result.json` carries a `grading` block naming the generating models, the judge, and whether the pair was independent. A structural run records `llm_graded: false`, which is the *positive* claim: this number came from computed checks, not from a model's opinion.
+- **Separate judge client**: `FORGE_JUDGE_MODEL` / `FORGE_JUDGE_PROVIDER` configure grading independently of generation. Every grading call site (`TieredRewardEngine`, `ObjectiveScorer`, trajectory anomaly detection) resolves through `get_judge_client()`; generation keeps using `get_client()`. Unset, grading falls back to the generation model, a workable local default, and an explicitly non-independent one.
+- **Family-level comparison**: `model_family()` collapses tiers, so grading Sonnet-authored environments with Haiku does *not* count as separation. Swapping tiers changes cost, not provenance.
+- **Enforced before the run**: experiments declare `require_grader_independence` (default `true`). When a run would issue LLM verdicts under a judge from the generating family, `forge benchmark eval` raises `GraderContaminationError` before spending a single episode, and names the variable that fixes it.
+- **Recorded in the result**: every `result.json` carries a `grading` block naming the generating models, the judge, and whether the pair was independent. A structural run records `llm_graded: false`, which is the *positive* claim: this number came from computed checks, not from a model's opinion.
 
 ```json
 "grading": {
@@ -297,7 +297,7 @@ For the paths that *do* consult a model, independence is configurable and enforc
 
 **Declared before, counted after.** The reward preset describes which verifier layers are enabled; it does not describe what a grading path actually does. Each post-episode `ObjectiveScorer` call increments `EpisodeResult.llm_verdicts`, and the observed count lands in the record.
 
-The two must agree. A run that declared itself structural and then issued model verdicts raises instead of writing the record — an under-declaring grading path is a bug, and a result file that understates model involvement is worse than no file, because it is what a reader trusts when they cannot re-run the experiment.
+The two must agree. A run that declared itself structural and then issued model verdicts raises instead of writing the record, an under-declaring grading path is a bug, and a result file that understates model involvement is worse than no file, because it is what a reader trusts when they cannot re-run the experiment.
 
 **Pass/fail is computed, not inferred from stopping.** Held-out episodes are graded by `structural_verdict`, which composes a `LayeredVerifier` from the environment's own compiled `success_conditions` and `failure_conditions` and runs it against the recorded final state and trajectory. Reaching the right final state by a forbidden route still fails. Termination reasons such as `submitted`, `dead_end`, and `max_steps` never stand in for verifier success.
 
@@ -313,13 +313,13 @@ A `Jury` can vote on top of the structural verdict. Members implement one small 
 | `agreement_threshold` | Unanimity among voting members by default; `0.67` accepts 2-1 on a three-member jury |
 | `max_abstention_rate` | Ceiling on undecided episodes (default `0.2`) |
 
-Majority decides, but a split below the threshold is **indeterminate**: the episode leaves the pass-rate denominator instead of being counted as a failure. An abstaining member — a provider outage is missing evidence, not evidence of failure — is excluded from the agreement denominator rather than counted as a vote against.
+Majority decides, but a split below the threshold is **indeterminate**: the episode leaves the pass-rate denominator instead of being counted as a failure. An abstaining member, a provider outage is missing evidence, not evidence of failure, is excluded from the agreement denominator rather than counted as a vote against.
 
 Because excluding episodes shrinks the denominator, `abstention_rate` is reported beside `heldout_pass_rate` in every `result.json`, and a run exceeding `max_abstention_rate` **fails and writes no record**. Past that point the surviving episodes are a biased sample of the ones the jury found easy, and publishing the number would be worse than failing.
 
 ### Interaction Contracts
 
-Every environment declares which capabilities the agent has access to — the actions an agent can take, across every interaction modality — via `env.capabilities()`. Each capability validates actions against its schema *before* anything touches the environment, so a hallucinated tool, unknown endpoint, or out-of-bounds click never executes. Not every environment needs every modality; each advertises only the ones it attaches:
+Every environment declares which capabilities the agent has access to, meaning the actions an agent can take, across every interaction modality, via `env.capabilities()`. Each capability validates actions against its schema *before* anything touches the environment, so a hallucinated tool, unknown endpoint, or out-of-bounds click never executes. Not every environment needs every modality; each advertises only the ones it attaches:
 
 | Capability | Interacts with | Action shape | Schema enforces |
 |---|---|---|---|
@@ -331,29 +331,29 @@ Every environment declares which capabilities the agent has access to — the ac
 | **BrowserUse** | The browser | `{"action_type", …}` | allowed primitives (`click`, `type`, `press`, `navigate`, `scroll`), viewport bounds |
 
 - Every `ForgeEnv` exposes ToolUse (`env.tool_use.execute(...)` is a schema-validated `step()`); attach the others with `EnvBuilder.with_mcp_use(...)` / `.with_rest_use(...)` / `.with_orpc_use(...)` / `.with_computer_use(...)` / `.with_browser_use(...)`
-- `env.capability_surface()` returns `{modality: [ToolSpec]}` — the full set of actions the agent can take, grouped by modality, so every attached interface is discoverable through one tool surface
+- `env.capability_surface()` returns `{modality: [ToolSpec]}`: the full set of actions the agent can take, grouped by modality, so every attached interface is discoverable through one tool surface
 - CLI environments grant ComputerUse (`os="linux"`); browser environments route every agent action through BrowserUse
 
 ### Determinism
 
-Environments are deterministic by default — same seed and same trajectory produce the same observations *and* the same score:
+Environments are deterministic by default: the same seed and same trajectory produce the same observations *and* the same score:
 
-- **Launch-time determinism check (default)** — two identically-seeded rollouts are hashed (observations + rewards + termination flags); a mismatch raises `DeterminismError` and aborts the launch. It runs in the backend env loader, `forge run` / `forge export`, and `EnvBuilder.build()`
-- **EnvBuilder + DeterminismConfig** — virtual clock, seeded RNG and UUIDs, canonical sorted-key JSON, float rejection (integers only), serialized transitions, network and filesystem guards inside the env, and fresh-universe startup (factory caches dropped every reset)
-- **Seed control** — the seed threads end to end (`reset(seed)` → `POST /forge/reset {"seed": …}` → `STATE.seed_state(seed)`), so the same seed reproduces the same starting universe and a different seed produces a different-but-reproducible one; an unseeded reset restores the fixed baseline
-- **Generated-app determinism contract** — custom LLM-generated apps must use a counter-based virtual clock (`forge_now()`) and sequential IDs (`_next_id()`) in place of wall-clock timestamps and random UUIDs, and build the universe from a `random.Random(seed)`; a static correctness specialist audits this before artifacts are written, and a post-boot `CorrectnessValidator` proves `/forge/reset` restores a byte-identical initial universe (rows, IDs, counters, DB included), that snapshot/restore round-trips, and that the same seed reproduces identical state while distinct seeds diverge — hard-failing the build on any violation
-- **Replayable episodes** — every step records the tool call, emitted events, state diff, hashes, and reward; `replay_episode(env, seed, steps)` re-executes any recording and verifies every state hash and reward against it. Container/CLI/browser trajectories are written incrementally (each step flushed as it happens), so a run that crashes mid-episode still leaves a durable, replayable partial trace
+- **Launch-time determinism check (default)**: two identically seeded rollouts are hashed (observations + rewards + termination flags); a mismatch raises `DeterminismError` and aborts the launch. It runs in the backend env loader, `forge run` / `forge export`, and `EnvBuilder.build()`
+- **EnvBuilder + DeterminismConfig**: virtual clock, seeded RNG and UUIDs, canonical sorted-key JSON, float rejection (integers only), serialized transitions, network and filesystem guards inside the env, and fresh-universe startup (factory caches dropped every reset)
+- **Seed control**: the seed threads end to end (`reset(seed)` → `POST /forge/reset {"seed": …}` → `STATE.seed_state(seed)`), so the same seed reproduces the same starting universe and a different seed produces a different-but-reproducible one; an unseeded reset restores the fixed baseline
+- **Generated-app determinism contract**: custom LLM-generated apps must use a counter-based virtual clock (`forge_now()`) and sequential IDs (`_next_id()`) in place of wall-clock timestamps and random UUIDs, and build the universe from a `random.Random(seed)`; a static correctness specialist audits this before artifacts are written, and a post-boot `CorrectnessValidator` proves `/forge/reset` restores a byte-identical initial universe (rows, IDs, counters, DB included), that snapshot/restore round-trips, and that the same seed reproduces identical state while distinct seeds diverge, hard-failing the build on any violation
+- **Replayable episodes**: every step records the tool call, emitted events, state diff, hashes, and reward; `replay_episode(env, seed, steps)` re-executes any recording and verifies every state hash and reward against it. Container/CLI/browser trajectories are written incrementally (each step flushed as it happens), so a run that crashes mid-episode still leaves a durable, replayable partial trace
 - **Pinned builds**: every base image is pinned by digest, and every container installs one hashed lock (`forge/envgen/runtime_requirements.lock`) with `pip --require-hashes`. The LLM's requirements list never reaches pip, and the correctness gate rejects imports outside the lock
 - **Fixed clocks, zones, and hash order**: premade Gmail and Slack stamp time from a SQLite-backed virtual clock and mint sequential IDs, so reset, snapshot, and restart all carry them. Containers run with `TZ=UTC` and `PYTHONHASHSEED=0`, browser pages see a fixed `Date.now()`, and the CLI image preloads libfaketime so every command starts at the same fixed epoch (file mtimes still come from the kernel clock, and statically linked binaries ignore the preload)
 - **One episode per container at a time**: a run's episodes execute in order, and a per-environment Redis lock keeps separate runs and benchmarks from driving the same container at once
 - **Fast, clean starts**: app containers stay warm and reset in place. A CLI run snapshots its environment once (terminal setup included), each episode forks a fresh container from that snapshot, and a pre-started spare means the next episode starts in about 10 ms. Browser episodes each get a fresh context in the already-running Chromium, so no cookies, storage, or tabs carry over
 - **Grader separation**: agent and persona actions can never reach `/forge/*` control endpoints, so an agent cannot write the state its grader reads. CLI assertions never run in the agent's shell: the finished container is committed, a fresh copy starts with no network and none of the agent's processes, and each assertion runs through a static BusyBox toolbox mounted read-only from a pinned image
 - **Generous fixed timeouts**: 60 s per environment request, 120 s per shell command or assertion, and 120 s for a container to come up. The browser waits for the page to settle instead of sleeping a fixed second
-- **Flake-free UI** — premade UIs ship a CSS no-motion override and browser sessions force `prefers-reduced-motion` + injected no-animation styles
-- **SQLite as source of truth** — premade and generated apps persist state in SQLite; verification reads `/forge/state` (DB-backed), never the UI
-- **Enforced separation of concerns** — architecture tests keep environment, agents, verifiers, and training code from importing across boundaries
-- **UI-determinism gate** — `tests/architecture/test_ui_determinism.py` asserts every premade UI ships the `forge-no-motion` kill switch, that the browser runner disables motion on every page it opens, and that verification reads the DB rather than the rendered UI
-- **Test-scenario-diversity gate** — a static analyzer (`tests/architecture/diversity_audit.py`) parses every test module and fails the suite if one asserts only the happy path; each behavior must pair its happy case with a negative case (invalid input / error path) and a false-positive guard (a look-valid input that must be rejected, detected via `pytest.raises`, a differential/exclusion assertion, or a rejection-named test)
+- **Flake-free UI**: premade UIs ship a CSS no-motion override and browser sessions force `prefers-reduced-motion` + injected no-animation styles
+- **SQLite as source of truth**: premade and generated apps persist state in SQLite; verification reads `/forge/state` (DB-backed), never the UI
+- **Enforced separation of concerns**: architecture tests keep environment, agents, verifiers, and training code from importing across boundaries
+- **UI-determinism gate**: `tests/architecture/test_ui_determinism.py` asserts every premade UI ships the `forge-no-motion` kill switch, that the browser runner disables motion on every page it opens, and that verification reads the DB rather than the rendered UI
+- **Test-scenario-diversity gate**: a static analyzer (`tests/architecture/diversity_audit.py`) parses every test module and fails the suite if one asserts only the happy path; each behavior must pair its happy case with a negative case (invalid input / error path) and a false-positive guard (a look-valid input that must be rejected, detected via `pytest.raises`, a differential/exclusion assertion, or a rejection-named test)
 
 For the determinism ablation only, set `FORGE_DETERMINISM=off` before building,
 starting, training, and evaluating environments. This skips the correctness and
@@ -364,14 +364,14 @@ flag. Omitting the variable (or setting it to `on`) preserves the default behavi
 
 ### Security & Policy
 
-- **PolicyEngine DSL** — policy and verifier expressions use a restricted AST evaluator instead of `eval`; violations block transitions and return 0.0 reward
-- **Network and process isolation** — AST-based scanning blocks network modules, subprocess access, shell execution, and dynamic imports in generated envs (bypass with `FORGE_DEV_NETWORK=true`). CLI containers run with no network. App and browser containers each sit on their own internal Docker network with no route out, and a pinned socat gateway per environment publishes the loopback ports and forwards only to that environment. A relay inside the browser's network namespace re-serves DevTools, which Chromium binds to its own loopback. Compiled in-process packages are scanned for network imports before the worker loads them. An agent's action target must be a path on its environment, so it cannot point a request at another host
-- **Generated-code validation** — compiler checks run in an isolated subprocess with time and output limits; generated paths are confined to the configured environment root
-- **Credential-safe logging** — bearer values and URL query strings are redacted before HTTP, Docker pull, or worker errors reach logs; signed CDN URLs are never emitted intact
-- **Local-only default** — `run.sh` binds the backend to `127.0.0.1` unless `FORGE_HOST` is explicitly changed
-- **PII redaction** — strips emails, phone numbers, and SSNs from LLM input before code generation
-- **RBAC observation filtering** — removes or restricts state fields per role, applied in `reset()` and `step()`
-- **Policy Violation Viewer** — global filterable table of violations by environment, episode, and severity
+- **PolicyEngine DSL**: policy and verifier expressions use a restricted AST evaluator instead of `eval`; violations block transitions and return 0.0 reward
+- **Network and process isolation**: AST-based scanning blocks network modules, subprocess access, shell execution, and dynamic imports in generated envs (bypass with `FORGE_DEV_NETWORK=true`). CLI containers run with no network. App and browser containers each sit on their own internal Docker network with no route out, and a pinned socat gateway per environment publishes the loopback ports and forwards only to that environment. A relay inside the browser's network namespace re-serves DevTools, which Chromium binds to its own loopback. Compiled in-process packages are scanned for network imports before the worker loads them. An agent's action target must be a path on its environment, so it cannot point a request at another host
+- **Generated-code validation**: compiler checks run in an isolated subprocess with time and output limits; generated paths are confined to the configured environment root
+- **Credential-safe logging**: bearer values and URL query strings are redacted before HTTP, Docker pull, or worker errors reach logs; signed CDN URLs are never emitted intact
+- **Local-only default**: `run.sh` binds the backend to `127.0.0.1` unless `FORGE_HOST` is explicitly changed
+- **PII redaction**: strips emails, phone numbers, and SSNs from LLM input before code generation
+- **RBAC observation filtering**: removes or restricts state fields per role, applied in `reset()` and `step()`
+- **Policy Violation Viewer**: global filterable table of violations by environment, episode, and severity
 
 ### Environment Customization
 
@@ -385,7 +385,7 @@ A generated environment package can override compiled behaviour without editing 
 | `@observation_transform(name)` | The observation shown to the agent |
 | `@policy_rule(name)` | An additional policy rule evaluated on every step |
 
-`EnvConfig` carries the per-environment knobs the UI's **Config** page edits — `RewardConfig` (base success, step penalty, policy-violation penalty, invalid-action penalty, reward clamps, semantic weight), `ObservationConfig` (mode, actor role, visible/hidden entities for RBAC filtering), and `PersonaPopulation` (see [Simulated People](#simulated-people)). Overrides live in the package's `custom/` directory, which is included in the runnable source export.
+`EnvConfig` carries the per-environment knobs the UI's **Config** page edits, `RewardConfig` (base success, step penalty, policy-violation penalty, invalid-action penalty, reward clamps, semantic weight), `ObservationConfig` (mode, actor role, visible/hidden entities for RBAC filtering), and `PersonaPopulation` (see [Simulated People](#simulated-people)). Overrides live in the package's `custom/` directory, which is included in the runnable source export.
 
 ### Simulated People
 
@@ -399,10 +399,10 @@ The split between what is reproducible and what is lifelike is the whole design:
 
 | Concern | Deterministic? | Owned by |
 |---|---|---|
-| Who is in the cast, and what they are like | Yes — resolved from the episode seed | `PersonaPopulation` |
-| When each person acts, and how often | Yes — from an RNG the engine owns, never the environment's | `PersonaScheduler` |
-| What each person actually does | No — a model decides, in character | `PersonaDriver` |
-| What they are *permitted* to do | Yes — declared up front | `PersonaBehavior.allowed_actions` |
+| Who is in the cast, and what they are like | Yes, resolved from the episode seed | `PersonaPopulation` |
+| When each person acts, and how often | Yes, from an engine-owned RNG | `PersonaScheduler` |
+| What each person actually does | No, a model decides in character | `PersonaDriver` |
+| What they are *permitted* to do | Yes, declared up front | `PersonaBehavior.allowed_actions` |
 
 A driver returns a *proposal*. `ActionGuard` checks it against that persona's
 declared action space, the environment's real action surface, and the action's
@@ -411,7 +411,7 @@ recorded as a blocked turn and never applied. So a model can choose freely
 without being able to do anything its author did not grant it.
 
 Personas execute through the same `ExecutionBackend` the agent does, so their
-writes hash, diff, and replay identically — and they act *within* the agent's
+writes hash, diff, and replay identically, acting within the agent's
 step, before it observes, so a colleague's reply lands in the same step's diff
 rather than appearing out of nowhere in the next one.
 
@@ -422,7 +422,7 @@ Configure a cast in `custom/config.yaml`, or visually at
 personas:
   enabled: true
   count: 4                  # above the roster, archetypes are cloned to fill it
-  driver: anthropic:claude-sonnet-5   # or `scripted` — free, offline, replayable
+  driver: anthropic:claude-sonnet-5   # or `scripted`, free, offline and replayable
   max_actions_per_step: 1
   roster:
     - id: supervisor
@@ -454,7 +454,7 @@ is offered, because whatever shipped in one would quietly become the people
 every environment has.
 
 For environments defined in Python, `forge/personas/archetypes.py` provides
-`archetype()` — eight reusable *dispositions* (a gatekeeper, a busy expert, an
+`archetype()`, eight reusable dispositions (a gatekeeper, a busy expert, an
 unreliable third party, someone who cuts corners and does not say so) that
 supply traits, cadence, and voice while leaving identity to the caller. A test
 keeps them domain-neutral: none may name an industry, so the library cannot
@@ -465,41 +465,41 @@ unbound persona can never act.
 `EnvBuilder.with_personas(...)` wires a cast into an in-process environment and
 `ContainerEnvBase(personas=...)` into a containerized one; both reject at build
 time a persona bound to an action the environment does not implement. CLI and
-browser environments take no cast — there is no coherent notion of a colleague
+browser environments take no cast because there is no notion of a colleague
 inside a shell session.
 
 **In the product, the cast is written before the environment exists and bound
 after it does.** Step 05 of the custom builder (`/environments/new/custom`) is
 where people are described; it deliberately offers no action picker, because at
-that moment the environment has no actions — granting one is refused at the
+that moment the environment has no actions; granting one is refused at the
 request with that as the reason. The build writes the roster into
 `custom/config.yaml`, and because a cast that arrives inert is only a safe
 default if it is impossible to miss, the binding step is surfaced three times:
 in the build log, as a **Needs actions** badge on the environment hub, and as a
 callout at the top of the personas page. From then on the switch that turns the
 cast on and off sits in the New Agent Run dialog, where runs are actually
-launched — it edits the environment rather than the run, since personas are
+launched; it edits the environment rather than the run, since personas are
 resolved when the environment is built, and says so.
 
 One subtlety worth stating because it is invisible: `ContainerEpisodeRunner`
-does not call `ContainerEnvBase.step` — it drives the environment's
-collaborators directly — so the persona tick lives in its `_execute_action` as
+does not call `ContainerEnvBase.step`; it drives the environment's
+collaborators directly, so the persona tick lives in its `_execute_action` as
 well. Wiring `step` alone would have produced a cast that existed on the
 environment, passed every unit test, and never acted in a real run.
 
 Because a model-backed persona cannot be replayed, `build()` runs its
 determinism probe with the scripted driver swapped in: the cast is still present
-and still acts on the same steps, so the probe proves what it exists to prove —
+and still acts on the same steps, so the probe proves what it exists to prove,
 that the environment's own machinery is reproducible.
 
 ### Synthetic Data Engine
 
 Generate training data without running live agents:
 
-- **Goal suggestion** — LLM proposes research goals tailored to the env's policy and reward; de-duplicates against existing goals
-- **Difficulty scaling** — five tiers (Trivial → Expert) with concrete step-count ranges
-- **Edge case injection** — inject `boundary_conditions`, `permission_errors`, `missing_deps`, `conflicting_state`, or `recovery` scenarios into generated trajectories
-- **Replay manifest** — saved to `generated_envs/<env>/synthetic_replay.json`; active epochs replace live LLM inference in agent runs
+- **Goal suggestion**: LLM proposes research goals tailored to the env's policy and reward; de-duplicates against existing goals
+- **Difficulty scaling**: five tiers (Trivial → Expert) with concrete step-count ranges
+- **Edge case injection**: inject `boundary_conditions`, `permission_errors`, `missing_deps`, `conflicting_state`, or `recovery` scenarios into generated trajectories
+- **Replay manifest**: saved to `generated_envs/<env>/synthetic_replay.json`; active epochs replace live LLM inference in agent runs
 
 ### Task Factory
 
@@ -550,7 +550,7 @@ All environment-specific episode results convert to the shared
 loaders therefore exchange one rollout shape while retaining richer controller
 results internally.
 
-**Runnable source export** — separately from the datasets, any generated environment can be downloaded as a self-contained zip (`GET /api/envs/{env_name}/download`, or the download action on the environment page). `build_source_bundle` packages the generated app, `container_env.py`, `reward_fn.py`, `state_schema.json`, and any `custom/` overrides alongside a README and a `docker-compose.yml`, while filtering runtime artifacts (`episodes/`, `__pycache__`, `.pyc`). The result runs with one command on a machine that has never seen Forge, so an environment can be published, reviewed, or archived independently of this platform.
+**Runnable source export**: separately from the datasets, any generated environment can be downloaded as a self-contained zip (`GET /api/envs/{env_name}/download`, or the download action on the environment page). `build_source_bundle` packages the generated app, `container_env.py`, `reward_fn.py`, `state_schema.json`, and any `custom/` overrides alongside a README and a `docker-compose.yml`, while filtering runtime artifacts (`episodes/`, `__pycache__`, `.pyc`). It runs with one command so an environment can be published, reviewed, or archived independently.
 
 ### Policy Training
 
@@ -571,7 +571,7 @@ Benchmark runs your selected environments against **their own compiled tasks**, 
 
 ### Task Suite
 
-Each benchmarked environment is run against the tasks it was compiled with — `CompiledTaskProvider` resolves them from the environment's compiler input (its `TaskTemplate`s) and maps them onto the benchmark's task shape. There is no fixed built-in suite. Internal evaluation fails if a held-out environment has no compiled tasks, rather than silently weakening the denominator. Grading is unchanged — each generated environment is scored inside the container episode runner by its own reward function and verifiers.
+Each benchmarked environment is run against the tasks it was compiled with; `CompiledTaskProvider` resolves them from the environment's compiler input (its `TaskTemplate`s) and maps them onto the benchmark's task shape. There is no fixed built-in suite. Internal evaluation fails if a held-out environment has no compiled tasks, rather than silently weakening the denominator. Grading is unchanged, each generated environment is scored inside the container episode runner by its own reward function and verifiers.
 
 For policy generalization, `forge benchmark eval` loads `policy_checkpoint.json` and
 the same experiment YAML used for training. It refuses mismatched configs or leaked
@@ -750,9 +750,9 @@ Browser / API Client
         ▼
   FastAPI Backend (:8000)
         │
-        ├── SQLite (forge.db)       — environments, runs, episodes, benchmark_runs, audit log
+        ├── SQLite (forge.db)      , environments, runs, episodes, benchmark_runs, audit log
         │
-        └── Celery Worker           — async tasks
+        └── Celery Worker          , async tasks
               │
               ├── CLI:       docker run ubuntu:22.04
               ├── Browser:   docker run linuxserver/chromium
@@ -969,7 +969,7 @@ uv run pytest tests/architecture               # boundary, UI-determinism, and d
 uv run pytest tests/runtime tests/envgen       # kernel + generation pipeline
 ```
 
-The full suite completes in about 12 seconds — LLM calls are mocked and no container is
+The full suite completes in about 12 seconds because LLM calls are mocked and no container is
 built. `tests/architecture` doubles as a review gate: it fails the build on cross-layer
 imports, animated premade UIs, and tests that assert only the happy path.
 
@@ -1010,7 +1010,7 @@ imports, animated premade UIs, and tests that assert only the happy path.
 
 ### Generation Budgets
 
-`EnvGenConfig` centralizes every model token budget, research limit, context budget, and reviewer excerpt size; each field maps to one environment variable. The full list with defaults lives in [.env.example](.env.example) — the ones most often tuned:
+`EnvGenConfig` centralizes every model token budget, research limit, context budget, and reviewer excerpt size; each field maps to one environment variable. The full list with defaults lives in [.env.example](.env.example), the ones most often tuned:
 
 | Variable | Default | Description |
 |---|---|---|
@@ -1024,20 +1024,20 @@ imports, animated premade UIs, and tests that assert only the happy path.
 
 ### LLM Provider
 
-All LLM calls go through a single `get_client()` factory — swap providers or models without touching code.
+All LLM calls go through a single `get_client()` factory; swap providers or models without touching code.
 
 | Variable | Default | Description |
 |---|---|---|
 | `FORGE_LLM_PROVIDER` | `anthropic` | LLM backend: `anthropic`, `ollama`, `openai`, or `gemini`. The last two need their SDKs installed (`openai`, `google-genai`), and they read their API keys from the SDK's usual variable |
 | `FORGE_LLM_MODEL` | `claude-haiku-4-5-20251001` | Standard-tier model (faster, cheaper) |
 | `FORGE_LLM_MODEL_CAPABLE` | `claude-sonnet-4-6` | Capable-tier model (code generation, complex reasoning) |
-| `ANTHROPIC_API_KEY` | — | Required when `FORGE_LLM_PROVIDER=anthropic` |
+| `ANTHROPIC_API_KEY` | - | Required when `FORGE_LLM_PROVIDER=anthropic` |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL |
 | `VLLM_BASE_URL` | `http://localhost:8000/v1` | OpenAI-compatible endpoint for the `vllm:<model>` agent adapter |
 | `FORGE_JUDGE_PROVIDER` | falls back to `FORGE_LLM_PROVIDER` | Provider used for LLM **grading** only |
-| `FORGE_JUDGE_MODEL` | falls back to `FORGE_LLM_MODEL` | Model used for LLM **grading** only. Set this to a model outside the generating family to make LLM-graded runs independent — see [Verification Independence](#verification-independence) |
-| `FORGE_TASK_VALIDATOR_PROVIDER` | — | Provider for the task factory's validator (`anthropic`, `openai`, `gemini`, `ollama`). Required to create tasks. Set it here or on the Settings page |
-| `FORGE_TASK_VALIDATOR_MODEL` | — | Task factory validator model. Must come from a different family than `FORGE_LLM_MODEL_CAPABLE`, the task writer |
+| `FORGE_JUDGE_MODEL` | falls back to `FORGE_LLM_MODEL` | Model used for LLM **grading** only. Set this to a model outside the generating family to make LLM-graded runs independent, see [Verification Independence](#verification-independence) |
+| `FORGE_TASK_VALIDATOR_PROVIDER` | - | Provider for the task factory's validator (`anthropic`, `openai`, `gemini`, `ollama`). Required to create tasks. Set it here or on the Settings page |
+| `FORGE_TASK_VALIDATOR_MODEL` | - | Task factory validator model. Must come from a different family than `FORGE_LLM_MODEL_CAPABLE`, the task writer |
 
 **Run fully locally with Ollama:**
 ```bash

@@ -96,11 +96,11 @@ export function PersonaGeneratorCard({
             <CardTitle className="text-base font-semibold flex items-center gap-2">
               <span>Persona Generator</span>
               <Badge variant="outline" className="text-xs bg-primary/5 text-primary border-primary/30">
-                Dynamic Synthesis
+                Generator
               </Badge>
             </CardTitle>
             <p className="text-xs text-muted-foreground mt-0.5">
-              Synthesize realistic, context-grounded participants with authentic quirks, private knowledge, and calibrated traits.
+              Generate participants with workplace context, private knowledge, and behavior traits.
             </p>
           </div>
         </div>
@@ -156,7 +156,7 @@ export function PersonaGeneratorCard({
               onChange={(e) => setContext(e.target.value)}
             />
             <p className="text-[0.65rem] text-muted-foreground mt-1">
-              Grounds the persona&apos;s backstory, private knowledge, and communication quirks.
+              Sets background context, private knowledge, and communication style.
             </p>
           </div>
         </div>
