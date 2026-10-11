@@ -8,8 +8,8 @@ from forge.safety.classifier import SafetyVerdict
 
 
 class NoNames:
-    def extract_entities_long(self, text, entity_types, threshold, include_spans):
-        return {"entities": {"person": []}}
+    def batch_extract_entities_long(self, texts, entity_types, threshold, include_spans):
+        return [{"entities": {"person": []}} for _ in texts]
 
 
 @pytest.fixture

@@ -36,23 +36,40 @@ class DatasetSafetyService:
     def screen(self, record: object) -> ScreenResult:
         """A scrubbed copy of `record`, kept only when nothing flags it."""
         texts = list(_strings(record))
+        names = self._detect_names(texts)
         # Details quote raw text, so they are scrubbed before anyone stores them.
         findings = [
-            Finding(finding.rule, self._scrub(finding.detail, Counter()))
+            Finding(finding.rule, self._scrub(finding.detail, names, Counter()))
             for text in texts
             for finding in detect_threats(text)
         ]
         replacements: Counter[str] = Counter()
-        scrubbed = _map_strings(record, lambda text: self._scrub(text, replacements))
+        scrubbed = _map_strings(record, lambda text: self._scrub(text, names, replacements))
         if not findings and self._classifier is not None:
             scrubbed_text = "\n".join(_strings(scrubbed))
             if scrubbed_text:
                 findings = self._classifier.classify(scrubbed_text)
         return ScreenResult(scrubbed, not findings, findings, dict(replacements))
 
-    def _scrub(self, text: str, replacements: Counter[str]) -> str:
-        spans = _resolve(detect_secrets(text) + detect_pii(text) + self._names.detect(text), text)
-        for span in sorted(spans, key=lambda s: s.start, reverse=True):
+    def _detect_names(self, texts: list[str]) -> re.Pattern[str] | None:
+        """One pattern matching every name the model found anywhere in the row.
+
+        The model can tag a name once and miss its later mentions, so each
+        found name is replaced at every whole-word, same-case occurrence.
+        """
+        unique = list(dict.fromkeys(texts))
+        found = {span.value for spans in self._names.detect_many(unique) for span in spans}
+        found = {name for name in found if name.strip()}
+        if not found:
+            return None
+        alternatives = "|".join(re.escape(name) for name in sorted(found, key=len, reverse=True))
+        return re.compile(rf"(?<!\w)(?:{alternatives})(?!\w)")
+
+    def _scrub(self, text: str, names: re.Pattern[str] | None, replacements: Counter[str]) -> str:
+        spans = detect_secrets(text) + detect_pii(text)
+        if names is not None:
+            spans += [Span(m.start(), m.end(), "person", m.group()) for m in names.finditer(text)]
+        for span in sorted(_resolve(spans, text), key=lambda s: s.start, reverse=True):
             text = text[:span.start] + self._replacement(span) + text[span.end:]
             replacements[span.kind] += 1
         return text

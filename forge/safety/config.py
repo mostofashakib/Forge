@@ -10,12 +10,9 @@ from typing import NamedTuple
 
 from forge.extraction.llm_client import generation_models, get_judge_client
 from forge.safety.classifier import LLMSafetyClassifier
-from forge.safety.ner import DEFAULT_NER_MODEL, GlinerNameDetector, load_gliner
+from forge.safety.ner import DEFAULT_NER_MODEL, DEFAULT_NER_THRESHOLD, GlinerNameDetector, load_gliner
 from forge.safety.pseudonymizer import Pseudonymizer
 from forge.safety.service import DatasetSafetyService
-
-_DEFAULT_THRESHOLD = 0.5
-
 
 class SafetyConfigError(RuntimeError):
     """The safety gate cannot be built, so nothing may be exported."""
@@ -56,7 +53,7 @@ def _load_model():
 
 
 def _threshold() -> float:
-    raw = os.environ.get("FORGE_NER_THRESHOLD") or str(_DEFAULT_THRESHOLD)
+    raw = os.environ.get("FORGE_NER_THRESHOLD") or str(DEFAULT_NER_THRESHOLD)
     try:
         value = float(raw)
     except ValueError:

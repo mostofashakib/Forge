@@ -18,14 +18,17 @@ class SubstringNameModel:
     def __init__(self, *names: str) -> None:
         self.names = names
 
-    def extract_entities_long(self, text, entity_types, threshold, include_spans):
+    def batch_extract_entities_long(self, texts, entity_types, threshold, include_spans):
+        return [{"entities": {"person": self._people(text)}} for text in texts]
+
+    def _people(self, text):
         people = []
         for name in self.names:
             start = text.find(name)
             while start != -1:
                 people.append({"text": name, "start": start, "end": start + len(name)})
                 start = text.find(name, start + 1)
-        return {"entities": {"person": people}}
+        return people
 
 
 def make_gate(out_dir: Path, *names: str) -> DatasetGate:

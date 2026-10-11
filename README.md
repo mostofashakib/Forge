@@ -580,7 +580,7 @@ A flagged row goes, scrubbed, to `safety_quarantine.jsonl` with its reasons, so 
 |---|---|---|
 | `FORGE_SCRUB_KEY` | none, required | HMAC key for pseudonyms. Exports fail with a clear error without it. |
 | `FORGE_NER_MODEL` | `fastino/gliner2-privacy-filter-PII-multi` | GLiNER2 checkpoint for names. Downloaded once from the Hugging Face Hub. |
-| `FORGE_NER_THRESHOLD` | `0.5` | Name confidence cutoff, between 0 and 1. |
+| `FORGE_NER_THRESHOLD` | `0.8` | Name confidence cutoff, between 0 and 1. Lower catches more names and more product names. |
 | `FORGE_SAFETY_LLM` | `0` | `1` adds the LLM judge. |
 
 All environment-specific episode results convert to the shared
