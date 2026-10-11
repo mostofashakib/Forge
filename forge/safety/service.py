@@ -59,7 +59,8 @@ class DatasetSafetyService:
         """
         unique = list(dict.fromkeys(texts))
         found = {span.value for spans in self._names.detect_many(unique) for span in spans}
-        found = {name for name in found if name.strip()}
+        # A one-letter "name" would replace every "C" in "Option C".
+        found = {name for name in found if len(name.strip()) >= 2}
         if not found:
             return None
         alternatives = "|".join(re.escape(name) for name in sorted(found, key=len, reverse=True))

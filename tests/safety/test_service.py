@@ -192,3 +192,9 @@ def test_names_are_detected_in_one_batch_of_unique_strings_per_row():
 
 def _service_with(names):
     return DatasetSafetyService(Pseudonymizer(KEY), names, None)
+
+
+def test_single_letter_names_are_never_propagated():
+    service = DatasetSafetyService(Pseudonymizer(KEY), FirstMentionOnly("C"), None)
+    result = service.screen({"a": "C", "b": "Pick Option C or B"})
+    assert result.record["b"] == "Pick Option C or B"
