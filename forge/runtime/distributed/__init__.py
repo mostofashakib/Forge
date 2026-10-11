@@ -23,6 +23,19 @@ from forge.runtime.distributed.scheduler import (
     EnvironmentSlot,
 )
 
+
+def create_rollout_runner(*args, **kwargs):
+    from forge.runtime.parallel_rollout import create_rollout_runner as _create
+
+    return _create(*args, **kwargs)
+
+
+def run_parallel_rollouts(*args, **kwargs):
+    from forge.runtime.parallel_rollout import run_parallel_rollouts as _run
+
+    return _run(*args, **kwargs)
+
+
 __all__ = [
     "DurableQueueItem",
     "DurableTaskQueue",
@@ -35,6 +48,9 @@ __all__ = [
     "DeterministicSeedPartitioner",
     "DistributedRolloutBatch",
     "DistributedParallelRolloutRunner",
+    "create_rollout_runner",
+    "run_parallel_rollouts",
     "DEFAULT_QUEUE_TTL_S",
     "DEFAULT_MAX_RETRIES",
 ]
+

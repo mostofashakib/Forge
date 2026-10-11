@@ -73,7 +73,9 @@ class RolloutJob(Base):
     agent_id: Mapped[str] = mapped_column(String)
     num_episodes: Mapped[int] = mapped_column(Integer)
     seed_start: Mapped[int] = mapped_column(Integer)
+    mode: Mapped[str] = mapped_column(String, default="local", server_default="local")
     status: Mapped[str] = mapped_column(String, default="pending")
+
     episodes_completed: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc)

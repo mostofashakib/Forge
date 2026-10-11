@@ -154,6 +154,66 @@ class ParallelRolloutRunner:
     _classify = staticmethod(classify_rollout_outcome)
 
 
+def create_rollout_runner(
+    env_factory: Callable[[], object],
+    mode: str = "local",
+    *,
+    max_workers: int = 8,
+    num_workers: int = 4,
+    queue: Any = None,
+    ttl_s: float = 600.0,
+    max_retries: int = 3,
+    max_queue_depth: int = 10000,
+) -> ParallelRolloutRunner | Any:
+    """Create a rollout runner supporting both local and distributed execution modes.
+
+    Args:
+        env_factory: Factory returning a fresh environment instance per rollout.
+        mode: "local" for thread pool on a single host;
+              "distributed" for multi-worker durable queue execution.
+        max_workers: Worker thread count for local mode.
+        num_workers: Worker pool size for distributed mode.
+        queue: Optional DurableTaskQueue instance for distributed mode.
+        ttl_s: Task TTL in seconds (default 10 minutes = 600s).
+        max_retries: Retry attempts before DLQ (default 3).
+        max_queue_depth: Maximum queue depth for backpressure protection.
+
+    Returns:
+        ParallelRolloutRunner if mode="local",
+        DistributedParallelRolloutRunner if mode="distributed".
+    """
+    if mode == "local":
+        return ParallelRolloutRunner(env_factory=env_factory, max_workers=max_workers)
+    elif mode == "distributed":
+        from forge.runtime.distributed import DistributedParallelRolloutRunner
+
+        return DistributedParallelRolloutRunner(
+            env_factory=env_factory,
+            num_workers=num_workers,
+            queue=queue,
+            ttl_s=ttl_s,
+            max_retries=max_retries,
+            max_queue_depth=max_queue_depth,
+        )
+    else:
+        raise ValueError(
+            f"Unsupported rollout mode: {mode!r}. Expected 'local' or 'distributed'."
+        )
+
+
+def run_parallel_rollouts(
+    env_factory: Callable[[], object],
+    task: dict | None,
+    num_rollouts: int,
+    *,
+    seed_start: int = 0,
+    policy: Policy | None = None,
+    mode: str = "local",
+    **kwargs: Any,
+) -> RolloutBatch | Any:
+    """Run parallel rollouts using either local or distributed execution mode."""
+    runner = create_rollout_runner(env_factory, mode=mode, **kwargs)
+    return runner.run_diverse(task, num_rollouts, seed_start=seed_start, policy=policy)
 
 
 def __getattr__(name: str):
@@ -162,4 +222,5 @@ def __getattr__(name: str):
 
         return getattr(dist, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 

@@ -211,8 +211,12 @@ Agent execution and data collection are separate layers. Runtime agents choose a
 - **Trajectory recording**: every step's state, action, and reward persisted to JSONL and DB
 - **Post-episode objective scoring**: container and browser runners call `ObjectiveScorer` once on the final state; CLI uses its final tiered grader. Cheap state-hash and loop monitors may stop stuck runs without exposing grader feedback to the agent
 - **Cross-run episode selection**: pick episodes from multiple runs, export as a single merged dataset
-- **Parallel rollouts**: launch batched episode rollouts across any compiled environment from the global Rollouts page; `ParallelRolloutRunner` runs the same task across many isolated env copies concurrently (one fresh instance per rollout, millisecond start/teardown) and classifies each outcome as success, failure, partial success, or edge case so a single batch yields diverse training scenarios. A rollout always runs the task it names: if the environment does not declare that task, each episode fails with failure type `configuration` and lists the declared tasks, instead of running a different one
+- **Parallel rollouts (local and distributed)**: launch batched episode rollouts across any compiled environment via the global Rollouts page, Python API, or CLI. Both execution modes are supported:
+  - **Local parallel runs**: `create_rollout_runner(..., mode="local")` / `ParallelRolloutRunner` runs the same task across isolated environment copies in parallel threads on a single host for sub-second iteration and local testing.
+  - **Distributed parallel runs**: `create_rollout_runner(..., mode="distributed")` / `DistributedParallelRolloutRunner` coordinates rollouts across multi-worker pools with durable task queuing, burst absorption, backpressure protection, 10-minute TTL, 3-retry dead-letter queuing (DLQ), and deterministic round-robin seed assignment with batch aggregation.
+  Both runners share identical taxonomy outcome classification (`success`, `failure`, `partial_success`, `edge_case`) and interface contracts. A rollout always runs the task it names: if the environment does not declare that task, each episode fails with failure type `configuration` and lists the declared tasks, instead of running a different one.
 - **Per-environment dashboard**: pass rate, average reward, step efficiency, termination-reason breakdown
+
 
 ### Observability & Replay
 

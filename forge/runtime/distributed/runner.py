@@ -184,7 +184,28 @@ class DistributedParallelRolloutRunner:
         ]
         return self.run(specs, run_id=run_id, timeout_s=timeout_s)
 
+    def run_diverse(
+        self,
+        task: dict | None,
+        num_rollouts: int,
+        seed_start: int = 0,
+        policy: Policy | None = None,
+        *,
+        run_id: str | None = None,
+        timeout_s: float | None = None,
+    ) -> DistributedRolloutBatch:
+        """Same task across a seed range — identical interface to ParallelRolloutRunner."""
+        return self.run_distributed(
+            task,
+            num_rollouts,
+            seed_start=seed_start,
+            policy=policy,
+            run_id=run_id,
+            timeout_s=timeout_s,
+        )
+
     def _run_one(self, spec: RolloutSpec) -> RolloutRecord:
         return execute_single_rollout(self.env_factory, spec, propagate_exception=True)
 
     _classify = staticmethod(classify_rollout_outcome)
+

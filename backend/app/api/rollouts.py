@@ -1,4 +1,4 @@
-from __future__ import annotations
+from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -15,6 +15,7 @@ class CreateRolloutRequest(BaseModel):
     agent_id: str
     num_episodes: int = Field(ge=1, le=1_000)
     seed_start: int = Field(default=0, ge=0)
+    mode: Literal["local", "distributed"] = "local"
 
 
 @router.post("/")
@@ -26,8 +27,9 @@ def post_rollout(body: CreateRolloutRequest, db: Session = Depends(get_db)):
         num_episodes=body.num_episodes,
         seed_start=body.seed_start,
         db=db,
+        mode=body.mode,
     )
-    return {"rollout_job_id": job.id}
+    return {"rollout_job_id": job.id, "mode": job.mode}
 
 
 @router.get("/")
@@ -41,6 +43,7 @@ def list_rollout_jobs(env_name: str, db: Session = Depends(get_db)):
             "agent_id": j.agent_id,
             "num_episodes": j.num_episodes,
             "seed_start": j.seed_start,
+            "mode": getattr(j, "mode", "local"),
             "status": j.status,
             "episodes_completed": j.episodes_completed,
             "created_at": j.created_at.isoformat() if j.created_at else None,
@@ -63,9 +66,11 @@ def get_rollout_job(rollout_job_id: str, db: Session = Depends(get_db)):
         "agent_id": job.agent_id,
         "num_episodes": job.num_episodes,
         "seed_start": job.seed_start,
+        "mode": getattr(job, "mode", "local"),
         "status": job.status,
         "episodes_completed": job.episodes_completed,
         "created_at": job.created_at.isoformat() if job.created_at else None,
         "completed_at": job.completed_at.isoformat() if job.completed_at else None,
         "error": job.error,
     }
+

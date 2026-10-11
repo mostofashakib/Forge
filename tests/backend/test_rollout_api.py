@@ -152,3 +152,47 @@ def test_list_rollouts_endpoint(api_client):
     resp = api_client.get("/api/rollouts/?env_name=nonexistent_env")
     assert resp.status_code == 200
     assert resp.json() == []
+
+
+def test_create_and_get_rollout_modes(api_client):
+    with patch("backend.app.services.rollout_service.run_rollout_task") as mock_task:
+        mock_task.apply_async = MagicMock()
+
+        # 1. Create local mode rollout
+        res_local = api_client.post(
+            "/api/rollouts/",
+            json={
+                "env_name": "test_env",
+                "task_name": "task_1",
+                "agent_id": "agent_a",
+                "num_episodes": 2,
+                "mode": "local",
+            },
+        )
+        assert res_local.status_code == 200
+        job_id_local = res_local.json()["rollout_job_id"]
+        assert res_local.json()["mode"] == "local"
+
+        get_local = api_client.get(f"/api/rollouts/{job_id_local}")
+        assert get_local.status_code == 200
+        assert get_local.json()["mode"] == "local"
+
+        # 2. Create distributed mode rollout
+        res_dist = api_client.post(
+            "/api/rollouts/",
+            json={
+                "env_name": "test_env",
+                "task_name": "task_1",
+                "agent_id": "agent_a",
+                "num_episodes": 4,
+                "mode": "distributed",
+            },
+        )
+        assert res_dist.status_code == 200
+        job_id_dist = res_dist.json()["rollout_job_id"]
+        assert res_dist.json()["mode"] == "distributed"
+
+        get_dist = api_client.get(f"/api/rollouts/{job_id_dist}")
+        assert get_dist.status_code == 200
+        assert get_dist.json()["mode"] == "distributed"
+

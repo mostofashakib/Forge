@@ -16,6 +16,7 @@ def create_rollout(
     num_episodes: int,
     seed_start: int,
     db: Session,
+    mode: str = "local",
 ) -> RolloutJob:
     job_id = f"rj_{secrets.token_hex(4)}"
     job = RolloutJob(
@@ -25,6 +26,7 @@ def create_rollout(
         agent_id=agent_id,
         num_episodes=num_episodes,
         seed_start=seed_start,
+        mode=mode,
         status="pending",
         episodes_completed=0,
         created_at=datetime.now(timezone.utc),
@@ -34,6 +36,7 @@ def create_rollout(
     db.refresh(job)
     run_rollout_task.apply_async(args=[job_id])
     return job
+
 
 
 def get_rollout(rollout_job_id: str, db: Session) -> RolloutJob | None:

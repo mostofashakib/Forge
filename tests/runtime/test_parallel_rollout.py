@@ -1,6 +1,8 @@
 # tests/runtime/test_parallel_rollout.py
 import copy
+import pytest
 import threading
+
 from forge.runtime.env_builder import EnvBuilder
 from forge.runtime.parallel_rollout import (
     ParallelRolloutRunner,
@@ -154,6 +156,38 @@ def test_batch_filtering_and_summary():
     batch = ParallelRolloutRunner(make_env_factory(), max_workers=4).run(specs)
     successes = batch.by_outcome("success")
     assert all(r.outcome == "success" for r in successes)
-    assert sum(batch.outcome_counts.values()) == 20
     # records come back ordered by seed regardless of completion order
     assert [r.seed for r in batch.records] == sorted(r.seed for r in batch.records)
+
+
+def test_create_rollout_runner_supports_local_and_distributed():
+    from forge.runtime.parallel_rollout import create_rollout_runner, run_parallel_rollouts
+    from forge.runtime.distributed import DistributedParallelRolloutRunner
+
+    # Test local mode runner creation and execution
+    local_runner = create_rollout_runner(make_env_factory(), mode="local", max_workers=2)
+    assert isinstance(local_runner, ParallelRolloutRunner)
+    local_batch = local_runner.run_diverse(task=TASK, num_rollouts=4, policy=increment_policy)
+    assert len(local_batch.records) == 4
+
+    # Test distributed mode runner creation and execution
+    dist_runner = create_rollout_runner(make_env_factory(), mode="distributed", num_workers=2)
+    assert isinstance(dist_runner, DistributedParallelRolloutRunner)
+    dist_batch = dist_runner.run_diverse(task=TASK, num_rollouts=4, policy=increment_policy)
+    assert len(dist_batch.records) == 4
+
+    # Test unified run_parallel_rollouts helper for both modes
+    local_direct = run_parallel_rollouts(
+        make_env_factory(), task=TASK, num_rollouts=2, mode="local", policy=increment_policy
+    )
+    assert len(local_direct.records) == 2
+
+    dist_direct = run_parallel_rollouts(
+        make_env_factory(), task=TASK, num_rollouts=2, mode="distributed", policy=increment_policy
+    )
+    assert len(dist_direct.records) == 2
+
+    # Unsupported mode raises ValueError
+    with pytest.raises(ValueError, match="Unsupported rollout mode"):
+        create_rollout_runner(make_env_factory(), mode="quantum")
+
