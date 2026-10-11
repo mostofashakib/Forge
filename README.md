@@ -257,6 +257,7 @@ Instead of writing one-off verification code for every task, `VerifierTrustBound
 - **TU (Tool-Use Agents)**: verifies tool call sets, parameter constraints, execution sequences, and forbidden calls.
 - **Code (Coding & Terminal Agents)**: verifies exit codes, test suite pass rates, git diff boundaries, and syntax validity.
 - **Data (Database & SQL Agents)**: verifies table row counts, SQL query assertions, schema invariants, and mutation safety.
+- **Artifact versioning & test isolation**: prompts, verifiers, data, and initial test suites are cryptographically versioned via SHA-256 digests (`ArtifactVersionRegistry`) so rollouts can be differentiated and debugged across runs. Grading evaluates against the authoritative initial test suite, while `TestIsolationBoundary` completely isolates all tests from the agent to prevent test leakage and cheating.
 
 **Reward-hacking audit**: `RewardHackingAuditor` is a separate audit agent that asks whether a passing verdict was *earned*: it flags passes with skipped milestones, suspiciously short episodes, redundant call patterns, and supports a pluggable LLM audit client. `RewardHackingAuditor.for_verifier(...)` inherits the milestone list straight from a `LayeredVerifier`.
 

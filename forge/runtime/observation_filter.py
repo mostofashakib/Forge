@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 from pydantic import BaseModel, Field
 
 from forge.contracts import Observation, ObservationEncoder
+from forge.runtime.versioning.isolation import TestIsolationBoundary
 
 
 class RolePermissions(BaseModel):
@@ -23,13 +25,16 @@ class ObservationFilter(ObservationEncoder):
         self._role = role
 
     def filter(self, obs: dict) -> dict:
+        # Guarantee zero test leakage into the agent observation space
+        sanitized = TestIsolationBoundary.sanitize_observation(obs)
+
         if self._config is None or self._role is None:
-            return obs
+            return sanitized
         permissions = self._config.roles.get(self._role)
         if permissions is None:
-            return obs
+            return sanitized
 
-        result = dict(obs)
+        result = dict(sanitized)
 
         if permissions.can_see:
             result = {k: v for k, v in result.items() if k in permissions.can_see}

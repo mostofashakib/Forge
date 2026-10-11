@@ -89,11 +89,19 @@ from forge.contracts.verification import (
     VerifierGroup,
     VerifierGroupAdapter,
 )
+from forge.contracts.versioning import (
+    ArtifactType,
+    InitialTest,
+    InitialTestSuite,
+    VersionProvenance,
+    VersionedArtifact,
+)
 
 __all__ = [
     "Action",
     "ActionResult",
     "AgentAdapter",
+    "ArtifactType",
     "BUDGET_REASONS",
     "BaseEpisodeConfig",
     "BaseEpisodeResult",
@@ -116,6 +124,8 @@ __all__ = [
     "InferenceRequest",
     "InferenceResponse",
     "InitialStateProvider",
+    "InitialTest",
+    "InitialTestSuite",
     "IsolationBackendType",
     "MaxStepsTerminationPolicy",
     "Observation",
@@ -162,5 +172,7 @@ __all__ = [
     "VerifierGroup",
     "VerifierGroupAdapter",
     "VerifierTerminationPolicy",
+    "VersionProvenance",
+    "VersionedArtifact",
     "normalize_task",
 ]
