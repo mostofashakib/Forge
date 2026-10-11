@@ -1,0 +1,38 @@
+# Forge Centralized Configuration
+# All version numbers, sandbox parameters, and evaluation limits live here.
+
+versions:
+  forge_version: "0.3.0"
+  contract_version: "1.0.0"
+  default_prompt_version: "v1.0.0"
+  default_verifier_version: "v1.0.0"
+  default_data_version: "v1.0.0"
+  default_test_suite_version: "v1.0.0"
+  cli_base_version: "ubuntu-22.04"
+
+sandbox:
+  runtime_backend: "auto"          # "auto" | "firecracker" | "docker"
+  firecracker_dir: "/tmp/forge-firecracker"
+  jailer_dir: "/tmp/forge-jailer"
+  vcpu_count: 2
+  mem_size_mib: 1024
+  kernel_image_path: "/tmp/forge-firecracker/vmlinux"
+  rootfs_path: "/tmp/forge-firecracker/rootfs.ext4"
+  jailer_uid: 1000
+  jailer_gid: 1000
+  sandbox_limit: 10
+  app_port: 8000
+  cdp_port: 9222
+
+evaluation:
+  max_steps: 50
+  http_timeout_seconds: 10.0
+  success_threshold: 1.0
+  dead_end_patience: 8
+  experiment_seed: 42
+  determinism_enabled: true
+
+storage:
+  database_url: "sqlite:///./forge.db"
+  redis_url: "redis://localhost:6379/0"
+  generated_envs_dir: "generated_envs"

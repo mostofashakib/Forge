@@ -11,6 +11,7 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
+from forge.config import get_config
 from forge.contracts.versioning import (
     ArtifactType,
     InitialTestSuite,
@@ -71,7 +72,8 @@ class ArtifactVersionRegistry:
         metadata: dict[str, Any] | None = None,
     ) -> VersionedArtifact:
         """Register a versioned prompt template."""
-        return self.register(ArtifactType.PROMPT, name, template, version_tag, metadata)
+        tag = version_tag or get_config().versions.default_prompt_version
+        return self.register(ArtifactType.PROMPT, name, template, tag, metadata)
 
     def register_verifier(
         self,
@@ -81,7 +83,8 @@ class ArtifactVersionRegistry:
         metadata: dict[str, Any] | None = None,
     ) -> VersionedArtifact:
         """Register a versioned verifier or verification specification."""
-        return self.register(ArtifactType.VERIFIER, name, verifier_or_spec, version_tag, metadata)
+        tag = version_tag or get_config().versions.default_verifier_version
+        return self.register(ArtifactType.VERIFIER, name, verifier_or_spec, tag, metadata)
 
     def register_data(
         self,
@@ -91,7 +94,8 @@ class ArtifactVersionRegistry:
         metadata: dict[str, Any] | None = None,
     ) -> VersionedArtifact:
         """Register a versioned dataset, task, or environment initial universe."""
-        return self.register(ArtifactType.DATA, name, dataset_or_task, version_tag, metadata)
+        tag = version_tag or get_config().versions.default_data_version
+        return self.register(ArtifactType.DATA, name, dataset_or_task, tag, metadata)
 
     def register_test_suite(
         self,
@@ -101,7 +105,8 @@ class ArtifactVersionRegistry:
         metadata: dict[str, Any] | None = None,
     ) -> VersionedArtifact:
         """Register a versioned authoritative initial test suite."""
-        return self.register(ArtifactType.TEST_SUITE, name, test_suite, version_tag, metadata)
+        tag = version_tag or get_config().versions.default_test_suite_version
+        return self.register(ArtifactType.TEST_SUITE, name, test_suite, tag, metadata)
 
     def get_artifact(self, artifact_type: ArtifactType, name: str) -> VersionedArtifact | None:
         """Retrieve registered artifact by type and name."""
