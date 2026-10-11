@@ -554,52 +554,14 @@ results internally.
 
 ### Policy Training
 
-Closing the RL loop, `forge train` turns Forge's *own* graded experience into a policy update, then the benchmark evaluates that checkpoint on disjoint internal held-out environments. Training consumes the exports above and produces a loadable checkpoint:
-
-- **Clipped batch-GRPO update** over `grpo_rollouts.parquet` — rewards become group-relative advantages `(r − mean) / (std + eps)`, behavior-policy token log-probabilities are frozen before the update, and training applies the clipped current/old policy ratio with a sampled KL penalty
-- **TRL DPO** over `preference_pairs.jsonl` — chosen/rejected labels are kept only where the chosen trajectory was graded strictly higher and trained with `DPOTrainer`
-- **SFT** over demonstrations: `sft_pairs.jsonl`, a Task Factory batch export, or the passing rows of `grpo_rollouts.parquet`. Loss covers only the completion tokens.
-- **PPO** reuses the clipped batch update over the same rollouts, with a larger KL penalty
-
-The reward→signal mapping is a deterministic function of the grades already assigned, and a graded set with **no relative signal** (all rollouts scored the same, or every preference pair a tie) raises `NoTrainingSignalError` and writes no checkpoint — the training backend is never invoked. Install the optional GPU stack with `uv sync --extra training`. A finished run writes a `policy_checkpoint.json` manifest that runtime agents load via `forge.runtime.policy_loader.load_policy_agent`, so the same policy can collect → grade → export → train → reload.
-
-For repeated policy improvement, `PolicyIterationLoop` supplies the missing feedback
-edge: an injected collector exports graded experience, `PolicyTrainer` updates the
-policy, the runtime loader binds the checkpoint back to its environment, and Forge
-collects again with the updated agent. Multiple iterations continue training from
-the preceding checkpoint rather than restarting from the original base model.
+Training is handled by [Autotune](https://github.com/mostofashakib/Autotune). Export your verified rollouts or preference datasets from Forge, then train your policy:
 
 ```bash
-forge train \
-  --data <export_dir> \             # merged graded exports with env_name metadata
-  --experiment experiments/internal_heldout.yaml \
-  --seed 0 \
-  --output policy_checkpoint \
-  --objective grpo                  # grpo | dpo | sft | ppo
+# SFT or GRPO training with automated LoRA/QLoRA recipe selection
+uv run autotune train exports/grpo_rollouts.parquet --objective grpo --output-dir ./policy_checkpoint
 ```
 
-Experiment files declare `{train_envs, heldout_envs, reward_preset, base_model, seeds}`
-and may set `determinism_repeats` (default `2`).
-Training reads the base model and train split from the YAML and filters out all held-out
-records. The checkpoint records the exact experiment, split, and seed.
-
-```yaml
-# experiments/internal_heldout.yaml
-train_envs:
-  - email_train
-  - crm_train
-heldout_envs:
-  - calendar_heldout
-reward_preset: full_layered_partial
-base_model: Qwen/Qwen2.5-3B-Instruct
-seeds: [0, 1, 2]
-determinism_repeats: 2
-require_grader_independence: true
-```
-
-The lists must be non-empty, unique, and disjoint. Run `forge train` once for each
-declared seed. Export rows must contain `env_name`; older Forge exports are also
-supported when their prompt contains an `Environment:` line.
+A finished training run writes a `policy_checkpoint.json` manifest that runtime agents load via `forge.runtime.policy_loader.load_policy_agent`, so the same policy can collect → grade → export → train → reload.
 
 ---
 
@@ -625,14 +587,10 @@ dependencies. Install it with `uv tool install harbor`, then select the task, ag
 and model from the Eval page.
 
 ```bash
-# 1. Train one declared seed using only train_envs.
-forge train \
-  --data exports \
-  --experiment experiments/internal_heldout.yaml \
-  --seed 0 \
-  --output policy_checkpoint
+# 1. Train on your exports using Autotune:
+uv run autotune train exports/grpo_rollouts.parquet --output-dir policy_checkpoint
 
-# 2. Start every environment listed in heldout_envs, then evaluate the checkpoint.
+# 2. Start every environment listed in heldout_envs, then evaluate the checkpoint:
 forge benchmark eval \
   --checkpoint policy_checkpoint \
   --experiment experiments/internal_heldout.yaml \
@@ -736,7 +694,7 @@ The responsive Next.js control surface uses an industrial foundry visual system 
 | Page | What it does |
 |---|---|
 | **Generator** | Synthesize task taxonomies and datasets with automated golden pass^k validation and dated batch versioning |
-| **Training** | Configure and run Online/Offline policy training (GRPO, DPO, PPO, SFT) with live terminal execution streaming |
+| **Export** | Configure and export SFT, DPO, and GRPO datasets with dataset manifests ready for Autotune |
 | **Run** | Select which active environments to benchmark, max difficulty (1–5), seeds per task, inference target, and output dir; launch with live log streaming and progress |
 | **Report** | Table of quality metrics per environment for the most recent completed run; CSV download. pass@k and agreement charts appear only for runs that recorded per-task pass/fail samples |
 | **Transfer** | Fine-tune on the experiment's training environments, then measure task completion, pass@1, and pass@3 on its held-out environments, with live log streaming |
@@ -885,14 +843,7 @@ forge/
     report.py          # BenchmarkReport: paper-ready figures and summary tables
     transfer_pipeline.py  # Fine-tune on train envs, pass@k on held-out envs
     _eval.py           # checkpoint-backed internal held-out evaluation + result records
-  experiments.py       # declarative experiment and per-run result contracts
-  training/            # Close the RL loop: train a policy from graded rollouts
-    dataset.py         # Load rollouts, preference pairs, and SFT demonstrations
-    reward_mapping.py  # Reward → GRPO advantage / DPO label (deterministic, no-signal guard)
-    trainer.py         # PolicyTrainer: prepare signal → backend → PolicyCheckpoint
-    checkpoint.py      # Serializable PolicyCheckpoint manifest
-    loop.py            # Collect → train → reload → recollect policy iteration
-    _backends.py       # GRPO, PPO, SFT, and TRL DPO gradient updates (GPU node)
+  contracts/           # Interface contracts: TaskSource, Rubric, StateManager, Training
   customization/       # Per-env overrides: decorator hooks, EnvConfig, loader
   personas/            # Simulated humans: population, scheduler, guardrails, drivers, engine
   schema/              # StateSchemaManifest and related schemas
@@ -975,8 +926,7 @@ tests/
   backend/             # API integration tests, E2E sandbox + agent-runs + benchmark tests
   envgen/              # ContainerRuntime, normalisation, pull/mirror/HTTPS fallback tests
   benchmark/           # Task suite, quality metric, and internal held-out eval tests
-  training/            # Dataset loading, reward mapping, trainer, checkpoint tests
-  cli/                 # forge CLI command tests (run determinism, train, replay)
+  cli/                 # forge CLI command tests (run determinism, replay)
   customization/       # Hook registry, loader, and config tests
   personas/            # Cast resolution, cadence, guardrails, drivers, both env families,
   │                    #   the container run path, and the build-flow wiring
@@ -1106,25 +1056,6 @@ forge run --env <env_name> --task <verifier_id> \
 forge export --env <env_name> --seed 42 --out exports     # Run + write the trajectory as JSONL
 forge replay <episode_id> [--json]   # Replay a recorded episode (ep_* gym or cep_* container)
 forge diagnose <env_name> [--json]   # Analyse episode quality across all runs
-
-forge train \
-  --data <export_dir> \              # graded exports: rollouts, preference pairs, or SFT data
-  --experiment experiments/internal_heldout.yaml \
-  --seed 0 \
-  --output policy_checkpoint \
-  --objective grpo                   # grpo | dpo | sft | ppo
-
-forge benchmark run \
-  --domains my_env,other_env \       # comma-separated generated environment names
-  --depth 5 \                        # max difficulty (1=easy only, 5=all tasks)
-  --seeds 5                          # episodes per task
-forge benchmark report               # generate summary tables from collected results
-forge benchmark eval \
-  --checkpoint ./policy_checkpoint \
-  --experiment experiments/internal_heldout.yaml
-forge benchmark transfer \
-  --data ./sft_data \
-  --experiment experiments/internal_heldout.yaml   # fine-tune, then held-out pass@1 / pass@3
 ```
 
 `forge run` and `forge export` drive the environment with a seeded random policy
