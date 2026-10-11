@@ -7,6 +7,9 @@ Forge generates high-volume, execution-verified training data for autonomous age
 > [!TIP]
 > **Looking to train and benchmark models on your data?**
 > Use [**Autotune**](https://github.com/mostofashakib/Autotune), the plug-and-play LLM post-training and benchmarking engine supporting **LoRA**, **4-bit QLoRA**, and **GRPO**.
+>
+> **Example RL Tasks:**
+> Example RL tasks for Forge live in [OpenGym](https://github.com/mostofashakib/OpenGym).
 
 ---
 
@@ -20,14 +23,6 @@ Forge generates high-volume, execution-verified training data for autonomous age
 | **Agent execution** | Headless agent rollouts through real application APIs, logging every step, state hash, and tool call durably | [Agent Runs & Data Collection](#agent-runs--data-collection) |
 | **Grading & Verifiers** | Authoritative verdicts from layered verifiers with reward-hacking audits and generator/grader independence checks | [Reward Engine](#reward-engine), [Verifiers](#verifiers) |
 | **Dataset export** | SFT chat pairs, preference pairs, GRPO rollouts, failure datasets, and raw trajectories with standard `dataset_manifest.json` | [Dataset Export](#dataset-export) |
-
-The loop closes: generate environments, synthesize tasks, run agents, grade, export,
-train, evaluate on held-out environments, then reload the checkpoint and collect again.
-
-## Example RL Tasks
-
-Example RL tasks for Forge live in
-[OpenGym](https://github.com/mostofashakib/OpenGym).
 
 ---
 
