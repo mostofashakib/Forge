@@ -737,12 +737,10 @@ forge benchmark transfer \
 
 ## Status & Known Gaps
 
-Everything documented above is implemented and covered by the test suite. Two
-things are deliberately *not* built yet:
+Everything documented above is implemented and covered by the test suite. The following is deliberately *not* built yet:
 
 | Gap | Where | Why it matters |
 |---|---|---|
-| **External transfer benchmark** | `forge/benchmark/transfer_pipeline.py` | `forge benchmark transfer` fine-tunes on an experiment's training environments and measures pass@k on its held-out environments. Transfer to an independent harness (WebArena / WorkArena) is the claim that would separate "the split held" from "the training actually taught the policy something about real apps" |
 | **Distributed parallel runs** | worker layer | `ParallelRolloutRunner` parallelizes within one host; multi-worker distribution with deterministic seed assignment, backpressure, and run-level aggregation is not built |
 
 There are also **no published numbers**. The evaluation protocol, metrics, and
