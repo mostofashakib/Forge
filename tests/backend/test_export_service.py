@@ -9,6 +9,12 @@ from backend.app.models import Episode, EpisodeStep, ExportJob
 from backend.app.services.export_service import run_export
 from backend.app.services.export_writers.trajectories import write as _write_trajectories
 from backend.app.services.export_writers.rewards import write as _write_rewards
+from tests.backend.safety_helpers import make_gate, use_safety_env
+
+
+@pytest.fixture(autouse=True)
+def _safety_env(monkeypatch):
+    use_safety_env(monkeypatch)
 
 
 @pytest.fixture
@@ -57,7 +63,7 @@ def db_with_episodes():
 
 
 def test_write_trajectories(db_with_episodes, tmp_path):
-    _write_trajectories("test_env", db_with_episodes, tmp_path)
+    _write_trajectories("test_env", db_with_episodes, tmp_path, make_gate(tmp_path))
     lines = (tmp_path / "trajectories.jsonl").read_text().strip().split("\n")
     assert len(lines) == 4
     for line in lines:
@@ -68,7 +74,7 @@ def test_write_trajectories(db_with_episodes, tmp_path):
 
 
 def test_write_rewards(db_with_episodes, tmp_path):
-    _write_rewards("test_env", db_with_episodes, tmp_path)
+    _write_rewards("test_env", db_with_episodes, tmp_path, make_gate(tmp_path))
     lines = (tmp_path / "rewards.jsonl").read_text().strip().split("\n")
     assert len(lines) == 4
     for line in lines:
@@ -100,7 +106,7 @@ def test_sft_pairs_passed_only(db_with_episodes, tmp_path, monkeypatch):
 def test_write_trajectories_for_unknown_env_is_empty(db_with_episodes, tmp_path):
     # Negative/boundary: an env with no matching episodes must export nothing,
     # not the rows belonging to a different env.
-    _write_trajectories("no_such_env", db_with_episodes, tmp_path)
+    _write_trajectories("no_such_env", db_with_episodes, tmp_path, make_gate(tmp_path))
     out = tmp_path / "trajectories.jsonl"
     content = out.read_text().strip() if out.exists() else ""
     assert content == ""
@@ -170,7 +176,7 @@ def test_writer_query_count_is_independent_of_episode_count(db_with_episodes, tm
 
     statements, stop = _count_statements(db_with_episodes)
     try:
-        WRITERS[fmt]("test_env", db_with_episodes, tmp_path)
+        WRITERS[fmt]("test_env", db_with_episodes, tmp_path, make_gate(tmp_path))
     finally:
         stop()
     selects = [s for s in statements if s.lstrip().upper().startswith("SELECT")]
@@ -183,7 +189,7 @@ def test_writers_do_not_load_unused_step_blobs(db_with_episodes, tmp_path):
     statements, stop = _count_statements(db_with_episodes)
     try:
         for writer in WRITERS.values():
-            writer("test_env", db_with_episodes, tmp_path)
+            writer("test_env", db_with_episodes, tmp_path, make_gate(tmp_path))
     finally:
         stop()
     loaded = " ".join(statements)
@@ -192,7 +198,7 @@ def test_writers_do_not_load_unused_step_blobs(db_with_episodes, tmp_path):
 
 
 def test_trajectory_steps_stay_grouped_and_ordered(db_with_episodes, tmp_path):
-    _write_trajectories("test_env", db_with_episodes, tmp_path)
+    _write_trajectories("test_env", db_with_episodes, tmp_path, make_gate(tmp_path))
     for line in (tmp_path / "trajectories.jsonl").read_text().splitlines():
         record = json.loads(line)
         assert [s["step_index"] for s in record["steps"]] == [0, 1, 2]

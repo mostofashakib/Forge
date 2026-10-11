@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from backend.app.models import Episode, TaskBatch
 from backend.app.services import task_registry
+from backend.app.services.export_writers.gate import DatasetGate, gate_from_env
 
 logger = logging.getLogger(__name__)
 
@@ -40,8 +41,9 @@ def _stage_episode_exports(db: Session, data_dir: Path) -> bool:
     episode_counts = episode_counts_by_env(db)
     for target in list_targets(db):
         if episode_counts.get(target.name):
+            gate = gate_from_env(data_dir)
             for writer in (grpo_rollouts, preference_pairs, sft_pairs):
-                writer.write(target.name, db, data_dir)
+                writer.write(target.name, db, data_dir, gate)
             return True
     return False
 
@@ -58,7 +60,7 @@ def _stage_latest_batch(db: Session, data_dir: Path) -> bool:
     detail = task_registry.get_batch(db, batch.id)
     if not detail:
         return False
-    stage_generator_batch(detail, data_dir)
+    stage_generator_batch(detail, data_dir, gate_from_env(data_dir))
     return True
 
 
@@ -67,23 +69,33 @@ def stage_batch_by_id(db: Session, batch_id: str, target_dir: Path) -> Path:
     target_dir.mkdir(parents=True, exist_ok=True)
     detail = task_registry.get_batch(db, batch_id)
     if detail:
-        stage_generator_batch(detail, target_dir)
+        stage_generator_batch(detail, target_dir, gate_from_env(target_dir))
     return target_dir
 
 
-def stage_generator_batch(batch: dict, target_dir: Path) -> Path:
+def stage_generator_batch(batch: dict, target_dir: Path, gate: DatasetGate) -> Path:
     """Write a batch's validated golden trajectories as SFT pairs and GRPO rollouts.
 
     Preference pairs are not written: a batch holds no rejected answer to an
     accepted task, only rejected tasks, so any pair would be made up.
+
+    Each task passes the safety gate on its own, so one flagged task is
+    quarantined without dropping the rest of the batch. Rows are built from
+    the scrubbed tasks.
     """
     target_dir.mkdir(parents=True, exist_ok=True)
-    env_name = batch.get("env_name", "generator")
-    (target_dir / "batch_export.json").write_text(json.dumps(batch, indent=2))
+    tasks = [
+        admitted for task in batch.get("tasks", [])
+        if (admitted := gate.admit(task, "batch_task")) is not None
+    ]
+    header = gate.admit({key: value for key, value in batch.items() if key != "tasks"}, "batch_export")
+    if header is not None:
+        (target_dir / "batch_export.json").write_text(json.dumps({**header, "tasks": tasks}, indent=2))
+    env_name = (header or {}).get("env_name", "generator")
 
     trajectories = [
         (task, _prompt(task, env_name))
-        for task in batch.get("tasks", [])
+        for task in tasks
         if task.get("objective") and task.get("golden")
     ]
     if not trajectories:

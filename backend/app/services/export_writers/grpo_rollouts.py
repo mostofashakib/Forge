@@ -4,11 +4,12 @@ from pathlib import Path
 from sqlalchemy.orm import Session
 import pandas as pd
 from forge.contracts import RolloutRecord
+from .gate import DatasetGate
 from ._queries import get_episodes, get_steps_by_episode
 from .common import action_to_command
 
 
-def write(env_name: str, db: Session, out_dir: Path) -> None:
+def write(env_name: str, db: Session, out_dir: Path, gate: DatasetGate) -> None:
     """RL rollout table for GRPO / PPO training.
 
     Each row is one completed episode with:
@@ -54,7 +55,9 @@ def write(env_name: str, db: Session, out_dir: Path) -> None:
         row["per_step_rewards"] = json.dumps(per_step_rewards)
         row["verification_results"] = json.dumps(row["verification_results"])
         row["reward_breakdown"] = json.dumps(row["reward_breakdown"])
-        rows.append(row)
+        admitted = gate.admit(row, "grpo_rollouts")
+        if admitted is not None:
+            rows.append(admitted)
 
     cols = [
         "episode_id", "env_name", "task_name", "seed", "agent_id",

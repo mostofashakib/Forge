@@ -7,6 +7,7 @@ from backend.app.main import app
 from backend.app.models import TrainingRun
 from backend.app.database import get_session_factory, init_db
 from forge.contracts.checkpoint import PolicyCheckpoint
+from tests.backend.safety_helpers import use_safety_env
 
 
 @pytest.fixture
@@ -43,7 +44,8 @@ def test_create_training_run_refuses_a_missing_data_dir_with_no_real_data(client
     assert not (tmp_path / "nothing_here").exists()
 
 
-def test_create_training_run_auto_creates_missing_data_dir(client, tmp_path):
+def test_create_training_run_auto_creates_missing_data_dir(client, tmp_path, monkeypatch):
+    use_safety_env(monkeypatch)
     _seed_rollouts({"alpha": 1})
     with patch("backend.app.api.training.threading.Thread"):
         res = client.post(
@@ -56,6 +58,22 @@ def test_create_training_run_auto_creates_missing_data_dir(client, tmp_path):
         )
         assert res.status_code == 202
         assert (tmp_path / "auto_created_dir_12345").exists()
+
+
+def test_staging_without_a_scrub_key_fails_clearly_and_leaves_nothing(client, tmp_path, monkeypatch):
+    use_safety_env(monkeypatch)
+    monkeypatch.delenv("FORGE_SCRUB_KEY")
+    _seed_rollouts({"alpha": 1})
+    with patch("backend.app.api.training.threading.Thread") as thread:
+        res = client.post(
+            "/api/training/runs",
+            json={"base_model": "test-model", "data_dir": "unscrubbed_dir", "objective": "grpo"},
+        )
+
+    assert res.status_code == 503
+    assert "FORGE_SCRUB_KEY" in res.json()["detail"]
+    assert not (tmp_path / "unscrubbed_dir").exists()
+    thread.assert_not_called()
 
 
 def test_get_training_data_sources(client):

@@ -2,10 +2,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from sqlalchemy.orm import Session
+from .gate import DatasetGate
 from ._queries import get_episodes, get_steps_by_episode
 
 
-def write(env_name: str, db: Session, out_dir: Path) -> None:
+def write(env_name: str, db: Session, out_dir: Path, gate: DatasetGate) -> None:
     episodes = get_episodes(env_name, db)
     steps_by_episode = get_steps_by_episode(env_name, db)
     with (out_dir / "verifier_results.jsonl").open("w") as f:
@@ -17,4 +18,6 @@ def write(env_name: str, db: Session, out_dir: Path) -> None:
                     "step_index": s.step_index,
                     "results": json.loads(s.verifier_results),
                 }
-                f.write(json.dumps(record) + "\n")
+                row = gate.admit(record, "verifier_results")
+                if row is not None:
+                    f.write(json.dumps(row) + "\n")

@@ -22,6 +22,7 @@ from backend.app.services.training_data import (
 )
 from backend.app.services.training_runs import execute_training_run
 from forge.paths import confined_relative_path
+from forge.safety.config import SafetyConfigError
 from forge.contracts.checkpoint import PolicyCheckpoint
 from forge.contracts.training import (
     NoTrainingSignalError,
@@ -205,7 +206,10 @@ def create_training_run(
     # Handle generator batch selection (e.g. generator:tb_123 or tb_123)
     if data_dir_param.startswith("generator:") or data_dir_param.startswith("tb_") or "generator/tb_" in data_dir_param:
         batch_id = data_dir_param.split(":")[-1].split("/")[-1]
-        data_dir = stage_batch_by_id(db, batch_id, root / "exports" / "generator" / batch_id)
+        try:
+            data_dir = stage_batch_by_id(db, batch_id, root / "exports" / "generator" / batch_id)
+        except SafetyConfigError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
     else:
         try:
             data_dir = confined_relative_path(root, data_dir_param)
@@ -214,7 +218,13 @@ def create_training_run(
 
         if not data_dir.exists():
             data_dir.mkdir(parents=True)
-            if not stage_available_data(db, data_dir):
+            try:
+                staged = stage_available_data(db, data_dir)
+            except SafetyConfigError as exc:
+                # The gate is built before any row is written, so the folder is empty.
+                data_dir.rmdir()
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
+            if not staged:
                 data_dir.rmdir()
                 raise HTTPException(
                     status_code=422,

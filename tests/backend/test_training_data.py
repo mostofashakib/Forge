@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 
 from backend.app.services import training_data
+from tests.backend.safety_helpers import make_gate, use_safety_env
 
 
 @pytest.fixture
@@ -43,7 +44,7 @@ def test_nothing_is_staged_when_there_is_no_real_data(db, tmp_path):
 
 def test_generator_batch_stages_golden_trajectories_without_invented_rows(tmp_path):
     staged = training_data.stage_generator_batch(
-        _batch([GOLDEN_TASK], rejections=[{"slot": 0, "reason": "not fair"}]), tmp_path
+        _batch([GOLDEN_TASK], rejections=[{"slot": 0, "reason": "not fair"}]), tmp_path, make_gate(tmp_path)
     )
 
     sft = [json.loads(line) for line in (staged / "sft_pairs.jsonl").read_text().splitlines()]
@@ -58,7 +59,7 @@ def test_generator_batch_stages_golden_trajectories_without_invented_rows(tmp_pa
 
 def test_generator_batch_without_golden_steps_writes_no_training_rows(tmp_path):
     staged = training_data.stage_generator_batch(
-        _batch([{"id": "t2", "objective": "x", "golden": []}]), tmp_path
+        _batch([{"id": "t2", "objective": "x", "golden": []}]), tmp_path, make_gate(tmp_path)
     )
 
     assert not (staged / "sft_pairs.jsonl").exists()
@@ -77,6 +78,7 @@ def test_latest_generator_batch_is_staged_when_no_episodes_exist(db, tmp_path, m
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     monkeypatch.setattr(task_registry, "get_batch", lambda _db, _id: _batch([GOLDEN_TASK]))
+    use_safety_env(monkeypatch)
 
     assert training_data.stage_available_data(db, data_dir) is True
 

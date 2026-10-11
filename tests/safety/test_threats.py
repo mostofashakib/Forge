@@ -51,7 +51,7 @@ def test_each_rule_fires(text, rule):
     "chmod -R 755 ./dist",
     "Reply to Dana about the developer meeting",
 ])
-def test_normal_agent_work_passes(text):
+def test_normal_agent_work_does_not_trigger(text):
     assert _rules(text) == set()
 
 

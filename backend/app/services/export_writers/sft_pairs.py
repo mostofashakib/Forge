@@ -2,11 +2,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from sqlalchemy.orm import Session
+from .gate import DatasetGate
 from ._queries import get_episodes, get_steps_by_episode
 from .common import action_to_command
 
 
-def write(env_name: str, db: Session, out_dir: Path) -> None:
+def write(env_name: str, db: Session, out_dir: Path, gate: DatasetGate) -> None:
     """SFT pairs from successful episodes only.
 
     Format: messages array with user (task) and assistant (command sequence).
@@ -39,5 +40,7 @@ def write(env_name: str, db: Session, out_dir: Path) -> None:
                     "total_reward": ep.total_reward,
                     "step_reward": step.reward,
                 }
-                f.write(json.dumps(record) + "\n")
+                row = gate.admit(record, "sft_pairs")
+                if row is not None:
+                    f.write(json.dumps(row) + "\n")
                 command_history.append(command)

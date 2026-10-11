@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from backend.app.models import ExportJob
 from backend.app.services.export_writers import WRITERS
+from backend.app.services.export_writers.gate import QUARANTINE_FILE, gate_from_env
 from forge.settings import generated_envs_root
 
 logger = logging.getLogger(__name__)
@@ -23,6 +24,8 @@ def run_export(export_job_id: str, db: Session) -> None:
     try:
         formats: list[str] = json.loads(job.formats)
         out_dir = generated_envs_root() / job.env_name / "exports" / export_job_id
+        # Built before the folder exists, so a misconfigured gate leaves nothing behind.
+        gate = gate_from_env(out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
 
         for fmt in formats:
@@ -30,7 +33,7 @@ def run_export(export_job_id: str, db: Session) -> None:
             if writer is None:
                 logger.warning("Unknown export format: %s", fmt)
                 continue
-            writer(job.env_name, db, out_dir)
+            writer(job.env_name, db, out_dir, gate)
 
         # Write standard dataset manifest for consumers like Autotune
         manifest = {
@@ -39,7 +42,11 @@ def run_export(export_job_id: str, db: Session) -> None:
             "env_name": job.env_name,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "formats": formats,
-            "files": sorted([f.name for f in out_dir.iterdir() if f.is_file() and f.name != "dataset_manifest.json"]),
+            "files": sorted(
+                f.name for f in out_dir.iterdir()
+                if f.is_file() and f.name not in ("dataset_manifest.json", QUARANTINE_FILE)
+            ),
+            "safety": gate.stats(),
         }
         (out_dir / "dataset_manifest.json").write_text(json.dumps(manifest, indent=2))
 

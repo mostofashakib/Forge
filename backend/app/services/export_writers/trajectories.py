@@ -2,10 +2,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from sqlalchemy.orm import Session
+from .gate import DatasetGate
 from ._queries import get_episodes, get_steps_by_episode
 
 
-def write(env_name: str, db: Session, out_dir: Path) -> None:
+def write(env_name: str, db: Session, out_dir: Path, gate: DatasetGate) -> None:
     episodes = get_episodes(env_name, db)
     steps_by_episode = get_steps_by_episode(env_name, db)
     with (out_dir / "trajectories.jsonl").open("w") as f:
@@ -27,4 +28,6 @@ def write(env_name: str, db: Session, out_dir: Path) -> None:
                     for s in steps
                 ],
             }
-            f.write(json.dumps(record) + "\n")
+            row = gate.admit(record, "trajectories")
+            if row is not None:
+                f.write(json.dumps(row) + "\n")

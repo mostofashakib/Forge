@@ -4,6 +4,7 @@ from collections import defaultdict
 from pathlib import Path
 from sqlalchemy.orm import Session
 from backend.app.models import Episode, EpisodeStep
+from .gate import DatasetGate
 from ._queries import get_episodes, get_steps_by_episode
 from .common import action_to_command
 
@@ -22,7 +23,7 @@ def _episode_to_messages(ep: Episode, steps: list[EpisodeStep]) -> list[dict]:
     ]
 
 
-def write(env_name: str, db: Session, out_dir: Path) -> None:
+def write(env_name: str, db: Session, out_dir: Path, gate: DatasetGate) -> None:
     """Preference pairs (DPO) — chosen/rejected trajectory pairs ranked by total reward.
 
     Episodes are bucketed by (task_name, seed // 10) so comparisons are
@@ -59,4 +60,6 @@ def write(env_name: str, db: Session, out_dir: Path) -> None:
                 "chosen_passed": best.passed,
                 "rejected_passed": worst.passed,
             }
-            f.write(json.dumps(record) + "\n")
+            row = gate.admit(record, "preference_pairs")
+            if row is not None:
+                f.write(json.dumps(row) + "\n")
