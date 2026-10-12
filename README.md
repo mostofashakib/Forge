@@ -927,16 +927,22 @@ imports, animated premade UIs, and tests that assert only the happy path.
 | `FORGE_SPECIALIST_CONTEXT_CHARS` | `12000` | Hard character budget on the context handed to each specialist |
 | `FORGE_REVIEW_FILE_CHARS` | `16000` | Per-file excerpt size the reviewer sees |
 
+### Credentials
+
+[forge/credentials.py](forge/credentials.py) declares every credential Forge reads: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `GITHUB_TOKEN`, and `FORGE_SCRUB_KEY`. No other module reads them. `.env.example` sets each one to `mock_key`, which counts as unset. A feature that needs a missing credential refuses to run and names the variable. SDK clients get their key passed in, so none of them picks up a placeholder on its own.
+
 ### LLM Provider
 
 All LLM calls go through a single `get_client()` factory; swap providers or models without touching code.
 
 | Variable | Default | Description |
 |---|---|---|
-| `FORGE_LLM_PROVIDER` | `anthropic` | LLM backend: `anthropic`, `ollama`, `openai`, or `gemini`. The last two need their SDKs installed (`openai`, `google-genai`), and they read their API keys from the SDK's usual variable |
+| `FORGE_LLM_PROVIDER` | `anthropic` | LLM backend: `anthropic`, `ollama`, `openai`, or `gemini`. The last two need their SDKs installed (`openai`, `google-genai`) |
 | `FORGE_LLM_MODEL` | `claude-haiku-4-5-20251001` | Standard-tier model (faster, cheaper) |
 | `FORGE_LLM_MODEL_CAPABLE` | `claude-sonnet-4-6` | Capable-tier model (code generation, complex reasoning) |
 | `ANTHROPIC_API_KEY` | - | Required when `FORGE_LLM_PROVIDER=anthropic` |
+| `OPENAI_API_KEY` | - | Required for the `openai` provider and `openai:<model>` agents. The `vllm:<model>` agent never sends it |
+| `GEMINI_API_KEY` | - | Required for the `gemini` provider. `GOOGLE_API_KEY` is accepted too |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL |
 | `VLLM_BASE_URL` | `http://localhost:8000/v1` | OpenAI-compatible endpoint for the `vllm:<model>` agent adapter |
 | `FORGE_JUDGE_PROVIDER` | falls back to `FORGE_LLM_PROVIDER` | Provider used for LLM **grading** only |
