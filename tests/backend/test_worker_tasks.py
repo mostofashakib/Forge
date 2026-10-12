@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -316,74 +315,6 @@ def _benchmark_run(run_id: str):
     with database.get_session_factory()() as db:
         run = db.get(BenchmarkRun, run_id)
         return run.status, run.error, run.report_json
-
-
-def test_production_transfer_without_training_data_fails_without_metrics(benchmark_db, tmp_path):
-    experiment = tmp_path / "experiment.yaml"
-    experiment.write_text(
-        "train_envs: [train_a]\nheldout_envs: [held_a]\n"
-        "reward_preset: full_layered_partial\nbase_model: m\nseeds: [0, 1]\n",
-        encoding="utf-8",
-    )
-    (tmp_path / "data").mkdir()
-    redis_client = MagicMock()
-    with patch("redis.from_url", return_value=redis_client):
-        tasks.run_transfer_task("bm_1", {
-            "base_model": "m", "seeds": 2, "eval_suite": str(experiment),
-            "data_dir": str(tmp_path / "data"), "output_dir": str(tmp_path / "out"),
-        })
-
-    status, error, report = _benchmark_run("bm_1")
-    assert status == "failed"
-    assert "no sft training signal" in error
-    assert report is None
-    published = [json.loads(c.args[1]) for c in redis_client.publish.call_args_list]
-    assert not any("result" in m for m in published)
-    assert any("no sft training signal" in m.get("error", "") for m in published)
-
-
-def test_production_transfer_rejects_a_suite_that_is_not_an_experiment(benchmark_db, tmp_path):
-    redis_client = MagicMock()
-    with patch("redis.from_url", return_value=redis_client):
-        tasks.run_transfer_task("bm_1", {"base_model": "m", "eval_suite": str(tmp_path / "missing.yaml")})
-
-    status, error, report = _benchmark_run("bm_1")
-    assert status == "failed"
-    assert "experiment config not found" in error
-    assert report is None
-
-
-def test_transfer_reports_the_injected_evaluators_result(benchmark_db):
-    from forge.benchmark.transfer_pipeline import TransferResult
-
-    seen = []
-
-    def evaluate(config):
-        seen.append(config)
-        return TransferResult(
-            model_path=config.base_model, eval_suite=config.eval_suite,
-            task_completion_rate=0.5, success_at_1=0.25, success_at_3=0.75, num_eval_tasks=8,
-        )
-
-    published: list[dict] = []
-    with patch("forge.contracts.gpu.GPUDeviceSpec.probe_hardware", return_value={"mps_available": True}):
-        benchmark_tasks.execute_transfer_run(
-            "bm_1",
-            {"base_model": "m", "eval_suite": "s", "seeds": 2, "max_steps": 40, "data_dir": "d"},
-            evaluate=evaluate,
-            publish=published.append,
-        )
-
-    status, error, report = _benchmark_run("bm_1")
-    assert (status, error) == ("done", None)
-    assert json.loads(report) == {
-        "model_path": "m", "eval_suite": "s", "task_completion_rate": 0.5,
-        "pass_at_1": 0.25, "pass_at_3": 0.75, "num_eval_tasks": 8,
-        "inference_mode": "auto", "device": "Apple Silicon MPS (Metal)",
-    }
-    assert (seen[0].seeds, seen[0].max_train_steps, str(seen[0].data_dir)) == (2, 40, "d")
-    assert seen[0].run_id == "bm_1"
-    assert published[-1]["done"] is True
 
 
 def _rollout_failure(job_id: str):

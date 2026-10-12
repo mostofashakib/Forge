@@ -23,11 +23,10 @@ logger = logging.getLogger(__name__)
 # Lazy module-level reference so tests can patch backend.app.api.benchmark.run_benchmark_task.
 # The actual import is deferred to avoid circular-import issues at package load time.
 try:
-    from backend.app.worker.benchmark_tasks import run_benchmark_task, run_evaluation_task, run_transfer_task  # noqa: F401
+    from backend.app.worker.benchmark_tasks import run_benchmark_task, run_evaluation_task  # noqa: F401
 except Exception:  # pragma: no cover
     run_benchmark_task = None  # type: ignore[assignment]
     run_evaluation_task = None  # type: ignore[assignment]
-    run_transfer_task = None  # type: ignore[assignment]
 router = APIRouter(prefix="/api/benchmark", tags=["benchmark"])
 
 
@@ -36,18 +35,6 @@ class CreateBenchmarkRunRequest(BaseModel):
     depth: int = Field(default=5, ge=1, le=5)
     seeds: int = Field(default=5, ge=1, le=100)
     output_dir: str = Field(default="benchmark_results", min_length=1, max_length=255)
-    inference_mode: Literal["auto", "local_gpu", "api_gateway"] = "auto"
-
-
-class CreateTransferRequest(BaseModel):
-    # None trains the base model the experiment declares.
-    base_model: str | None = Field(default=None, min_length=1)
-    data_dir: str = Field(default="benchmark_results/data", min_length=1)
-    output_dir: str = Field(default="benchmark_results/transfer", min_length=1)
-    # Experiment YAML whose train/held-out split the transfer run follows.
-    eval_suite: str = Field(default="experiments/internal_heldout.yaml", min_length=1)
-    max_steps: int = Field(default=500, ge=1, le=5000)
-    seeds: int = Field(default=3, ge=1, le=20)
     inference_mode: Literal["auto", "local_gpu", "api_gateway"] = "auto"
 
 
@@ -194,49 +181,6 @@ def get_evaluation(run_id: str, db: Session = Depends(get_db)):
     run = db.get(BenchmarkRun, run_id)
     if run is None or run.kind != "evaluation":
         raise HTTPException(status_code=404, detail="Evaluation not found")
-    payload = _run_to_dict(run)
-    payload["result"] = json.loads(run.report_json) if run.report_json else None
-    return payload
-
-
-@router.post("/transfer", status_code=202)
-def create_transfer_run(body: CreateTransferRequest, db: Session = Depends(get_db)):
-    config = body.model_dump()
-    try:
-        for field_name in ("eval_suite", "data_dir", "output_dir"):
-            config[field_name] = str(confined_relative_path(Path.cwd(), config[field_name]))
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    if not Path(config["eval_suite"]).is_file():
-        raise HTTPException(status_code=422, detail="eval_suite does not exist")
-
-    run_id = f"transfer_{uuid.uuid4().hex[:12]}"
-    run = BenchmarkRun(
-        id=run_id,
-        status="queued",
-        domains=body.eval_suite,
-        depth=body.max_steps,
-        seeds=body.seeds,
-        output_dir=config["output_dir"],
-        created_at=datetime.now(timezone.utc),
-        kind="transfer",
-        engine="forge-transfer",
-        config_json=json.dumps(config),
-    )
-    db.add(run)
-    db.commit()
-    logger.info("[benchmark] queued transfer run %s — model=%s suite=%s", run_id, body.base_model, body.eval_suite)
-
-    if run_transfer_task:
-        run_transfer_task.delay(run_id=run_id, config=config)
-    return {"run_id": run_id}
-
-
-@router.get("/transfer/{run_id}")
-def get_transfer_run(run_id: str, db: Session = Depends(get_db)):
-    run = db.get(BenchmarkRun, run_id)
-    if run is None or run.kind != "transfer":
-        raise HTTPException(status_code=404, detail="Transfer run not found")
     payload = _run_to_dict(run)
     payload["result"] = json.loads(run.report_json) if run.report_json else None
     return payload

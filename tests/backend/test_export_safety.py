@@ -1,4 +1,4 @@
-"""Every exported or staged dataset row passes the safety gate."""
+"""Every exported dataset row passes the safety gate."""
 from __future__ import annotations
 
 import json
@@ -12,7 +12,6 @@ from sqlalchemy.orm import Session
 
 from backend.app.database import Base
 from backend.app.models import Episode, EpisodeStep, ExportJob
-from backend.app.services import training_data
 from backend.app.services.export_service import run_export
 from forge.safety import config as safety_config
 from tests.backend.safety_helpers import ADULT_MARKER, make_gate, use_safety_env
@@ -163,39 +162,3 @@ def test_the_gate_returns_a_scrubbed_copy_and_counts(tmp_path):
     assert (stats["rows_seen"], stats["rows_kept"], stats["rows_quarantined"]) == (2, 1, 1)
     assert stats["replacements"] == {"person": 1}
     assert stats["quarantined_by_rule"] == {"destructive_command": 1}
-
-
-def test_staged_generator_batch_is_scrubbed_and_screened(tmp_path):
-    batch = {
-        "id": "tb_9", "env_name": "shell", "rejections": [],
-        "tasks": [
-            {"id": "t1", "objective": "Email Sarah Chen at sarah@acme.com", "golden": [{"command": "send --to sarah@acme.com"}]},
-            {"id": "t2", "objective": "Clean the disk", "golden": [{"command": "rm -rf /"}]},
-        ],
-    }
-    staged = training_data.stage_generator_batch(batch, tmp_path, make_gate(tmp_path, "Sarah Chen"))
-
-    sft = (staged / "sft_pairs.jsonl").read_text()
-    rollouts = pd.read_parquet(staged / "grpo_rollouts.parquet")
-    exported = json.loads((staged / "batch_export.json").read_text())
-    for text in (sft, rollouts.to_json(), json.dumps(exported)):
-        assert "sarah@acme.com" not in text and "Sarah Chen" not in text and "rm -rf /" not in text
-    assert [task["id"] for task in exported["tasks"]] == ["t1"]
-    assert len(rollouts) == 1
-    assert "rm -rf /" in (staged / "safety_quarantine.jsonl").read_text()
-
-
-def test_staging_episode_exports_uses_the_env_gate(db, tmp_path, monkeypatch):
-    use_safety_env(monkeypatch)
-    monkeypatch.delenv("FORGE_SCRUB_KEY")
-    monkeypatch.setattr(
-        "backend.app.services.task_factory_targets.list_targets",
-        lambda _db: [type("Target", (), {"name": "safe_env"})()],
-    )
-    data_dir = tmp_path / "data"
-    data_dir.mkdir()
-
-    assert training_data.stage_available_data(db, data_dir) is True
-    text = _dataset_text(data_dir)
-    assert SECRET not in text and ADULT_MARKER not in text
-    assert "sarah@acme.com" in text

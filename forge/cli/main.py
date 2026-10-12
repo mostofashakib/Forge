@@ -286,31 +286,6 @@ def diagnose(
     diagnosis.render(result)
 
 
-@app.command()
-def train(
-    data_dir: Path = typer.Option(..., "--data", help="Directory containing exported graded rollouts"),
-    base_model: str | None = typer.Option(None, "--base-model", help="Base policy checkpoint (or read from --experiment)"),
-    output: Path = typer.Option(Path("forge_policy"), "--output", "-o", help="Checkpoint output directory"),
-    objective: str = typer.Option("grpo", "--objective", help="Training objective: grpo | dpo | sft | ppo"),
-    max_steps: int = typer.Option(500, "--max-steps"),
-    experiment: Path | None = typer.Option(None, "--experiment", help="Declarative experiment YAML"),
-    seed: int | None = typer.Option(None, "--seed", help="Experiment seed; required when YAML lists more than one"),
-) -> None:
-    """Train Forge's own policy from its own graded rollouts (GRPO / DPO / SFT / PPO).
-
-    Consumes `grpo_rollouts.parquet` (GRPO) or `preference_pairs.jsonl` (DPO)
-    exported from graded episodes and writes a policy checkpoint the runtime
-    agents can load. Requires trl + transformers on a GPU node.
-    """
-    typer.echo(
-        "Notice: Policy training and benchmarking have been decoupled from Forge into Autotune.\n"
-        "Forge is now focused purely on synthetic data generation and agent verification.\n\n"
-        "To train models on Forge exported datasets with LoRA / QLoRA:\n"
-        f"  uv run autotune train {data_dir} --output-dir {output}\n\n"
-        "Repository: https://github.com/mostofashakib/Autotune"
-    )
-
-
 from forge.cli.benchmark import benchmark_app  # noqa: E402  (registered after the core commands)
 
 app.add_typer(benchmark_app)

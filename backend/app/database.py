@@ -111,17 +111,6 @@ def init_db() -> None:
                 if col_name not in batch_columns:
                     conn.execute(text(stmt))
 
-        if "training_runs" in table_names:
-            training_columns = {
-                column["name"] for column in inspect(conn).get_columns("training_runs")
-            }
-            training_migrations = {
-                "training_mode": "ALTER TABLE training_runs ADD COLUMN training_mode TEXT DEFAULT 'online'",
-                "inference_mode": "ALTER TABLE training_runs ADD COLUMN inference_mode TEXT DEFAULT 'auto'",
-            }
-            for col_name, stmt in training_migrations.items():
-                if col_name not in training_columns:
-                    conn.execute(text(stmt))
         conn.commit()
 
 

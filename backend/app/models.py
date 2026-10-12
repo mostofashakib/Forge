@@ -277,28 +277,6 @@ class FlaggedEnvironmentVersion(Base):
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
-class TrainingRun(Base):
-    __tablename__ = "training_runs"
-
-    id: Mapped[str] = mapped_column(String, primary_key=True)
-    status: Mapped[str] = mapped_column(String, default="queued")  # queued | running | completed | failed
-    objective: Mapped[str] = mapped_column(String, default="grpo")  # grpo | dpo
-    training_mode: Mapped[str] = mapped_column(String, default="online")  # online | offline
-    base_model: Mapped[str] = mapped_column(String)
-    data_dir: Mapped[str] = mapped_column(String)
-    output_dir: Mapped[str] = mapped_column(String)
-    checkpoint_path: Mapped[str | None] = mapped_column(String, nullable=True)
-    inference_mode: Mapped[str] = mapped_column(String, default="auto")
-    max_steps: Mapped[int] = mapped_column(Integer, default=500)
-    num_examples: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    mean_reward: Mapped[float | None] = mapped_column(Float, nullable=True)
-    error: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(timezone.utc)
-    )
-    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-
-
 class RepoShortlist(Base):
     """Repos discovery proposed for a brief, waiting for a person to approve them."""
 

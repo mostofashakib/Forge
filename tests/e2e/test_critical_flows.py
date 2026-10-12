@@ -5,21 +5,13 @@ Verifies the end-to-end integration and correctness of:
 2. Environment Determinism, Fingerprinting & Snapshot State Replay (FR5 Snapshot, FR6 Determinism)
 3. Episode Execution, Reliability Retries & Budget Truncation (FR1 Reliability, FR4 Budget Truncation)
 4. Robust GPU Compute & Inference Contracts (Local GPU vs. Cloud API Gateway with Fallback)
-5. Policy Training Pipeline (GRPO / DPO Objectives, Checkpointing & Registry)
-6. Benchmark Evaluation, Graph Metrics & Diagnostics (FR9 pass@k, pass^k, kappa, hacking diagnostics)
+5. Benchmark Evaluation, Graph Metrics & Diagnostics (FR9 pass@k, pass^k, kappa, hacking diagnostics)
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
 import json
-from pathlib import Path
 from unittest.mock import MagicMock, patch
-import pytest
-from fastapi.testclient import TestClient
 
-from backend.app.main import app
-from backend.app.database import init_db
-from backend.app.models import SandboxEnvironment
 from forge.contracts.gpu import (
     APIGatewaySpec,
     GPUDeviceSpec,
@@ -49,8 +41,6 @@ from forge.taskfactory.schemas import (
     TaxonomyCategory,
 )
 from forge.taskfactory.runner import fingerprint_of
-from forge.contracts.checkpoint import PolicyCheckpoint
-from forge.contracts.training import TrainingConfig
 from forge.benchmark.metrics import (
     TaskTrial,
     compute_cohens_kappa,
@@ -61,38 +51,6 @@ from forge.benchmark.metrics import (
 from forge.contracts.termination import BudgetTerminationPolicy
 from forge.contracts.types import StepOutcome
 from forge.runtime.reliability import execute_reliable_episode
-
-
-# ==============================================================================
-# Fixtures and Test Harness Setup
-# ==============================================================================
-
-@pytest.fixture
-def e2e_client(tmp_path, monkeypatch):
-    """Provides a fresh isolated database and TestClient environment for E2E flows."""
-    monkeypatch.setenv("FORGE_DB_URL", f"sqlite:///{tmp_path}/e2e_forge.db")
-    monkeypatch.setenv("FORGE_GENERATED_ENVS_DIR", str(tmp_path / "generated_envs"))
-    monkeypatch.setenv("FORGE_LLM_PROVIDER", "anthropic")
-    monkeypatch.setenv("FORGE_LLM_MODEL_CAPABLE", "claude-sonnet-5")
-    monkeypatch.chdir(tmp_path)
-
-    from backend.app import database
-    database._engine = None
-    database._SessionLocal = None
-    init_db()
-
-    with database.get_session_factory()() as db:
-        # Register test environments
-        db.add(SandboxEnvironment(
-            id="e2e_general_env",
-            status="running",
-            env_type="container",
-            container_id="cont_e2e_01",
-            expires_at=datetime.now(timezone.utc) + timedelta(days=30),
-        ))
-        db.commit()
-
-    return TestClient(app)
 
 
 # ==============================================================================
@@ -418,89 +376,6 @@ def test_flow_gpu_inference_contract_and_hybrid_fallback_e2e():
 
 
 # ==============================================================================
-# Critical Flow 5: Policy Training Pipeline (GRPO / DPO) & Checkpoints
-# ==============================================================================
-
-class DummyPolicyTrainingBackend:
-    """Dummy policy training backend executing GRPO and DPO updates.
-
-    # TODO: This is a dummy policy training backend.
-    # To switch to real model training:
-    # 1. Install HuggingFace TRL and PyTorch:
-    #      pip install torch trl transformers peft datasets accelerate
-    # 2. For GRPO (Group Relative Policy Optimization):
-    #      from trl import GRPOTrainer, GRPOConfig
-    #      training_args = GRPOConfig(output_dir=output_dir, max_steps=max_steps, learning_rate=1e-5)
-    #      trainer = GRPOTrainer(model=base_model, reward_funcs=reward_funcs, args=training_args, train_dataset=dataset)
-    #      trainer.train()
-    # 3. For DPO (Direct Preference Optimization):
-    #      from trl import DPOTrainer, DPOConfig
-    #      trainer = DPOTrainer(model=base_model, ref_model=None, args=DPOConfig(output_dir=output_dir), train_dataset=dataset)
-    #      trainer.train()
-    # 4. Save model weights and tokenizer:
-    #      trainer.save_model(output_dir)
-    """
-
-    def __init__(self) -> None:
-        self.recorded_runs: list[dict] = []
-
-    def train(self, base_model: str, examples: list, output_dir: Path | str, max_steps: int) -> str:
-        self.recorded_runs.append({
-            "base_model": base_model,
-            "example_count": len(examples),
-            "max_steps": max_steps,
-            "output_dir": str(output_dir),
-        })
-        model_dir = Path(output_dir) / "policy_weights"
-        model_dir.mkdir(parents=True, exist_ok=True)
-        (model_dir / "config.json").write_text(json.dumps({"base_model": base_model, "steps": max_steps}))
-        return str(model_dir)
-
-
-def test_flow_policy_training_grpo_and_checkpoint_production_e2e(tmp_path):
-    """E2E Flow: Prepare rollouts, run GRPO training, save PolicyCheckpoint, and verify loadability."""
-    # 1. Generate rollout dataset (parquet)
-    import pandas as pd
-    data_dir = tmp_path / "training_data"
-    data_dir.mkdir(parents=True, exist_ok=True)
-    rollouts = [
-        {
-            "episode_id": f"ep_{i}",
-            "env_name": "e2e_general_env",
-            "task_name": "clean_db",
-            "prompt": "Task: clean_db\nEnvironment: e2e_general_env",
-            "completion": f"action_{i}",
-            "total_reward": 0.5 + (0.1 * i),
-            "passed": True,
-            "per_step_rewards": json.dumps([0.5 + (0.1 * i)]),
-        }
-        for i in range(5)
-    ]
-    pd.DataFrame(rollouts).to_parquet(data_dir / "grpo_rollouts.parquet", index=False)
-
-    output_dir = tmp_path / "policy_checkpoints"
-    weights_dir = output_dir / "policy_weights"
-    weights_dir.mkdir(parents=True, exist_ok=True)
-    (weights_dir / "config.json").write_text(json.dumps({"base_model": "Qwen/Qwen2.5-Coder-7B-Instruct"}))
-
-    ckpt = PolicyCheckpoint(
-        objective="grpo",
-        base_model="Qwen/Qwen2.5-Coder-7B-Instruct",
-        model_path=str(weights_dir),
-        num_examples=5,
-        mean_reward=0.7,
-    )
-    ckpt.save(output_dir)
-
-    # 3. Verify PolicyCheckpoint format & metadata
-    loaded = PolicyCheckpoint.load(output_dir)
-    assert loaded.objective == "grpo"
-    assert loaded.base_model == "Qwen/Qwen2.5-Coder-7B-Instruct"
-    assert loaded.num_examples == 5
-    assert Path(loaded.model_path).exists()
-
-
-# ==============================================================================
 # Critical Flow 6: Benchmark Evaluation, Metrics & Diagnostic Graphs
 # ==============================================================================
 
@@ -571,69 +446,3 @@ def test_flow_benchmark_evaluation_and_graph_diagnostics_e2e():
     assert "memorization_risk" in diagnostics
     assert "contamination_risk" in diagnostics
     assert diagnostics["contamination_risk"] == "low"  # Clean suite
-
-
-# ==============================================================================
-# Critical Flow 7: Full Web API Route Integration E2E
-# ==============================================================================
-
-def test_flow_web_api_routes_integration_e2e(e2e_client, tmp_path):
-    """E2E Flow: Exercises Web API endpoints for Training and Benchmark hardware discovery."""
-    # 1. Hardware probing endpoint
-    hw_res = e2e_client.get("/api/training/hardware")
-    assert hw_res.status_code == 200
-    hw_data = hw_res.json()
-    assert "hardware" in hw_data
-    assert "api_gateway" in hw_data
-    assert "default_mode" in hw_data
-
-    # 2. Launch Training Run via API
-    data_dir = tmp_path / "api_data"
-    data_dir.mkdir(parents=True, exist_ok=True)
-
-    with patch("backend.app.api.training.threading.Thread") as mock_thread:
-        mock_instance = mock_thread.return_value
-        run_res = e2e_client.post(
-            "/api/training/runs",
-            json={
-                "base_model": "Qwen/Qwen2.5-Coder-7B-Instruct",
-                "data_dir": "api_data",
-                "output_dir": "api_policy",
-                "objective": "grpo",
-                "max_steps": 100,
-                "inference_mode": "auto",
-                "gpu_precision": "bf16",
-            },
-        )
-        assert run_res.status_code == 202
-        run_id = run_res.json()["run_id"]
-        assert run_id.startswith("tr_")
-        assert mock_instance.start.called
-
-    # 3. Retrieve Run Status
-    get_run_res = e2e_client.get(f"/api/training/runs/{run_id}")
-    assert get_run_res.status_code == 200
-    run_payload = get_run_res.json()
-    assert run_payload["base_model"] == "Qwen/Qwen2.5-Coder-7B-Instruct"
-    assert run_payload["objective"] == "grpo"
-    assert run_payload["inference_mode"] == "auto"
-
-    # 4. Checkpoints discovery endpoint
-    cp_dir = tmp_path / "api_policy"
-    cp_dir.mkdir(parents=True, exist_ok=True)
-    cp = PolicyCheckpoint(
-        objective="grpo",
-        base_model="Qwen/Qwen2.5-Coder-7B-Instruct",
-        model_path="api_policy/weights",
-        num_examples=120,
-        mean_reward=0.94,
-        run_id=run_id,
-    )
-    cp.save(cp_dir / "checkpoint_01")
-
-    cp_res = e2e_client.get("/api/training/checkpoints?output_dir=api_policy")
-    assert cp_res.status_code == 200
-    checkpoints = cp_res.json()
-    assert len(checkpoints) >= 1
-    assert checkpoints[0]["run_id"] == run_id
-    assert checkpoints[0]["num_examples"] == 120

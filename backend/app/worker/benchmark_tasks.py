@@ -1,4 +1,4 @@
-"""Celery tasks for benchmark collection, held-out evaluation and transfer evaluation."""
+"""Celery tasks for benchmark collection and held-out evaluation."""
 from __future__ import annotations
 
 import json
@@ -243,75 +243,3 @@ def run_evaluation_task(run_id: str, engine: str, config: dict) -> None:
         logger.exception("[task:eval] run %s failed: %s", run_id, exc)
         update_benchmark_run(run_id, "failed", error=str(exc))
         publish({"error": str(exc)})
-
-@celery.task(name="backend.app.worker.tasks.run_transfer_task", ignore_result=True)
-def run_transfer_task(run_id: str, config: dict) -> None:
-    """Run a transfer evaluation with the production pipeline and stream its progress."""
-    from forge.benchmark.transfer_pipeline import run_transfer_pipeline
-
-    redis_client = None
-    try:
-        redis_client = connect_progress_redis()
-    except Exception as exc:
-        logger.warning("[task:transfer] Redis unavailable — %s", exc)
-    execute_transfer_run(
-        run_id,
-        config,
-        evaluate=run_transfer_pipeline,
-        publish=progress_publisher(redis_client, f"forge:benchmark:{run_id}", "transfer"),
-    )
-
-
-def execute_transfer_run(run_id: str, config: dict, *, evaluate, publish) -> None:
-    """Run `evaluate` on the request and record exactly what it measured.
-
-    `evaluate` is a `TransferEvaluator`. A failing evaluator fails the run, so
-    no metric is ever reported that an evaluation did not produce.
-    """
-    from forge.benchmark.transfer_pipeline import TransferConfig
-
-    update_benchmark_run(run_id, "running")
-    transfer_config = TransferConfig(
-        data_dir=Path(config.get("data_dir", "benchmark_results/data")),
-        base_model=config.get("base_model"),
-        output_dir=Path(config.get("output_dir", "benchmark_results/transfer")),
-        eval_suite=config.get("eval_suite", "experiments/internal_heldout.yaml"),
-        max_train_steps=config.get("max_steps", 500),
-        seeds=config.get("seeds", 3),
-        run_id=run_id,
-    )
-    inference_mode = config.get("inference_mode", "auto")
-    device = _detected_device()
-    publish({"log": f"[transfer] starting transfer benchmark {run_id}"})
-    publish({"log": f"[transfer] base model: {transfer_config.base_model or 'from experiment'}"})
-    publish({"log": f"[transfer] transfer dataset: {transfer_config.data_dir}"})
-    publish({"log": f"[transfer] target suite: {transfer_config.eval_suite}"})
-    publish({"log": f"[transfer] inference configuration: {inference_mode}"})
-    publish({"log": f"[transfer] hardware detected: {device}"})
-
-    try:
-        measured = evaluate(transfer_config)
-    except Exception as exc:
-        logger.exception("[task:transfer] run %s failed: %s", run_id, exc)
-        update_benchmark_run(run_id, "failed", error=str(exc))
-        publish({"error": str(exc)})
-        return
-
-    result = {**measured.to_dict(), "inference_mode": inference_mode, "device": device}
-    publish({"log": f"[transfer] evaluated {measured.num_eval_tasks} tasks across {transfer_config.seeds} seeds"})
-    publish({"log": f"[transfer] task completion rate: {measured.task_completion_rate * 100:.1f}%"})
-    publish({"log": f"[transfer] pass@1: {measured.success_at_1 * 100:.1f}% | pass@3: {measured.success_at_3 * 100:.1f}%"})
-    publish({"done": True, "result": result})
-    update_benchmark_run(run_id, "done", report_json=json.dumps(result))
-
-
-def _detected_device() -> str:
-    from forge.contracts.gpu import GPUDeviceSpec
-
-    hardware = GPUDeviceSpec.probe_hardware()
-    if hardware.get("cuda_available"):
-        devices = hardware.get("devices") or [{}]
-        return f"CUDA GPU ({devices[0].get('name', 'NVIDIA')})"
-    if hardware.get("mps_available"):
-        return "Apple Silicon MPS (Metal)"
-    return "CPU (standard)"
