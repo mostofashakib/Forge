@@ -557,7 +557,7 @@ Seven export formats from the per-environment **Export Dataset** page:
 
 #### Safety Gate
 
-Every row passes one gate before it is written, in every format above. Raw rows never touch disk.
+Every row passes one gate before it is written, in every format above. Generator batch downloads and agent-run trajectory downloads pass it too, row by row, with flagged rows quarantined under the environment's `exports/downloads/` directory. Raw rows never touch disk.
 
 Each pipeline declares where its data came from. Model-generated data (Forge rollouts, task-factory batches) is screened for harm but keeps its text. Internet and human data is also PII-scrubbed.
 
