@@ -112,11 +112,9 @@ class AgentPersonaDriver(PersonaDriver):
         self,
         agent_id: str = "anthropic:claude-sonnet-5",
         adapter_factory: AdapterFactory | None = None,
-        fallback: PersonaDriver | None = None,
     ) -> None:
         self._agent_id = agent_id
         self._factory = adapter_factory or _default_adapter_factory(agent_id)
-        self._fallback = fallback
         self._adapters: dict[str, object] = {}
 
     def reset(self, rng: random.Random) -> None:
@@ -124,8 +122,6 @@ class AgentPersonaDriver(PersonaDriver):
         # carry one persona's prompt identity into the next rollout, and any
         # provider-side conversation state with it.
         self._adapters.clear()
-        if self._fallback is not None:
-            self._fallback.reset(rng)
 
     def act(self, view: PersonaView) -> PersonaTurn:
         if not view.action_space:
@@ -138,8 +134,6 @@ class AgentPersonaDriver(PersonaDriver):
             adapter = self._adapter_for(view)
             raw = adapter.act(view_payload(view), view.allowed_action_types)
         except Exception as exc:  # noqa: BLE001 - contained on purpose, see docstring
-            if self._fallback is not None:
-                return self._fallback.act(view)
             return PersonaTurn(
                 persona_id=view.persona.id,
                 trigger=view.trigger,
@@ -193,14 +187,10 @@ def make_driver(
 ) -> PersonaDriver:
     """Build the driver a population's `driver` field names.
 
-    A model-backed driver always gets the scripted driver as its fallback, so a
-    misconfigured API key degrades an environment to plausible personas rather
-    than to none.
+    A model-backed driver never falls back to scripted actions. A turn its
+    model cannot take is skipped and the reason recorded, so a trajectory never
+    holds invented persona actions presented as the model's.
     """
     if driver_id in ("", "scripted", "none"):
         return ScriptedPersonaDriver(rng)
-    return AgentPersonaDriver(
-        agent_id=driver_id,
-        adapter_factory=adapter_factory,
-        fallback=ScriptedPersonaDriver(rng),
-    )
+    return AgentPersonaDriver(agent_id=driver_id, adapter_factory=adapter_factory)

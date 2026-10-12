@@ -159,16 +159,7 @@ def test_reset_drops_adapters_so_no_persona_remembers_the_last_episode():
     assert len(built) == 2
 
 
-def test_a_failing_model_call_falls_back_rather_than_ending_the_episode():
-    driver = AgentPersonaDriver(
-        adapter_factory=lambda *_: StubAdapter(raises=RuntimeError("no api key")),
-        fallback=ScriptedPersonaDriver(random.Random(0)),
-    )
-    turn = driver.act(view())
-    assert turn.action is not None
-
-
-def test_a_failing_model_call_with_no_fallback_skips_the_turn():
+def test_a_failing_model_call_skips_the_turn():
     driver = AgentPersonaDriver(
         adapter_factory=lambda *_: StubAdapter(raises=RuntimeError("no api key"))
     )
@@ -193,7 +184,15 @@ def test_make_driver_defaults_to_scripted():
     assert isinstance(make_driver(""), ScriptedPersonaDriver)
 
 
-def test_make_driver_gives_a_model_driver_a_scripted_fallback():
-    driver = make_driver("anthropic:claude-sonnet-5", random.Random(0))
+def test_a_model_driver_never_invents_an_action_when_its_model_fails():
+    driver = make_driver(
+        "anthropic:claude-sonnet-5",
+        random.Random(0),
+        adapter_factory=lambda *_: StubAdapter(raises=RuntimeError("ANTHROPIC_API_KEY is not configured")),
+    )
+
+    turn = driver.act(view())
+
     assert isinstance(driver, AgentPersonaDriver)
-    assert isinstance(driver._fallback, ScriptedPersonaDriver)
+    assert turn.action is None
+    assert "ANTHROPIC_API_KEY" in turn.skipped
