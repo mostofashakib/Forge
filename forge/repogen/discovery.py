@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 from pydantic import BaseModel
 
 from forge.extraction.llm_client import LLMClient
-from forge.repogen.github_mcp import GitHubSource
+from forge.repogen.github_mcp import GitHubMcpError, GitHubSource
 from forge.repogen.types import DiscoveryCriteria, RankedRepo, RepoCandidate, Shortlist
 from forge.safety.copyright import PERMISSIVE_LICENSES
 from forge.safety.service import DatasetSafetyService
@@ -141,9 +141,13 @@ def discover(
 
 def _screened_summary(candidate: RepoCandidate, source: GitHubSource, safety: DatasetSafetyService) -> dict | str:
     """What the ranker reads about a candidate, screened. A string is a rejection reason."""
-    listing = source.root_listing(candidate.full_name, candidate.default_branch)
-    readme_name = next((entry for entry in listing if _README_NAME.match(entry)), None)
-    readme = source.file_text(candidate.full_name, readme_name, candidate.default_branch) if readme_name else ""
+    try:
+        listing = source.root_listing(candidate.full_name, candidate.default_branch)
+        readme_name = next((entry for entry in listing if _README_NAME.match(entry)), None)
+        readme = source.file_text(candidate.full_name, readme_name, candidate.default_branch) if readme_name else ""
+    except GitHubMcpError as exc:
+        # One unreadable repo is a rejection, not a failed discovery.
+        return f"could not read the repo: {exc}"
     summary = {
         "full_name": candidate.full_name,
         "language": candidate.language,

@@ -141,3 +141,43 @@ def test_a_missing_github_token_is_a_clear_503(tmp_path, monkeypatch):
     with pytest.raises(Exception) as info:
         next(repos_api.get_github_source())
     assert info.value.status_code == 503 and "GITHUB_TOKEN" in info.value.detail
+
+
+def test_a_build_that_cannot_be_queued_is_marked_failed(client):
+    def broken_dispatch(env_name):
+        raise ConnectionError("Redis is not responding")
+
+    app.dependency_overrides[repos_api.get_build_dispatcher] = lambda: broken_dispatch
+    shortlist_id = _discover(client).json()["id"]
+    res = client.post(f"/api/repos/shortlists/{shortlist_id}/approve", json={"full_names": ["acme/widgets"]})
+
+    assert res.status_code == 503 and "Redis" in res.json()["detail"]
+    (listed,) = client.get("/api/repos").json()
+    assert listed["status"] == "failed" and "could not queue" in listed["reason"]
+
+
+def test_builds_queued_before_a_dispatch_failure_keep_their_status(client):
+    client.source.results = [_repo("acme/widgets"), _repo("acme/gadgets")]
+    queued = []
+
+    def dispatch_once(env_name):
+        if queued:
+            raise ConnectionError("Redis went away")
+        queued.append(env_name)
+
+    app.dependency_overrides[repos_api.get_build_dispatcher] = lambda: dispatch_once
+
+    class TwoFits(FakeLLM):
+        def extract(self, system, user, schema):
+            if schema is SearchPlan:
+                return SearchPlan(queries=["http clients"])
+            return RepoRanking(repos=[RepoFit(full_name=n, fit=0.9, has_tests=True, reason="r")
+                                      for n in ("acme/widgets", "acme/gadgets")])
+
+    app.dependency_overrides[repos_api.get_discovery_llm] = lambda: TwoFits()
+    shortlist_id = _discover(client).json()["id"]
+    res = client.post(f"/api/repos/shortlists/{shortlist_id}/approve",
+                      json={"full_names": ["acme/widgets", "acme/gadgets"]})
+    assert res.status_code == 503
+    statuses = {env["full_name"]: env["status"] for env in client.get("/api/repos").json()}
+    assert statuses == {"acme/widgets": "queued", "acme/gadgets": "failed"}

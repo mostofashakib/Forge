@@ -157,3 +157,19 @@ def test_no_eligible_candidates_returns_an_empty_shortlist_without_ranking():
     shortlist = discover("brief", DiscoveryCriteria(), source, llm, _service(), now=NOW)
     assert shortlist.repos == []
     assert [name for name, _ in llm.prompts] == ["SearchPlan"]
+
+
+def test_a_candidate_github_cannot_describe_is_rejected_not_fatal():
+    from forge.repogen.github_mcp import GitHubMcpError
+
+    class FlakySource(FakeSource):
+        def root_listing(self, full_name, ref):
+            if full_name == "b/broken":
+                raise GitHubMcpError("get_file_contents failed: 404")
+            return super().root_listing(full_name, ref)
+
+    source = FlakySource({"q": [_repo("a/ok"), _repo("b/broken")]})
+    llm = FakeLLM(["q"], [_fit("a/ok")])
+    shortlist = discover("brief", DiscoveryCriteria(), source, llm, _service(), now=NOW)
+    assert [r.candidate.full_name for r in shortlist.repos] == ["a/ok"]
+    assert shortlist.rejected["b/broken"].startswith("could not read the repo: get_file_contents failed")

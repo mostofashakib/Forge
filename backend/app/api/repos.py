@@ -126,8 +126,15 @@ def approve_repos(
         raise HTTPException(status_code=429, detail=str(exc)) from exc
     except GitHubMcpError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-    for env in envs:
-        dispatch(env.env_name)
+    for index, env in enumerate(envs):
+        try:
+            dispatch(env.env_name)
+        except Exception as exc:
+            # Without a queued job these rows would sit in "queued" forever.
+            # Builds already dispatched keep running.
+            for unqueued in envs[index:]:
+                repo_pipeline.fail_build(db, unqueued.env_name, f"could not queue the build: {exc}")
+            raise HTTPException(status_code=503, detail=f"could not queue repo builds: {exc}") from exc
     return {"environments": [_env_view(env) for env in envs]}
 
 
