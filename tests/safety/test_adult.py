@@ -30,16 +30,18 @@ class StubPipeline:
         ]
 
 
-def test_an_explicit_text_is_flagged_and_a_clean_one_is_not():
-    findings = DistilBertAdultDetector(StubPipeline(), threshold=0.9).detect(["EXPLICIT story", "budget memo"])
-    assert [(f.rule, f.detail.split(":")[0]) for f in findings] == [("adult", "score 0.99")]
-    assert "EXPLICIT story" in findings[0].detail
+def test_an_explicit_row_gets_one_finding_and_a_clean_row_none():
+    detector = DistilBertAdultDetector(StubPipeline(), threshold=0.9)
+    (finding,) = detector.detect(["EXPLICIT story", "more EXPLICIT text"])
+    assert finding.rule == "adult" and finding.detail.startswith("score 0.99: ")
+    assert detector.detect(["budget memo", "inbox"]) == []
 
 
-def test_all_texts_of_a_row_are_scored_in_one_batched_call():
+def test_a_row_is_scored_as_one_text_so_short_fields_keep_their_context():
+    # Alone, a folder name like "trash" scores 1.00 with the real model.
     pipe = StubPipeline()
-    DistilBertAdultDetector(pipe, threshold=0.9).detect(["one", "two", "three"])
-    assert pipe.calls == [["one", "two", "three"]]
+    DistilBertAdultDetector(pipe, threshold=0.9).detect(["one", "trash", "three"])
+    assert pipe.calls == [["one\ntrash\nthree"]]
 
 
 def test_content_past_the_first_window_is_still_scanned():
@@ -48,9 +50,10 @@ def test_content_past_the_first_window_is_still_scanned():
     assert [f.rule for f in findings] == ["adult"]
 
 
-def test_text_without_letters_skips_the_model():
+def test_a_row_without_letters_skips_the_model():
     pipe = StubPipeline()
     assert DistilBertAdultDetector(pipe, threshold=0.9).detect(["", "42", "{}"]) == []
+    assert DistilBertAdultDetector(pipe, threshold=0.9).detect([]) == []
     assert pipe.calls == []
 
 
@@ -69,13 +72,15 @@ def _weights_cached(model_id: str) -> bool:
 
 
 @pytest.mark.skipif(not _weights_cached(DEFAULT_ADULT_MODEL), reason="NSFW classifier weights not in the HF cache")
-def test_real_model_flags_explicit_text_and_passes_medical_text_and_code():
+def test_real_model_flags_explicit_rows_and_passes_medical_code_and_short_fields():
     detector = DistilBertAdultDetector(load_adult_pipeline(DEFAULT_ADULT_MODEL), DEFAULT_ADULT_THRESHOLD)
     explicit = "She undressed him slowly and they had sex on the bed, moaning loudly."
-    findings = detector.detect([
-        explicit,
-        "Schedule a breast cancer screening for the patient next Tuesday.",
-        "def strip_tags(html): return re.sub('<[^>]+>', '', html)",
-        "Please archive the newsletter and reply to Sarah about the Q3 budget.",
-    ])
-    assert len(findings) == 1 and explicit[:40] in findings[0].detail
+    assert len(detector.detect(["inbox", explicit])) == 1
+    for clean_row in (
+        ["Schedule a breast cancer screening for the patient next Tuesday."],
+        ["def strip_tags(html): return re.sub('<[^>]+>', '', html)"],
+        # Forge rows that mention the trash folder, which alone scores 1.00.
+        ["Task: Move the spam email to trash\nEnvironment: gmail", "$ move_email --id e060 --folder trash"],
+        ["trash", "deals@uber.com", "Your Uber receipt", "Thanks for riding with Uber. Total: $14.20, trip on May 3."],
+    ):
+        assert detector.detect(clean_row) == [], clean_row

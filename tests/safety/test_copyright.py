@@ -48,6 +48,8 @@ def test_non_permissive_or_proprietary_code_is_flagged(text):
     "This email is proprietary and confidential. Do not distribute.",
     "We avoid GPL dependencies because of the GNU license terms.",
     "def close_ticket(ticket_id): return api.close(ticket_id)",
+    "echo '// SPDX-License-Identifier: MIT' > lib.c",
+    '{"header": "SPDX-License-Identifier: (MIT OR Apache-2.0)"}',
     "",
 ])
 def test_permissive_code_email_footers_and_prose_are_not_flagged(text):

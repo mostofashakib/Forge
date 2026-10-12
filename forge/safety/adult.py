@@ -1,8 +1,9 @@
 """Adult-content detection with a small local text classifier.
 
-The classifier reads at most 512 tokens, so each text is cut into overlapping
-windows and scored on its most explicit window. Every window of a row goes to
-the model in one batched call.
+A row's strings are joined and scored as one text. Scored alone, a short
+field like the folder name "trash" reads as explicit. The classifier reads at
+most 512 tokens, so the text is cut into overlapping windows, scored in one
+batched call, and judged by its most explicit window.
 """
 from __future__ import annotations
 
@@ -27,7 +28,7 @@ _HAS_LETTER = re.compile(r"[^\W\d_]")
 
 class AdultDetector(Protocol):
     def detect(self, texts: Sequence[str]) -> list[Finding]:
-        """One `adult` finding per text that scores at or above the threshold."""
+        """One `adult` finding when the row made of `texts` scores at or above the threshold."""
 
 
 @lru_cache(maxsize=None)
@@ -48,25 +49,18 @@ class DistilBertAdultDetector:
         self._threshold = threshold
 
     def detect(self, texts: Sequence[str]) -> list[Finding]:
-        windows: list[str] = []
-        owners: list[int] = []
-        for index, text in enumerate(texts):
-            if _HAS_LETTER.search(text):
-                for window in _windows(text):
-                    windows.append(window)
-                    owners.append(index)
-        if not windows:
+        row = "\n".join(text for text in texts if _HAS_LETTER.search(text))
+        if not row:
             return []
+        windows = _windows(row)
         results = self._classifier(windows, truncation=True, max_length=_MAX_TOKENS, batch_size=_BATCH_SIZE)
-        best: dict[int, float] = {}
-        for owner, scores in zip(owners, results):
-            score = next(s["score"] for s in scores if s["label"].lower() == _LABEL)
-            best[owner] = max(best.get(owner, 0.0), score)
-        return [
-            Finding("adult", f"score {score:.2f}: {texts[owner][:_DETAIL_CHARS]}")
-            for owner, score in sorted(best.items())
-            if score >= self._threshold
-        ]
+        score, window = max(
+            (next(s["score"] for s in scores if s["label"].lower() == _LABEL), window)
+            for scores, window in zip(results, windows)
+        )
+        if score < self._threshold:
+            return []
+        return [Finding("adult", f"score {score:.2f}: {window[:_DETAIL_CHARS]}")]
 
 
 def _windows(text: str) -> list[str]:

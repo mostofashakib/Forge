@@ -19,7 +19,9 @@ _RULE = "copyright"
 _DETAIL_CHARS = 80
 _I = re.IGNORECASE
 
-_SPDX = re.compile(r"SPDX-License-Identifier:\s*([^\n]+?)\s*(?:\*/|-->|$)", re.MULTILINE)
+# An expression ends at the first character SPDX ids cannot hold: a quote,
+# a comment closer, or a shell redirect.
+_SPDX = re.compile(r"SPDX-License-Identifier:[ \t]*([A-Za-z0-9.+() \t-]+)")
 _GPL_TERMS = re.compile(
     r"\b(?:under|terms\s+of)\s+the\s+(?:terms\s+of\s+the\s+)?GNU\s+"
     r"(?:Affero\s+|Lesser\s+|Library\s+)?General\s+Public\s+License", _I
@@ -40,7 +42,7 @@ _PERMISSIVE_GRANT = re.compile(
 def detect_copyright(text: str) -> list[Finding]:
     """Every reason `text` is not permissively licensed code."""
     findings = [
-        Finding(_RULE, f"SPDX {expression}")
+        Finding(_RULE, f"SPDX {expression.strip()}")
         for expression in _SPDX.findall(text)
         if not _spdx_allowed(expression)
     ]
@@ -56,7 +58,7 @@ def _spdx_allowed(expression: str) -> bool:
     """An OR expression needs one allowed choice. Anything else needs every id allowed."""
     # A WITH exception narrows its base license, so only the base id counts.
     expression = re.sub(r"\s+WITH\s+[\w.+-]+", "", expression.replace("(", " ").replace(")", " "))
-    tokens = expression.split()
+    tokens = re.findall(r"[A-Za-z0-9.+-]+", expression)
     ids = [token for token in tokens if token not in {"AND", "OR"}]
     if not ids:
         return False
