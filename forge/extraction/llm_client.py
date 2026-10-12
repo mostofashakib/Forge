@@ -4,6 +4,8 @@ import os
 from typing import Any, Protocol, runtime_checkable
 from pydantic import BaseModel
 
+from forge.credentials import ANTHROPIC_API_KEY, GEMINI_API_KEY, OPENAI_API_KEY, require_credential
+
 
 @runtime_checkable
 class LLMClient(Protocol):
@@ -74,13 +76,21 @@ class AnthropicClient:
         max_retries: int = 3,
         max_tokens: int = 8192,
     ) -> None:
-        import anthropic
-        self._client = anthropic.Anthropic()
+        self._client = None
         self._model = model
         self._max_retries = max_retries
         self._max_tokens = max_tokens
 
+    def _sdk(self):
+        """The Anthropic SDK client, built on first use with the configured key."""
+        if self._client is None:
+            import anthropic  # lazy — only required when Anthropic is an active provider
+
+            self._client = anthropic.Anthropic(api_key=require_credential(ANTHROPIC_API_KEY))
+        return self._client
+
     def _stream_extract(self, system: str, messages: list, schema: type[BaseModel]) -> BaseModel:
+        client = self._sdk()
         system = LLMPromptFormatter.structured(system, schema)
         input_schema = _flat_schema(schema)
         last_error: Exception | None = None
@@ -93,7 +103,7 @@ class AnthropicClient:
             )
             try:
                 extra = f"\n\nPrevious attempt failed: {last_error}" if last_error else ""
-                with self._client.messages.stream(
+                with client.messages.stream(
                     model=self._model,
                     max_tokens=budget,
                     system=system + extra,
@@ -255,7 +265,7 @@ class OpenAIClient:
     def extract(self, system: str, user: str, schema: type[BaseModel]) -> BaseModel:
         import openai  # lazy — only required when OpenAI is an active provider
 
-        client = openai.OpenAI()
+        client = openai.OpenAI(api_key=require_credential(OPENAI_API_KEY))
         system = LLMPromptFormatter.structured(system, schema)
         json_schema = _flat_schema(schema)
         last_error: Exception | None = None
@@ -319,7 +329,7 @@ class GeminiClient:
         from google import genai  # lazy — only required when Gemini is active
         from google.genai import types
 
-        client = genai.Client()
+        client = genai.Client(api_key=require_credential(GEMINI_API_KEY))
         system = LLMPromptFormatter.structured(system, schema)
         last_error: Exception | None = None
 
@@ -398,7 +408,7 @@ def get_client(
         provider:    Explicit provider override; skips env-var lookup.
 
     Supported providers:
-        anthropic — Anthropic API (requires ``ANTHROPIC_API_KEY``)
+        anthropic — Anthropic API (requires the ``ANTHROPIC_API_KEY`` credential)
         ollama    — Local Ollama server (requires ``ollama`` package)
     """
     p = (provider or os.environ.get("FORGE_LLM_PROVIDER", "anthropic")).lower()

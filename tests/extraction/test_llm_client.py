@@ -253,3 +253,57 @@ def test_transient_and_validation_failures_are_still_retried(error):
     with pytest.raises(RuntimeError):
         client.extract(system="s", user="u", schema=_Out)
     assert messages.calls == 3
+
+
+# ---------------------------------------------------------------------------
+# Credentials come from the registry, never a placeholder
+# ---------------------------------------------------------------------------
+
+def test_anthropic_client_sends_the_configured_key(monkeypatch):
+    from forge.extraction.llm_client import AnthropicClient
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-configured")
+
+    assert AnthropicClient()._sdk().api_key == "sk-ant-configured"
+
+
+def test_anthropic_client_refuses_the_placeholder_key_by_name(monkeypatch):
+    from forge.credentials import CredentialNotConfigured
+    from forge.extraction.llm_client import AnthropicClient
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "mock_key")
+    client = AnthropicClient()
+
+    with pytest.raises(CredentialNotConfigured, match="ANTHROPIC_API_KEY"):
+        client.extract("system", "user", _SimpleSchema)
+
+
+def test_openai_client_refuses_the_placeholder_key_before_any_request(monkeypatch):
+    from forge.credentials import CredentialNotConfigured
+    from forge.extraction.llm_client import OpenAIClient
+
+    monkeypatch.setenv("OPENAI_API_KEY", "mock_key")
+
+    with pytest.raises(CredentialNotConfigured, match="OPENAI_API_KEY"):
+        OpenAIClient(model="gpt-4o", max_retries=1).extract("system", "user", _SimpleSchema)
+
+
+def test_openai_client_passes_the_configured_key(monkeypatch):
+    import openai
+    from forge.extraction.llm_client import OpenAIClient
+
+    seen = {}
+
+    class _Refused(Exception):
+        status_code = 401
+
+    def _client(**kwargs):
+        seen.update(kwargs)
+        raise _Refused("stop before the network")
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-configured")
+    monkeypatch.setattr(openai, "OpenAI", _client)
+
+    with pytest.raises(_Refused):
+        OpenAIClient(model="gpt-4o", max_retries=1).extract("system", "user", _SimpleSchema)
+    assert seen == {"api_key": "sk-openai-configured"}

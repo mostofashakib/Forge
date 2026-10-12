@@ -75,7 +75,8 @@ def test_agents_only_depend_on_the_agent_package(rel_path):
     # them without either depending on the other") — it carries no env
     # internals, verifier, reward, or training behavior, so depending on it
     # does not let an agent reach into another layer's logic the way this
-    # test exists to prevent.
+    # test exists to prevent. forge.credentials is the one place secrets are
+    # read; an LLM adapter needs its key and learns nothing about environments.
     for module in imports_of(rel_path):
         if module.startswith(("forge.", "backend.")):
             assert module.startswith(
@@ -84,6 +85,7 @@ def test_agents_only_depend_on_the_agent_package(rel_path):
                     "forge.runtime.errors",
                     "forge.runtime.prompting",
                     "forge.contracts",
+                    "forge.credentials",
                 )
             ), (
                 f"{rel_path} imports {module} — agents must interact with environments "

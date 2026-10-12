@@ -60,6 +60,15 @@ def test_key_status_is_reported_without_the_key(client):
     assert "sk-ant-secret" not in str(body)
 
 
+def test_a_placeholder_key_is_reported_as_not_set(client):
+    client.env_path.write_text("ANTHROPIC_API_KEY=mock_key\nOPENAI_API_KEY=sk-openai-secret\n")
+
+    providers = {p["name"]: p for p in client.get("/api/settings").json()["providers"]}
+
+    assert providers["anthropic"]["key_set"] is False
+    assert providers["openai"]["key_set"] is True
+
+
 def test_saving_the_validator_writes_only_those_lines(client):
     resp = client.put("/api/settings", json={"values": VALIDATOR})
 

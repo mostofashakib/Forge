@@ -22,6 +22,7 @@ from backend.app.services.settings_registry import (
     check_value,
     setting,
 )
+from forge.credentials import PROVIDER_CREDENTIALS, is_configured
 from forge.taskfactory.model_settings import (
     SUPPORTED_PROVIDERS,
     ModelSpec,
@@ -33,15 +34,6 @@ from forge.taskfactory.model_settings import (
 )
 
 router = APIRouter(prefix="/api/settings")
-
-# Any one of these variables holding a value means the provider has a key.
-PROVIDER_KEY_VARS: dict[str, tuple[str, ...]] = {
-    "anthropic": ("ANTHROPIC_API_KEY",),
-    "openai": ("OPENAI_API_KEY",),
-    "gemini": ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
-    "ollama": (),
-}
-
 
 class SettingsUpdate(BaseModel):
     values: dict[str, str]
@@ -68,8 +60,8 @@ def _providers(env: dict[str, str]) -> list[dict]:
     return [
         {
             "name": name,
-            "needs_key": bool(PROVIDER_KEY_VARS.get(name)),
-            "key_set": any(env.get(var) for var in PROVIDER_KEY_VARS.get(name, ())),
+            "needs_key": name in PROVIDER_CREDENTIALS,
+            "key_set": name in PROVIDER_CREDENTIALS and is_configured(PROVIDER_CREDENTIALS[name], env),
         }
         for name in SUPPORTED_PROVIDERS
     ]
@@ -109,7 +101,7 @@ def _setting_rows(saved: dict[str, str], effective: dict[str, str]) -> list[dict
 
 
 def _settings_body() -> dict:
-    key_vars = [var for names in PROVIDER_KEY_VARS.values() for var in names]
+    key_vars = [var for credential in PROVIDER_CREDENTIALS.values() for var in credential.env_vars]
     saved = env_file.read_env_values(env_file.BACKEND_ENV_FILE, KEYS)
     env = {**os.environ, **env_file.read_env_values(env_file.BACKEND_ENV_FILE, key_vars), **saved}
     return {

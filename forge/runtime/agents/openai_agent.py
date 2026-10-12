@@ -3,12 +3,16 @@ import json
 from collections.abc import Sequence
 from forge.contracts.prompting import PromptTemplate
 from forge.contracts.types import Observation, Task, ToolSpec
+from forge.credentials import OPENAI_API_KEY, require_credential
 from forge.runtime.agents.prompts import FORGE_AGENT_PROMPT
 
 try:
     import openai
 except ImportError:
     openai = None  # type: ignore
+
+# The OpenAI SDK refuses to start without a key. Keyless servers such as vLLM ignore it.
+KEYLESS_SERVER_KEY = "keyless-server"
 
 
 class OpenAIAgent:
@@ -32,10 +36,11 @@ class OpenAIAgent:
         else:
             if openai is None:
                 raise ImportError("openai package not installed")
-            kwargs = {}
             if base_url:
-                kwargs["base_url"] = base_url
-            self._client = openai.OpenAI(**kwargs)
+                # A self-hosted server gets its own placeholder, never the OpenAI key.
+                self._client = openai.OpenAI(base_url=base_url, api_key=KEYLESS_SERVER_KEY)
+            else:
+                self._client = openai.OpenAI(api_key=require_credential(OPENAI_API_KEY))
 
     def act(self, obs: dict, action_types: frozenset[str]) -> dict:
         tools = self._tools(action_types)

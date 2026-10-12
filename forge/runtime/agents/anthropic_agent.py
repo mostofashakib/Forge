@@ -2,6 +2,7 @@ from __future__ import annotations
 import json
 from collections.abc import Sequence
 from forge.contracts import Observation, PromptTemplate, Task, ToolSpec
+from forge.credentials import ANTHROPIC_API_KEY, require_credential
 from forge.runtime.agents.prompts import FORGE_AGENT_PROMPT
 
 try:
@@ -30,7 +31,7 @@ class AnthropicAgent:
         else:
             if anthropic is None:
                 raise ImportError("anthropic package not installed")
-            self._client = anthropic.Anthropic()
+            self._client = anthropic.Anthropic(api_key=require_credential(ANTHROPIC_API_KEY))
 
     def act(self, obs: dict, action_types: frozenset[str]) -> dict:
         tools = self._tools(action_types)
