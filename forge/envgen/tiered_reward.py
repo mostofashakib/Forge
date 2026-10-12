@@ -48,6 +48,7 @@ from forge.envgen.grading_sandbox import grading_sandbox
 from forge.extraction.llm_client import LLMClient, get_judge_client
 from forge.envgen.config import envgen_config
 from forge.reward_presets import RewardPreset, reward_preset_spec
+from forge.runtime.reliability.failures import REASON_PROVIDER_ERROR, InfrastructureCrash
 
 logger = logging.getLogger(__name__)
 
@@ -283,6 +284,8 @@ class TieredRewardConfig:
 
     def __post_init__(self) -> None:
         self.reward_preset = RewardPreset(self.reward_preset)
+        if not self.partial_credit_methods:
+            raise ValueError("partial_credit_methods needs at least one method")
 
     @property
     def auditor_enabled(self) -> bool:
@@ -299,6 +302,11 @@ class TieredRewardConfig:
             reward_preset=RewardPreset(preset),
             partial_credit_methods=partial_credit_methods or ["llm"],
         )
+
+
+def _ungraded(detail: str, exc: Exception) -> InfrastructureCrash:
+    """A grader that could not score. The episode fails as infrastructure, never as a 0.0."""
+    return InfrastructureCrash(REASON_PROVIDER_ERROR, detail, original_exc=exc)
 
 
 class TieredRewardEngine:
@@ -508,7 +516,9 @@ class TieredRewardEngine:
         """Average partial credit across all configured methods.
 
         LLM returns 0.0–0.4 directly. ML methods return 0.0–1.0 similarity
-        which is scaled to 0.0–0.4 to match the same range.
+        which is scaled to 0.0–0.4 to match the same range. If any method
+        cannot score, the episode is left ungraded: averaging the survivors
+        would quietly change what the grade means.
         """
         from forge.envgen.ml_reward import build_scorer
         scores: list[float] = []
@@ -518,45 +528,44 @@ class TieredRewardEngine:
         for method in self._cfg.partial_credit_methods:
             if method == "llm":
                 scores.append(self._grade_partial(objective, spec, history))
-            else:
-                scorer = build_scorer(method)
-                if scorer is None:
-                    continue
-                try:
-                    raw = scorer.score(reference, candidate)
-                    scores.append(max(0.0, min(0.4, raw * 0.4)))
-                except Exception as exc:
-                    logger.warning("[tiered-reward] ML partial credit (%s) failed: %s", method, exc)
+                continue
+            scorer = build_scorer(method)
+            if scorer is None:
+                raise ValueError(f"Unknown partial credit method: {method!r}")
+            try:
+                raw = scorer.score(reference, candidate)
+            except Exception as exc:
+                raise _ungraded(f"{method} partial-credit scorer failed: {exc}", exc) from exc
+            scores.append(max(0.0, min(0.4, raw * 0.4)))
 
-        return sum(scores) / len(scores) if scores else 0.0
+        return sum(scores) / len(scores)
 
     def _grade_partial(
         self, objective: str, spec: EndStateSpec, history: Sequence[dict]
     ) -> float:
         """LLM-based partial credit when no assertion passed."""
+        # Compact the trajectory: command + exit + first line of stdout.
+        trajectory_summary = []
+        for i, step in enumerate(history[-30:]):  # cap context
+            cmd = (step.get("command") or "")[:120]
+            stdout = (step.get("stdout") or "").strip().split("\n", 1)[0][:160]
+            exit_code = step.get("exit_code", "?")
+            trajectory_summary.append(f"  {i+1}. $ {cmd}\n     exit={exit_code} | {stdout}")
+        user = (
+            f"Objective:\n{objective}\n\n"
+            f"Expected end state:\n{spec.summary}\n\n"
+            f"Required end-state assertions (none passed):\n"
+            + "\n".join(f"  - {a['description']}" for a in spec.assertions)
+            + "\n\n"
+            f"Agent trajectory ({len(history)} steps total, last 30 shown):\n"
+            + "\n".join(trajectory_summary)
+        )
         try:
-            # Compact the trajectory: command + exit + first line of stdout.
-            trajectory_summary = []
-            for i, step in enumerate(history[-30:]):  # cap context
-                cmd = (step.get("command") or "")[:120]
-                stdout = (step.get("stdout") or "").strip().split("\n", 1)[0][:160]
-                exit_code = step.get("exit_code", "?")
-                trajectory_summary.append(f"  {i+1}. $ {cmd}\n     exit={exit_code} | {stdout}")
-            user = (
-                f"Objective:\n{objective}\n\n"
-                f"Expected end state:\n{spec.summary}\n\n"
-                f"Required end-state assertions (none passed):\n"
-                + "\n".join(f"  - {a['description']}" for a in spec.assertions)
-                + "\n\n"
-                f"Agent trajectory ({len(history)} steps total, last 30 shown):\n"
-                + "\n".join(trajectory_summary)
-            )
             result: _PartialCreditLLM = self._client.extract(
                 system=TieredRewardPrompts.PARTIAL_CREDIT,
                 user=user,
                 schema=_PartialCreditLLM,
             )
-            return max(0.0, min(0.4, float(result.score)))
         except Exception as exc:
-            logger.warning("[tiered-reward] partial-credit LLM failed: %s", exc)
-            return 0.0
+            raise _ungraded(f"partial-credit LLM grader failed: {exc}", exc) from exc
+        return max(0.0, min(0.4, float(result.score)))

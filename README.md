@@ -243,6 +243,8 @@ Agent execution and data collection are separate layers. Runtime agents choose a
 | **ROUGE-L** | Longest common subsequence overlap. Deterministic. |
 | **BLEU** | N-gram precision. Best for short, structured outputs. |
 
+If any configured method cannot score (the judge errors, a scorer's library is missing), the episode is left ungraded. It fails as an infrastructure crash (`provider_error`) and is retried, so a grader outage never shows up as a 0.0 reward.
+
 ### Verifiers
 
 Six built-in verifier types compose into the final `EpisodeEvaluation` and its auditable `RewardBreakdown`:

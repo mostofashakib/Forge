@@ -248,22 +248,88 @@ def test_grade_caps_partial_credit_at_0_4():
         _PartialCreditLLM(score=0.9, reasoning="too generous")
 
 
-def test_grade_partial_credit_llm_failure_falls_back_to_zero():
-    """If the LLM call itself errors out, partial credit is 0 (not a crash)."""
+_FAILING_SPEC = EndStateSpec(summary="x", expected_steps=5, assertions=[
+    {"description": "a", "command": "fail"},
+])
+_HISTORY = [{"command": "c", "exit_code": 0, "stdout": ""}]
+
+
+def _grade_with_failing_assertions(engine):
+    with patch("forge.envgen.tiered_reward.subprocess.run",
+               return_value=MagicMock(returncode=1, stdout="", stderr="")):
+        return engine.grade("obj", _FAILING_SPEC, _HISTORY, container_id="cid")
+
+
+def test_an_llm_grader_failure_leaves_the_episode_ungraded_as_an_infrastructure_crash():
+    """A grader that errors gives no grade. The episode fails as infrastructure, never as a 0.0."""
+    from forge.runtime.reliability import InfrastructureCrash, classify_failure
+
     mock_client = MagicMock()
     mock_client.extract.side_effect = RuntimeError("LLM down")
     engine = TieredRewardEngine(client=mock_client)
-    spec = EndStateSpec(summary="x", expected_steps=5, assertions=[
-        {"description": "a", "command": "fail"},
-    ])
-    history = [{"command": "c", "exit_code": 0, "stdout": ""}]
 
-    with patch("forge.envgen.tiered_reward.subprocess.run",
-               return_value=MagicMock(returncode=1, stdout="", stderr="")):
-        grade = engine.grade("obj", spec, history, container_id="cid")
+    with pytest.raises(InfrastructureCrash, match="LLM down") as caught:
+        _grade_with_failing_assertions(engine)
 
-    assert grade.partial_credit == 0.0
-    assert grade.final_reward == 0.0
+    assert classify_failure(caught.value) == ("infrastructure", "provider_error")
+
+
+def test_a_judge_only_grader_failure_is_not_scored_zero():
+    from forge.runtime.reliability import InfrastructureCrash
+
+    mock_client = MagicMock()
+    mock_client.extract.side_effect = RuntimeError("LLM down")
+    engine = TieredRewardEngine(client=mock_client, config=TieredRewardConfig.from_preset("judge_only"))
+
+    with pytest.raises(InfrastructureCrash):
+        engine.grade("obj", _FAILING_SPEC, _HISTORY, container_id="cid")
+
+
+def test_a_failing_ml_scorer_leaves_the_episode_ungraded(monkeypatch):
+    import forge.envgen.ml_reward as ml_reward
+    from forge.runtime.reliability import InfrastructureCrash
+
+    class _BrokenScorer:
+        def score(self, reference, candidate):
+            raise ImportError("Embedding scoring needs sentence-transformers")
+
+    monkeypatch.setattr(ml_reward, "build_scorer", lambda method: _BrokenScorer())
+    engine = TieredRewardEngine(
+        client=MagicMock(), config=TieredRewardConfig(partial_credit_methods=["embeddings"])
+    )
+
+    with pytest.raises(InfrastructureCrash, match="sentence-transformers"):
+        _grade_with_failing_assertions(engine)
+
+
+def test_one_failing_method_does_not_silently_drop_out_of_the_average(monkeypatch):
+    """The configured method mix is the grade's definition. Averaging the survivors would change it."""
+    import forge.envgen.ml_reward as ml_reward
+    from forge.envgen.tiered_reward import _PartialCreditLLM
+    from forge.runtime.reliability import InfrastructureCrash
+
+    class _BrokenScorer:
+        def score(self, reference, candidate):
+            raise RuntimeError("rouge crashed")
+
+    mock_client = MagicMock()
+    mock_client.extract.return_value = _PartialCreditLLM(score=0.3, reasoning="close")
+    monkeypatch.setattr(ml_reward, "build_scorer", lambda method: _BrokenScorer())
+    engine = TieredRewardEngine(
+        client=mock_client, config=TieredRewardConfig(partial_credit_methods=["llm", "rouge"])
+    )
+
+    with pytest.raises(InfrastructureCrash, match="rouge crashed"):
+        _grade_with_failing_assertions(engine)
+
+
+def test_an_unknown_partial_credit_method_is_rejected(monkeypatch):
+    engine = TieredRewardEngine(
+        client=MagicMock(), config=TieredRewardConfig(partial_credit_methods=["telepathy"])
+    )
+
+    with pytest.raises(ValueError, match="telepathy"):
+        _grade_with_failing_assertions(engine)
 
 
 def test_grade_handles_assertion_timeout_gracefully():
