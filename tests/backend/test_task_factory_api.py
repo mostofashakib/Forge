@@ -1,6 +1,7 @@
 """The task factory API: pick an environment and a count, then browse versions."""
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
@@ -13,6 +14,7 @@ from backend.app.services import env_file, task_registry
 from forge.taskfactory.model_settings import ModelSpec
 from forge.taskfactory.pipeline import PipelineResult
 from forge.taskfactory.schemas import Taxonomy, TaxonomyCategory
+from tests.backend.safety_helpers import use_safety_env
 
 
 @pytest.fixture(autouse=True)
@@ -28,6 +30,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("FORGE_GENERATED_ENVS_DIR", str(tmp_path / "generated_envs"))
     monkeypatch.setenv("FORGE_LLM_PROVIDER", "anthropic")
     monkeypatch.setenv("FORGE_LLM_MODEL_CAPABLE", "claude-sonnet-5")
+    use_safety_env(monkeypatch)
     env_path = tmp_path / ".env"
     env_path.write_text("FORGE_TASK_VALIDATOR_PROVIDER=openai\nFORGE_TASK_VALIDATOR_MODEL=gpt-5\n")
     monkeypatch.setattr(env_file, "BACKEND_ENV_FILE", env_path)
@@ -249,3 +252,81 @@ def test_a_preference_batch_without_rejected_drafts_exports_no_pairs(client):
     body = client.get(f"/api/task-factory/batches/{batch_id}/export").json()
 
     assert body["preference_pairs"] == []
+
+
+SECRET = "sk-ant-api03-AbCdEfGhIjKlMnOpQrStUv_wxyz"
+
+
+def _task(task_id: str, objective: str, steps):
+    from forge.taskfactory.schemas import Check, GoldenStep, ReviewVerdict, SyntheticTask, TaskSeed
+
+    verdict = ReviewVerdict(slot=0, realistic=True, realistic_reason="ok", fair=True, fair_reason="ok",
+                            sensible=True, sensible_reason="ok")
+    return SyntheticTask(
+        id=task_id, category="triage", difficulty=1, title=task_id, objective=objective, seed=TaskSeed(),
+        golden=[GoldenStep(tool="shell", args={"command": command}) for command in steps],
+        checks=[Check(kind="value", path="done", value=True)], reflection_points=[],
+        step_budget=2, round=1, review=verdict, fingerprint=task_id,
+    )
+
+
+def _batch_of(client, tasks, rejections=(), data_type="sft") -> str:
+    taxonomy = Taxonomy(categories=[TaxonomyCategory(name="triage", description="sort", exercises=[], difficulties=[1])])
+    with client.session_factory() as db:
+        batch_id = task_registry.create_batch(
+            db, env_name="mail", requested=len(tasks), pass_k=3,
+            writer=ModelSpec("anthropic", "claude-sonnet-5"), validator=ModelSpec("openai", "gpt-5"),
+        )
+        task_registry.save_result(db, batch_id, PipelineResult(
+            requested=len(tasks), taxonomy=taxonomy, tasks=list(tasks), rejections=list(rejections), data_type=data_type,
+        ))
+    return batch_id
+
+
+def _quarantined(tmp_path) -> str:
+    files = list((tmp_path / "generated_envs" / "mail" / "exports" / "downloads").glob("*/safety_quarantine.jsonl"))
+    return "".join(path.read_text() for path in files)
+
+
+def test_a_batch_export_drops_harmful_tasks_and_redacts_secrets(client, tmp_path):
+    batch_id = _batch_of(client, [
+        _task("t-ok", f"Rotate the key {SECRET}", ["ls /var/log"]),
+        _task("t-bad", "Free some disk", ["rm -rf /"]),
+    ])
+
+    body = client.get(f"/api/task-factory/batches/{batch_id}/export").json()
+
+    text = json.dumps(body)
+    assert [task["id"] for task in body["tasks"]] == ["t-ok"]
+    assert [item["metadata"]["task_id"] for item in body["sft_items"]] == ["t-ok"]
+    assert SECRET not in text and "rm -rf /" not in text
+    assert body["safety"]["source"] == "model"
+    assert (body["safety"]["rows_seen"], body["safety"]["rows_kept"]) == (2, 1)
+    assert body["safety"]["quarantined_by_rule"] == {"destructive_command": 1}
+    assert "rm -rf /" in _quarantined(tmp_path)
+
+
+def test_rejected_drafts_are_screened_before_they_become_preference_pairs(client, tmp_path):
+    from forge.taskfactory.schemas import Check, GoldenStep, TaskDraft, TaskRejection, TaskSeed
+
+    harmful = TaskDraft(slot=0, title="d", objective="Free some disk", seed=TaskSeed(),
+                        golden=[GoldenStep(tool="shell", args={"command": "rm -rf /"})],
+                        checks=[Check(kind="value", path="done", value=True)])
+    rejection = TaskRejection(slot=0, category="triage", difficulty=1, round=1, stage="review", reason="unsafe", draft=harmful)
+    batch_id = _batch_of(client, [_task("t-ok", "Free some disk", ["du -sh /var/log"])], [rejection], "preference_pairs")
+
+    body = client.get(f"/api/task-factory/batches/{batch_id}/export").json()
+
+    assert body["preference_pairs"] == []
+    assert body["rejections"] == []
+    assert "rm -rf /" not in json.dumps(body)
+
+
+def test_a_batch_export_without_a_working_gate_is_refused(client, monkeypatch):
+    batch_id = _batch_of(client, [_task("t-ok", "List logs", ["ls /var/log"])])
+    monkeypatch.setenv("FORGE_ADULT_THRESHOLD", "5")
+
+    response = client.get(f"/api/task-factory/batches/{batch_id}/export")
+
+    assert response.status_code == 503
+    assert "FORGE_ADULT_THRESHOLD" in response.json()["detail"]

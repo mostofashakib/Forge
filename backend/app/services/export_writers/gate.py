@@ -43,6 +43,7 @@ class DatasetGate:
             "findings": [{"rule": f.rule, "detail": f.detail} for f in result.findings],
             "record": result.record,
         }
+        self._quarantine_path.parent.mkdir(parents=True, exist_ok=True)
         with self._quarantine_path.open("a") as handle:
             handle.write(json.dumps(entry) + "\n")
         return None

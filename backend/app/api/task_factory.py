@@ -12,9 +12,11 @@ from backend.app.api._pubsub_relay import stream_channel
 from backend.app.database import get_db, get_session_factory
 from backend.app.models import TaskBatch
 from backend.app.services import task_registry
+from backend.app.services.download_gate import download_gate
 from backend.app.services.env_file import environ_with_saved
 from backend.app.services.task_factory_targets import list_targets
 from backend.app.worker.task_factory import channel_for, create_task_batch_task
+from forge.safety.config import SafetyConfigError
 from forge.settings import redis_url
 from forge.taskfactory.model_settings import VALIDATOR_VARS, TaskFactoryConfigError, require_sdks, resolve_models
 from forge.taskfactory.pipeline import MAX_COUNT, MAX_K, MIN_COUNT, MIN_K, preference_pairs
@@ -95,6 +97,16 @@ def export_batch(batch_id: str, db: Session = Depends(get_db)) -> JSONResponse:
         raise HTTPException(status_code=404, detail="batch not found")
     if detail["version"] is None:
         raise HTTPException(status_code=409, detail="only a saved batch can be exported")
+    try:
+        gate = download_gate(detail["env_name"], f"batch-{batch_id}")
+    except SafetyConfigError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    # Every task and rejected draft is a dataset row, screened before pairs are built from them.
+    for rows, kind in (("tasks", "task"), ("rejections", "rejection")):
+        detail[rows] = [
+            kept for row in detail.get(rows, [])
+            if (kept := gate.admit(row, f"batch {batch_id} {kind}")) is not None
+        ]
     data_type = detail.get("data_type", "rl_tasks")
     if data_type == "preference_pairs":
         detail["preference_pairs"] = _exported_pairs(detail)
@@ -109,6 +121,7 @@ def export_batch(batch_id: str, db: Session = Depends(get_db)) -> JSONResponse:
             for task in detail.get("tasks", [])
         ]
 
+    detail["safety"] = gate.stats()
     date = (detail["created_at"] or "")[:10]
     filename = f"{detail['env_name']}-{data_type}-v{detail['version']}-{date}.json"
     return JSONResponse(detail, headers={"Content-Disposition": f'attachment; filename="{filename}"'})
