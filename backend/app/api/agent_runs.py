@@ -12,7 +12,9 @@ from sqlalchemy.orm import Session
 
 from backend.app.database import get_db
 from backend.app.models import AgentRun, AgentEpisode, SandboxEnvironment
+from backend.app.services.download_gate import download_gate, screened_lines
 from backend.app.services.trajectory_files import iter_trajectory_lines, read_trajectory
+from forge.safety.config import SafetyConfigError
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/sandbox", tags=["agent-runs"])
@@ -189,8 +191,12 @@ def get_trajectory(env_name: str, run_id: str, episode_id: str, db: Session = De
 
 @router.get("/{env_name}/agent-runs/{run_id}/export")
 def export_trajectories(env_name: str, run_id: str, db: Session = Depends(get_db)):
-    """Return all completed episode trajectories concatenated as JSONL text."""
+    """Return all completed episode trajectories concatenated as JSONL text, screened row by row."""
     _require_run(env_name, run_id, db)
+    try:
+        gate = download_gate(env_name, f"run-{run_id[:8]}")
+    except SafetyConfigError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     paths = (
         db.query(AgentEpisode.jsonl_path)
@@ -200,7 +206,7 @@ def export_trajectories(env_name: str, run_id: str, db: Session = Depends(get_db
     )
 
     return StreamingResponse(
-        iter_trajectory_lines(Path(path) for (path,) in paths if path),
+        screened_lines(iter_trajectory_lines(Path(path) for (path,) in paths if path), gate, f"run {run_id}"),
         media_type="application/x-ndjson",
         headers={"Content-Disposition": f'attachment; filename="run_{run_id[:8]}_trajectories.jsonl"'},
     )

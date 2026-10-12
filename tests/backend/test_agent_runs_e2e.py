@@ -32,6 +32,7 @@ from sqlalchemy.orm import Session
 
 from backend.app.database import Base
 from backend.app.models import SandboxEnvironment, AgentRun, AgentEpisode
+from tests.backend.safety_helpers import use_safety_env
 
 
 # ---------------------------------------------------------------------------
@@ -43,6 +44,7 @@ def client(tmp_path, monkeypatch):
     """TestClient backed by an isolated in-memory SQLite DB."""
     monkeypatch.setenv("FORGE_DB_URL", f"sqlite:///{tmp_path}/test.db")
     monkeypatch.setenv("FORGE_GENERATED_ENVS_DIR", str(tmp_path / "generated_envs"))
+    use_safety_env(monkeypatch)
     from backend.app import database
     database._engine = None
     database._SessionLocal = None
@@ -1097,3 +1099,42 @@ def test_browser_episode_reaches_devtools_through_the_gateway(client):
         tasks.run_container_episode_task("run_web", 0, 0)
 
     assert runner_cls.call_args.args[0].cdp_url == f"http://localhost:{cdp_port}"
+
+
+SECRET = "sk-ant-api03-AbCdEfGhIjKlMnOpQrStUv_wxyz"
+EXPORT_URL = "/api/sandbox/file_env/agent-runs/file_run/export"
+
+
+def test_trajectory_export_drops_harmful_steps_and_redacts_secrets(client, tmp_path):
+    _recorded_trajectory(tmp_path, "\n".join(json.dumps(step) for step in [
+        {"step_index": 0, "action": f"export API_KEY={SECRET}"},
+        {"step_index": 1, "action": "rm -rf /"},
+        {"step_index": 2, "action": "ls /var/log"},
+    ]))
+
+    response = client.get(EXPORT_URL)
+
+    records = [json.loads(line) for line in response.text.splitlines() if line]
+    assert response.status_code == 200
+    assert [r["step_index"] for r in records] == [0, 2]
+    assert SECRET not in response.text and "rm -rf /" not in response.text
+    quarantine = list((tmp_path / "generated_envs" / "file_env" / "exports" / "downloads").glob("*/safety_quarantine.jsonl"))
+    assert len(quarantine) == 1 and "rm -rf /" in quarantine[0].read_text()
+
+
+def test_trajectory_export_drops_lines_it_cannot_screen(client, tmp_path):
+    _recorded_trajectory(tmp_path, '{"step_index": 0}\n{broken\n[1, 2]\n{"step_index": 1}')
+
+    records = [json.loads(line) for line in client.get(EXPORT_URL).text.splitlines() if line]
+
+    assert [r["step_index"] for r in records] == [0, 1]
+
+
+def test_trajectory_export_without_a_working_gate_is_refused(client, tmp_path, monkeypatch):
+    _recorded_trajectory(tmp_path, '{"step_index": 0}')
+    monkeypatch.setenv("FORGE_ADULT_THRESHOLD", "5")
+
+    response = client.get(EXPORT_URL)
+
+    assert response.status_code == 503
+    assert "FORGE_ADULT_THRESHOLD" in response.json()["detail"]
