@@ -16,13 +16,6 @@ from forge.contracts.episode import (
     TrajectoryWriter,
 )
 from forge.contracts.evaluation import EpisodeEvaluation
-from forge.contracts.inference import (
-    InferenceBatchRequest,
-    InferenceBatchResponse,
-    InferenceProvider,
-    InferenceRequest,
-    InferenceResponse,
-)
 from forge.contracts.initial_state import InitialStateProvider
 from forge.contracts.observation import ObservationEncoder
 from forge.contracts.persona import (
@@ -108,11 +101,6 @@ __all__ = [
     "ExecutionBackend",
     "FirecrackerVMConfig",
     "GroupVerificationSpec",
-    "InferenceBatchRequest",
-    "InferenceBatchResponse",
-    "InferenceProvider",
-    "InferenceRequest",
-    "InferenceResponse",
     "InitialStateProvider",
     "InitialTest",
     "InitialTestSuite",

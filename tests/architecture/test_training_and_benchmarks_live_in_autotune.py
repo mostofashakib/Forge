@@ -37,3 +37,12 @@ def test_the_cli_has_no_benchmark_command():
     result = CliRunner().invoke(cli_app, ["benchmark", "--help"])
     assert result.exit_code != 0
     assert "No such command" in result.output
+
+
+def test_forge_declares_no_model_inference_contracts():
+    import importlib.util
+
+    import forge.contracts
+
+    assert importlib.util.find_spec("forge.contracts.inference") is None
+    assert not [name for name in forge.contracts.__all__ if name.startswith("Inference")]
