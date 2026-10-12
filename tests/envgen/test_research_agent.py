@@ -11,7 +11,7 @@ from forge.envgen.research import (
     UserResearchAgent,
     WebDocument,
 )
-from forge.extraction.llm_client import MockLLMClient
+from tests.fake_llm import MockLLMClient
 from forge.extraction.schemas import ActionDef, CompilerInput, EntityDef, FieldDef
 
 

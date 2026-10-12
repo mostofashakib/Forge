@@ -1,6 +1,6 @@
 from forge.extraction.task_generator import TaskGenerator
 from forge.extraction.prompts import TaskExtractionResult
-from forge.extraction.llm_client import MockLLMClient
+from tests.fake_llm import MockLLMClient
 from forge.extraction.schemas import TaskTemplate, SuccessCondition
 
 

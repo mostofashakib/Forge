@@ -1,37 +1,6 @@
-"""Tests for the inference contracts and the durable task queue."""
+"""Tests for the durable task queue."""
 import time
-import pytest
-from forge.contracts.inference import (
-    InferenceBatchRequest,
-    InferenceRequest,
-    InferenceResponse,
-)
-from forge.runtime.distributed import (
-    DurableTaskQueue,
-    MockInferenceProvider,
-)
-
-
-def test_inference_contracts_and_mock_provider():
-    provider = MockInferenceProvider(default_response="Mock output")
-
-    req = InferenceRequest(model="test-llm", prompt="Hello distributed agent")
-    res = provider.generate(req)
-    assert isinstance(res, InferenceResponse)
-    assert res.model == "test-llm"
-    assert "Processed prompt: Hello distributed" in res.content
-    assert res.latency_ms >= 0
-
-    batch = InferenceBatchRequest(
-        requests=[
-            InferenceRequest(model="test-llm", prompt="prompt 1"),
-            InferenceRequest(model="test-llm", prompt="prompt 2"),
-        ]
-    )
-    b_res = provider.generate_batch(batch)
-    assert len(b_res.responses) == 2
-    assert "prompt 1" in b_res.responses[0].content
-    assert "prompt 2" in b_res.responses[1].content
+from forge.runtime.distributed import DurableTaskQueue
 
 
 def test_durable_queue_retries_and_wallclock_truncation():

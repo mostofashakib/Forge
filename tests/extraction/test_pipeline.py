@@ -1,5 +1,5 @@
 from forge.extraction.pipeline import ExtractionPipeline
-from forge.extraction.llm_client import MockLLMClient
+from tests.fake_llm import MockLLMClient
 from forge.extraction.prompts import (
     EntityExtractionResult,
     ActionExtractionResult,

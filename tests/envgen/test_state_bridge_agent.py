@@ -3,7 +3,7 @@ from pydantic import ValidationError
 from forge.envgen.agents.state_bridge import StateBridgeAgent, StateBridgeOutput
 from forge.envgen.artifact_bus import ArtifactBus
 from forge.envgen.context import EnvGenContext
-from forge.extraction.llm_client import MockLLMClient
+from tests.fake_llm import MockLLMClient
 from forge.extraction.schemas import CompilerInput, ActionDef
 from forge.schema.state_schema import StateSchemaManifest, FieldSpec
 

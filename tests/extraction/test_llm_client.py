@@ -1,6 +1,7 @@
 import pytest
 from pydantic import BaseModel
-from forge.extraction.llm_client import MockLLMClient, LLMClient
+from forge.extraction.llm_client import LLMClient
+from tests.fake_llm import MockLLMClient
 from forge.extraction.schemas import EntityDef, FieldDef
 from forge.extraction.llm_client import LLMPromptFormatter
 
@@ -28,7 +29,7 @@ def test_mock_client_satisfies_llmclient_protocol():
 
 
 def test_mock_retry_client_fails_then_succeeds():
-    from forge.extraction.llm_client import RetryMockLLMClient
+    from tests.fake_llm import RetryMockLLMClient
     response = _SimpleSchema(value="ok")
     client = RetryMockLLMClient(fail_times=2, then_return={"_SimpleSchema": response})
     result = client.extract("s", "u", _SimpleSchema)

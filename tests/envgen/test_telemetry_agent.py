@@ -3,7 +3,7 @@ from forge.envgen.agents.telemetry import TelemetryAgent
 from forge.envgen.artifact_bus import ArtifactBus
 from forge.envgen.context import EnvGenContext
 from forge.envgen.schemas import GeneratedApp, FileContent
-from forge.extraction.llm_client import MockLLMClient
+from tests.fake_llm import MockLLMClient
 from forge.extraction.schemas import CompilerInput
 
 

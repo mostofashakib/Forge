@@ -1,6 +1,6 @@
 from forge.extraction.action_inferencer import ActionInferencer
 from forge.extraction.prompts import ActionExtractionResult
-from forge.extraction.llm_client import MockLLMClient
+from tests.fake_llm import MockLLMClient
 from forge.extraction.schemas import ActionDef, ActionParam, EntityDef
 
 

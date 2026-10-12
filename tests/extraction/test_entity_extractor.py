@@ -1,6 +1,6 @@
 from forge.extraction.entity_extractor import EntityExtractor
 from forge.extraction.prompts import EntityExtractionResult
-from forge.extraction.llm_client import MockLLMClient
+from tests.fake_llm import MockLLMClient
 from forge.extraction.schemas import EntityDef, FieldDef
 
 

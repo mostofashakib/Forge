@@ -1,12 +1,6 @@
-"""Distributed parallel runs package: durable queues, inference, and rollout runners."""
+"""Distributed parallel runs package: durable queues and rollout runners."""
 from __future__ import annotations
 
-from forge.runtime.distributed.inference import (
-    InferenceProvider,
-    InferenceRequest,
-    InferenceResponse,
-    MockInferenceProvider,
-)
 from forge.runtime.distributed.partitioner import DeterministicSeedPartitioner
 from forge.runtime.distributed.queue import (
     DEFAULT_MAX_RETRIES,
@@ -35,10 +29,6 @@ def run_parallel_rollouts(*args, **kwargs):
 __all__ = [
     "DurableQueueItem",
     "DurableTaskQueue",
-    "InferenceProvider",
-    "InferenceRequest",
-    "InferenceResponse",
-    "MockInferenceProvider",
     "DeterministicSeedPartitioner",
     "DistributedRolloutBatch",
     "DistributedParallelRolloutRunner",

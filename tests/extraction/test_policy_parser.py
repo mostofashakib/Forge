@@ -1,6 +1,6 @@
 from forge.extraction.policy_parser import PolicyParser
 from forge.extraction.prompts import PolicyExtractionResult
-from forge.extraction.llm_client import MockLLMClient
+from tests.fake_llm import MockLLMClient
 from forge.extraction.schemas import PolicyRule
 
 

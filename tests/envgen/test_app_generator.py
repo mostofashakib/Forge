@@ -3,7 +3,7 @@ from forge.envgen.agents.app_generator import AppGeneratorAgent, AppGeneratorPro
 from forge.envgen.artifact_bus import ArtifactBus
 from forge.envgen.context import EnvGenContext
 from forge.envgen.schemas import AppPlan, FilePlan, GeneratedFile
-from forge.extraction.llm_client import MockLLMClient
+from tests.fake_llm import MockLLMClient
 from forge.extraction.schemas import (
     CompilerInput, EntityDef, FieldDef, ActionDef, TaskTemplate, SuccessCondition,
 )
