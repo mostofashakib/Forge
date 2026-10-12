@@ -37,7 +37,7 @@ VERIFIERS = [
 ]
 TRAINING = sorted(
     str(p.relative_to(ROOT))
-    for d in ("backend/app/services/export_writers", "forge/benchmark")
+    for d in ("backend/app/services/export_writers",)
     for p in (ROOT / d).glob("*.py")
 )
 

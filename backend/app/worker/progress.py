@@ -1,4 +1,4 @@
-"""Progress reporting for long-running jobs: Redis pub/sub messages and BenchmarkRun status."""
+"""Progress reporting for long-running jobs over Redis pub/sub."""
 from __future__ import annotations
 
 import json
@@ -29,29 +29,3 @@ def progress_publisher(client, channel: str, tag: str):
             logger.debug("[task:%s] progress publish failed", tag, exc_info=True)
 
     return publish
-
-def update_benchmark_run(
-    run_id: str,
-    status: str,
-    error: str | None = None,
-    report_json: str | None = None,
-) -> None:
-    from backend.app.database import get_session_factory
-    from backend.app.models import BenchmarkRun
-    from datetime import datetime, timezone
-
-    try:
-        SessionLocal = get_session_factory()
-        with SessionLocal() as db:
-            run = db.get(BenchmarkRun, run_id)
-            if run:
-                run.status = status
-                if error is not None:
-                    run.error = error
-                if report_json is not None:
-                    run.report_json = report_json
-                if status in ("done", "failed"):
-                    run.completed_at = datetime.now(timezone.utc)
-                db.commit()
-    except Exception as exc:
-        logger.error("[task:benchmark] DB update failed for %s: %s", run_id, exc)

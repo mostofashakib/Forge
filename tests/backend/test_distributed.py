@@ -109,29 +109,6 @@ def test_distributed_environment_scheduler_concurrency():
 
 
 def test_distributed_api_endpoints(client):
-    # 1. Test single inference API
-    inf_res = client.post(
-        "/api/distributed/inference",
-        json={"model": "deepseek-coder", "prompt": "def solve(): pass"},
-    )
-    assert inf_res.status_code == 200
-    inf_data = inf_res.json()
-    assert inf_data["model"] == "deepseek-coder"
-    assert "solve" in inf_data["content"]
-
-    # 2. Test batch inference API
-    batch_res = client.post(
-        "/api/distributed/inference/batch",
-        json={
-            "requests": [
-                {"model": "deepseek-coder", "prompt": "task 1"},
-                {"model": "deepseek-coder", "prompt": "task 2"},
-            ]
-        },
-    )
-    assert batch_res.status_code == 200
-    assert len(batch_res.json()["responses"]) == 2
-
     # 3. Test queue enqueue, dequeue, complete
     enq_res = client.post(
         "/api/distributed/queue/enqueue",

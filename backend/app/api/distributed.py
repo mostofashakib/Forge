@@ -1,42 +1,20 @@
-"""Distributed training routes for inference API contracts, durable queues, and concurrent environment scheduling (Feature Request 8)."""
+"""Distributed rollout routes: a durable task queue and concurrent environment scheduling."""
 from __future__ import annotations
 
-from typing import Any, Literal
-from fastapi import APIRouter, HTTPException, Query
+from typing import Any
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from forge.contracts.gpu import (
-    APIGatewaySpec,
-    GPUInferenceContract,
-    InferenceMode,
-    compute_status,
-)
-from forge.contracts.inference import (
-    InferenceBatchRequest,
-    InferenceBatchResponse,
-    InferenceRequest,
-    InferenceResponse,
-)
 from forge.runtime.distributed import (
     DistributedEnvironmentScheduler,
     DurableTaskQueue,
 )
-from forge.runtime.gpu_inference import HybridGPUInferenceEngine
 
 router = APIRouter(prefix="/api/distributed", tags=["distributed"])
 
 # Shared singleton instances for distributed orchestration
 _queue = DurableTaskQueue()
 _scheduler = DistributedEnvironmentScheduler(max_concurrent_environments=4)
-
-
-def _get_inference_engine(
-    mode: str = "auto", gateway_url: str | None = None
-) -> HybridGPUInferenceEngine:
-    parsed_mode = InferenceMode(mode) if mode in ("local_gpu", "api_gateway", "auto") else InferenceMode.AUTO
-    gw_spec = APIGatewaySpec(endpoint_url=gateway_url) if gateway_url else APIGatewaySpec()
-    contract = GPUInferenceContract(mode=parsed_mode, api_gateway_spec=gw_spec)
-    return HybridGPUInferenceEngine(contract)
 
 
 class EnqueueRequest(BaseModel):
@@ -64,43 +42,6 @@ class AcquireSlotRequest(BaseModel):
 
 class ReleaseSlotRequest(BaseModel):
     slot_id: str
-
-
-# --- Inference API Endpoints ---
-
-
-@router.get("/hardware")
-def get_hardware_status() -> dict[str, Any]:
-    """Inspect local GPU accelerators (CUDA/MPS) and cloud gateway connectivity."""
-    return compute_status()
-
-
-@router.post("/inference", response_model=InferenceResponse)
-def run_inference(
-    request: InferenceRequest,
-    mode: Literal["auto", "local_gpu", "api_gateway"] = Query(default="auto"),
-    gateway_url: str | None = Query(default=None),
-) -> InferenceResponse:
-    """Execute a single inference request across local GPU or cloud API gateway."""
-    try:
-        engine = _get_inference_engine(mode=mode, gateway_url=gateway_url)
-        return engine.generate(request)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
-
-
-@router.post("/inference/batch", response_model=InferenceBatchResponse)
-def run_inference_batch(
-    batch: InferenceBatchRequest,
-    mode: Literal["auto", "local_gpu", "api_gateway"] = Query(default="auto"),
-    gateway_url: str | None = Query(default=None),
-) -> InferenceBatchResponse:
-    """Execute a batch of inference requests across local GPU or cloud API gateway."""
-    try:
-        engine = _get_inference_engine(mode=mode, gateway_url=gateway_url)
-        return engine.generate_batch(batch)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
 
 
 # --- Durable Task Queue Endpoints ---

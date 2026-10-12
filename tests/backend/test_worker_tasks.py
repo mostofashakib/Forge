@@ -3,12 +3,11 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
-from backend.app.worker import benchmark_tasks, env_artifacts, rollout_tasks, tasks
-from forge.benchmark.env_quality import EnvQualityMetrics
+from backend.app.worker import env_artifacts, rollout_tasks, tasks
 from forge.schema.state_schema import StateSchemaManifest
 
 MANIFEST = StateSchemaManifest(env_name="mail", fields={"inbox": {"type": "array"}})
@@ -31,140 +30,18 @@ def test_load_manifest_reports_a_corrupt_schema(tmp_path, caplog):
 
 
 @pytest.fixture
-def benchmark_db(tmp_path, monkeypatch):
-    monkeypatch.setenv("FORGE_DB_URL", f"sqlite:///{tmp_path}/bench.db")
+def worker_db(tmp_path, monkeypatch):
+    monkeypatch.setenv("FORGE_DB_URL", f"sqlite:///{tmp_path}/worker.db")
     monkeypatch.setenv("FORGE_GENERATED_ENVS_DIR", str(tmp_path / "envs"))
     from backend.app import database
     monkeypatch.setattr(database, "_engine", None)
     monkeypatch.setattr(database, "_SessionLocal", None)
     database.init_db()
-    from backend.app.models import BenchmarkRun
-    with database.get_session_factory()() as db:
-        db.add(BenchmarkRun(
-            id="bm_1", status="queued", domains="mail", depth=1, seeds=3,
-            output_dir=str(tmp_path / "out"), created_at=datetime.now(timezone.utc),
-        ))
-        db.commit()
     env_dir = tmp_path / "envs" / "mail"
     env_dir.mkdir(parents=True)
     (env_dir / "state_schema.json").write_text(MANIFEST.model_dump_json())
     (env_dir / "port").write_text("9100")
     return tmp_path
-
-
-def test_benchmark_parses_each_manifest_once(benchmark_db):
-    task = SimpleNamespace(domain="mail", name="triage", objective="o")
-
-    class _Collector:
-        def __init__(self, *_args, **_kwargs):
-            pass
-
-        def pending_runs(self, _checkpoint):
-            return [{"task": task, "seed": seed} for seed in range(3)]
-
-        def collect(self, run_episode):
-            for seed in range(3):
-                run_episode(task, seed, benchmark_db / f"ep{seed}.jsonl")
-
-    runner = MagicMock()
-    runner.__enter__.return_value.run_episode.return_value = SimpleNamespace(
-        total_reward=1.0, termination_reason="done"
-    )
-    quality = EnvQualityMetrics(
-        env_name="mail", state_coverage_score=1.0, reward_density=0.0,
-        dead_end_rate=0.0, action_diversity=0.0, num_episodes=3, num_steps=3,
-    )
-    parse = MagicMock(wraps=StateSchemaManifest.model_validate_json)
-
-    with patch("redis.from_url"), \
-         patch("forge.benchmark.data_collector.DataCollector", _Collector), \
-         patch("forge.benchmark.compiled_tasks.CompiledTaskProvider"), \
-         patch("forge.envgen.episode_runner.ContainerEpisodeRunner", return_value=runner), \
-         patch("forge.envgen.agents.container_agent.make_container_agent"), \
-         patch("forge.benchmark.env_quality.compute_env_quality", return_value=quality), \
-         patch("forge.benchmark.report.BenchmarkReport"), \
-         patch.object(StateSchemaManifest, "model_validate_json", parse):
-        tasks.run_benchmark_task.apply(
-            args=["bm_1", ["mail"], 1, 3, str(benchmark_db / "out")]
-        )
-
-    from backend.app import database
-    from backend.app.models import BenchmarkRun
-    with database.get_session_factory()() as db:
-        assert db.get(BenchmarkRun, "bm_1").status == "done"
-    assert runner.__enter__.return_value.run_episode.call_count == 3
-    assert parse.call_count == 1
-
-
-def test_benchmark_survives_and_logs_a_failing_progress_publish(benchmark_db, caplog):
-    redis_client = MagicMock()
-    redis_client.publish.side_effect = ConnectionError("redis went away")
-
-    with patch("redis.from_url", return_value=redis_client), \
-         patch("forge.benchmark.compiled_tasks.CompiledTaskProvider"), \
-         patch("forge.benchmark.data_collector.DataCollector") as collector, \
-         patch("forge.benchmark.report.BenchmarkReport"), \
-         caplog.at_level(logging.DEBUG, logger="backend.app.worker.tasks"):
-        collector.return_value.pending_runs.return_value = []
-        tasks.run_benchmark_task.apply(args=["bm_1", ["mail"], 1, 3, str(benchmark_db / "out")])
-
-    from backend.app import database
-    from backend.app.models import BenchmarkRun
-    with database.get_session_factory()() as db:
-        assert db.get(BenchmarkRun, "bm_1").status == "done"
-    assert "progress publish failed" in caplog.text
-
-
-def test_benchmark_episodes_hold_their_environment_lock(benchmark_db):
-    # A benchmark drives the same container an agent run might be using, so
-    # it takes the same per-environment lock around every episode.
-    from contextlib import contextmanager
-
-    task = SimpleNamespace(domain="mail", name="triage", objective="o")
-    held: list[str] = []
-    seen_while_running: list[list[str]] = []
-
-    @contextmanager
-    def fake_lock(_redis_client, env_name):
-        held.append(env_name)
-        try:
-            yield
-        finally:
-            held.remove(env_name)
-
-    class _Collector:
-        def __init__(self, *_args, **_kwargs):
-            pass
-
-        def pending_runs(self, _checkpoint):
-            return [{"task": task, "seed": 0}]
-
-        def collect(self, run_episode):
-            run_episode(task, 0, benchmark_db / "ep0.jsonl")
-
-    runner = MagicMock()
-    runner.__enter__.return_value.run_episode.side_effect = (
-        lambda *a, **k: seen_while_running.append(list(held))
-        or SimpleNamespace(total_reward=0.0, termination_reason="done")
-    )
-    quality = EnvQualityMetrics(
-        env_name="mail", state_coverage_score=1.0, reward_density=0.0,
-        dead_end_rate=0.0, action_diversity=0.0, num_episodes=1, num_steps=1,
-    )
-    with patch.object(benchmark_tasks, "exclusive_environment", fake_lock), \
-         patch("redis.from_url"), \
-         patch("forge.benchmark.data_collector.DataCollector", _Collector), \
-         patch("forge.benchmark.compiled_tasks.CompiledTaskProvider"), \
-         patch("forge.envgen.episode_runner.ContainerEpisodeRunner", return_value=runner), \
-         patch("forge.envgen.agents.container_agent.make_container_agent"), \
-         patch("forge.benchmark.env_quality.compute_env_quality", return_value=quality), \
-         patch("forge.benchmark.report.BenchmarkReport"):
-        tasks.run_benchmark_task.apply(
-            args=["bm_1", ["mail"], 1, 1, str(benchmark_db / "out")]
-        )
-
-    assert seen_while_running == [["mail"]]
-    assert held == []
 
 
 # ---------------------------------------------------------------------------
@@ -209,7 +86,7 @@ def declares_triage(monkeypatch):
     monkeypatch.setattr(rollout_tasks, "forge_env_builder", _env_declaring("triage", "archive"))
 
 
-def test_rollout_episode_crash_is_classified_and_completes_the_job(benchmark_db, declares_triage):
+def test_rollout_episode_crash_is_classified_and_completes_the_job(worker_db, declares_triage):
     _add_rollout_job("rj_crash", num_episodes=1)
 
     with patch(
@@ -223,7 +100,7 @@ def test_rollout_episode_crash_is_classified_and_completes_the_job(benchmark_db,
     assert episodes == [("failed", "infrastructure", False)]
 
 
-def test_rollout_episode_that_hits_its_budget_is_truncated(benchmark_db, declares_triage):
+def test_rollout_episode_that_hits_its_budget_is_truncated(worker_db, declares_triage):
     _add_rollout_job("rj_budget", num_episodes=2)
     result = SimpleNamespace(termination_reason="max_steps")
 
@@ -235,7 +112,7 @@ def test_rollout_episode_that_hits_its_budget_is_truncated(benchmark_db, declare
     assert episodes == [("truncated", None, True)]
 
 
-def test_rollout_episode_that_submits_keeps_its_running_status(benchmark_db, declares_triage):
+def test_rollout_episode_that_submits_keeps_its_running_status(worker_db, declares_triage):
     # False-positive guard: only budget reasons truncate.
     _add_rollout_job("rj_done", num_episodes=1)
     result = SimpleNamespace(termination_reason="submitted")
@@ -248,7 +125,7 @@ def test_rollout_episode_that_submits_keeps_its_running_status(benchmark_db, dec
     assert episodes == [("running", None, True)]
 
 
-def test_rollout_dispatch_failure_marks_the_job_failed(benchmark_db):
+def test_rollout_dispatch_failure_marks_the_job_failed(worker_db):
     from backend.app import database
     from backend.app.models import RolloutJob
 
@@ -260,36 +137,6 @@ def test_rollout_dispatch_failure_marks_the_job_failed(benchmark_db):
         job = db.get(RolloutJob, "rj_broker")
         assert (job.status, job.error) == ("failed", "broker down")
         assert job.completed_at is not None
-
-
-def test_evaluation_fails_the_run_when_redis_is_unreachable(benchmark_db):
-    from backend.app import database
-    from backend.app.models import BenchmarkRun
-
-    redis_client = MagicMock()
-    redis_client.ping.side_effect = ConnectionError("no redis")
-    with patch("redis.from_url", return_value=redis_client):
-        tasks.run_evaluation_task("bm_1", "forge", {})
-
-    with database.get_session_factory()() as db:
-        run = db.get(BenchmarkRun, "bm_1")
-        assert (run.status, run.error) == ("failed", "no redis")
-
-
-def test_evaluation_rejects_an_unknown_engine(benchmark_db):
-    from backend.app import database
-    from backend.app.models import BenchmarkRun
-
-    redis_client = MagicMock()
-    with patch("redis.from_url", return_value=redis_client):
-        tasks.run_evaluation_task("bm_1", "nope", {})
-
-    with database.get_session_factory()() as db:
-        run = db.get(BenchmarkRun, "bm_1")
-        assert run.status == "failed"
-        assert "unsupported evaluation engine" in run.error
-    published = [c.args[1] for c in redis_client.publish.call_args_list]
-    assert any("unsupported evaluation engine" in m for m in published)
 
 
 def test_every_task_keeps_its_registered_queue_name():
@@ -304,19 +151,6 @@ def test_every_task_keeps_its_registered_queue_name():
     assert {getattr(tasks, name).name for name in tasks.__all__} == expected
 
 
-# ---------------------------------------------------------------------------
-# Transfer evaluation reports only what an evaluator measured
-# ---------------------------------------------------------------------------
-
-def _benchmark_run(run_id: str):
-    from backend.app import database
-    from backend.app.models import BenchmarkRun
-
-    with database.get_session_factory()() as db:
-        run = db.get(BenchmarkRun, run_id)
-        return run.status, run.error, run.report_json
-
-
 def _rollout_failure(job_id: str):
     from backend.app import database
     from backend.app.models import Episode
@@ -326,7 +160,7 @@ def _rollout_failure(job_id: str):
         return episode.status, episode.failure_type, episode.failure_reason, episode.task_name
 
 
-def test_a_rollout_for_an_undeclared_task_fails_instead_of_running_another(benchmark_db, monkeypatch):
+def test_a_rollout_for_an_undeclared_task_fails_instead_of_running_another(worker_db, monkeypatch):
     monkeypatch.setattr(rollout_tasks, "forge_env_builder", _env_declaring("archive", "reply"))
     _add_rollout_job("rj_unknown", num_episodes=1)
 
@@ -363,7 +197,7 @@ def test_an_env_without_declared_tasks_runs_the_name_as_its_objective():
     }
 
 
-def test_an_env_that_fails_to_build_is_still_classified_by_the_retry_path(benchmark_db, monkeypatch):
+def test_an_env_that_fails_to_build_is_still_classified_by_the_retry_path(worker_db, monkeypatch):
     def broken_builder(env_name):
         raise RuntimeError("Environment 'mail' violates network policy")
 

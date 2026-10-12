@@ -148,7 +148,7 @@ def _gateway_port(runtime: ContainerRuntime, container, env_name: str, container
 def _in_process_target(env_name: str) -> Target:
     from backend.app.database import get_session_factory
     from backend.app.utils.env_loader import forge_env_builder
-    from forge.benchmark.compiled_tasks import db_compiler_input_loader
+    from backend.app.services.compiler_inputs import db_compiler_input_loader
 
     build = forge_env_builder(env_name)
 

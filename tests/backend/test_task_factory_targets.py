@@ -147,7 +147,7 @@ def test_in_process_tools_show_parameter_types_and_allowed_values(db, envs_dir, 
         policies=[], tasks=[],
     )
     monkeypatch.setattr(
-        "forge.benchmark.compiled_tasks.db_compiler_input_loader", lambda factory: lambda name: compiled,
+        "backend.app.services.compiler_inputs.db_compiler_input_loader", lambda factory: lambda name: compiled,
     )
 
     with open_target(db, "ledger", "tb_1") as target:

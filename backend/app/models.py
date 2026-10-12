@@ -183,26 +183,6 @@ class SandboxEnvironment(Base):
     validation_missing_fields: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
-class BenchmarkRun(Base):
-    __tablename__ = "benchmark_runs"
-
-    id: Mapped[str] = mapped_column(String, primary_key=True)
-    status: Mapped[str] = mapped_column(String, default="queued")
-    domains: Mapped[str] = mapped_column(String)
-    depth: Mapped[int] = mapped_column(Integer)
-    seeds: Mapped[int] = mapped_column(Integer)
-    output_dir: Mapped[str] = mapped_column(String)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(timezone.utc)
-    )
-    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    error: Mapped[str | None] = mapped_column(Text, nullable=True)
-    report_json: Mapped[str | None] = mapped_column(Text, nullable=True)
-    kind: Mapped[str] = mapped_column(String, default="benchmark")
-    engine: Mapped[str] = mapped_column(String, default="forge")
-    config_json: Mapped[str | None] = mapped_column(Text, nullable=True)
-
-
 class TaskBatch(Base):
     """One versioned batch of synthetic tasks for an environment.
 

@@ -87,18 +87,6 @@ def init_db() -> None:
         for col_name, stmt in agent_ep_migrations.items():
             if col_name not in agent_ep_columns:
                 conn.execute(text(stmt))
-        benchmark_columns = {
-            column["name"] for column in inspect(conn).get_columns("benchmark_runs")
-        }
-        benchmark_migrations = {
-            "kind": "ALTER TABLE benchmark_runs ADD COLUMN kind TEXT DEFAULT 'benchmark'",
-            "engine": "ALTER TABLE benchmark_runs ADD COLUMN engine TEXT DEFAULT 'forge'",
-            "config_json": "ALTER TABLE benchmark_runs ADD COLUMN config_json TEXT",
-        }
-        for column_name, statement in benchmark_migrations.items():
-            if column_name not in benchmark_columns:
-                conn.execute(text(statement))
-
         table_names = set(inspect(conn).get_table_names())
         if "task_batches" in table_names:
             batch_columns = {

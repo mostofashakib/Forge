@@ -7,7 +7,6 @@ composes the ten that describe an environment's state and behavior.
 from the outside — the same environment may be run by different controllers.
 """
 from forge.contracts.backend import ExecutionBackend, TransitionHandler
-from forge.contracts.checkpoint import PolicyCheckpoint
 from forge.contracts.dataset import TaskSource, normalize_task
 from forge.contracts.environment import Environment
 from forge.contracts.episode import (
@@ -17,12 +16,6 @@ from forge.contracts.episode import (
     TrajectoryWriter,
 )
 from forge.contracts.evaluation import EpisodeEvaluation
-from forge.contracts.gpu import (
-    APIGatewaySpec,
-    GPUDeviceSpec,
-    GPUInferenceContract,
-    InferenceMode,
-)
 from forge.contracts.inference import (
     InferenceBatchRequest,
     InferenceBatchResponse,
@@ -114,12 +107,9 @@ __all__ = [
     "EpisodeEvaluation",
     "ExecutionBackend",
     "FirecrackerVMConfig",
-    "GPUDeviceSpec",
-    "GPUInferenceContract",
     "GroupVerificationSpec",
     "InferenceBatchRequest",
     "InferenceBatchResponse",
-    "InferenceMode",
     "InferenceProvider",
     "InferenceRequest",
     "InferenceResponse",
@@ -140,7 +130,6 @@ __all__ = [
     "PersonaTraits",
     "PersonaTurn",
     "PersonaView",
-    "PolicyCheckpoint",
     "PromptTemplate",
     "RewardBreakdown",
     "RewardComponent",

@@ -343,24 +343,6 @@ def test_replay_json_output(tmp_path):
     assert data["steps"][0]["action"] == {"type": "act"}
 
 
-def test_benchmark_run_help():
-    result = runner.invoke(app, ["benchmark", "run", "--help"])
-    assert result.exit_code == 0
-    assert "--domains" in result.output
-
-
-def test_benchmark_report_help():
-    result = runner.invoke(app, ["benchmark", "report", "--help"])
-    assert result.exit_code == 0
-    assert "--output" in result.output
-
-
-def test_benchmark_eval_help():
-    result = runner.invoke(app, ["benchmark", "eval", "--help"])
-    assert result.exit_code == 0
-    assert "--suite" in result.output
-
-
 def test_diagnose_early_termination_advice_names_settings_that_stop_episodes(tmp_path):
     """Container runs stop on dead ends and the step budget, never on a score threshold."""
     import datetime

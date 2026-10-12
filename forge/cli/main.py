@@ -284,8 +284,3 @@ def diagnose(
         typer.echo(json.dumps(result.to_dict(), indent=2))
         return
     diagnosis.render(result)
-
-
-from forge.cli.benchmark import benchmark_app  # noqa: E402  (registered after the core commands)
-
-app.add_typer(benchmark_app)
