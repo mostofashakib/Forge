@@ -198,7 +198,9 @@ def test_firecracker_runtime_lifecycle_mocked(tmp_path: Path):
                     with patch.object(FirecrackerClient, "attach_drive") as mock_ad:
                         with patch.object(FirecrackerClient, "attach_network_interface") as mock_ani:
                             with patch.object(FirecrackerClient, "start_instance") as mock_start:
-                                instance_id, port = runtime.run("test-env", image_or_rootfs=str(tmp_path / "rootfs.ext4"))
+                                base = tmp_path / "rootfs.ext4"
+                                base.write_text("rootfs")
+                                instance_id, port = runtime.run("test-env", image_or_rootfs=str(base))
 
                                 assert instance_id.startswith("fc-test-env-")
                                 assert port == 8000
@@ -216,6 +218,51 @@ def test_firecracker_runtime_lifecycle_mocked(tmp_path: Path):
                                 runtime.stop(instance_id)
                                 assert instance_id not in runtime._active_vms
                                 assert mock_proc.terminate.called
+
+
+def _runtime_with_base(tmp_path: Path):
+    mgr = RootfsManager(storage_dir=tmp_path / "images")
+    runtime = FirecrackerMicroVMRuntime(base_socket_dir=tmp_path, rootfs_mgr=mgr)
+    base = tmp_path / "rootfs.ext4"
+    base.write_text("rootfs")
+    proc = MagicMock()
+    return runtime, base, proc
+
+
+def test_a_vm_whose_socket_never_comes_up_fails_and_is_cleaned_up(tmp_path: Path):
+    runtime, base, proc = _runtime_with_base(tmp_path)
+
+    with patch.object(runtime.jailer, "spawn", return_value=proc), \
+            patch.object(runtime, "_wait_for_socket", return_value=False):
+        with pytest.raises(RuntimeError, match="did not become ready"):
+            runtime.run("test-env", image_or_rootfs=str(base))
+
+    assert runtime._active_vms == {}
+    assert proc.terminate.called
+    assert list((tmp_path / "images" / "active").iterdir()) == []
+
+
+def test_a_vm_that_fails_to_boot_raises_and_is_cleaned_up(tmp_path: Path):
+    runtime, base, proc = _runtime_with_base(tmp_path)
+
+    with patch.object(runtime.jailer, "spawn", return_value=proc), \
+            patch.object(runtime, "_wait_for_socket", return_value=True), \
+            patch.object(FirecrackerClient, "set_machine_config", side_effect=FirecrackerAPIError(400, "no kvm")):
+        with pytest.raises(RuntimeError, match="failed to boot"):
+            runtime.run("test-env", image_or_rootfs=str(base))
+
+    assert runtime._active_vms == {}
+    assert proc.terminate.called
+    assert list((tmp_path / "images" / "active").iterdir()) == []
+
+
+def test_cloning_a_missing_base_rootfs_raises_instead_of_making_an_empty_disk(tmp_path: Path):
+    mgr = RootfsManager(storage_dir=tmp_path / "images")
+
+    with pytest.raises(FileNotFoundError, match="missing.ext4"):
+        mgr.clone_ephemeral_rootfs(tmp_path / "missing.ext4", "vm-abc")
+
+    assert not (tmp_path / "images" / "active" / "vm-abc-rootfs.ext4").exists()
 
 
 def test_firecracker_runtime_cloned_episode_context(tmp_path: Path):
@@ -244,10 +291,19 @@ def test_runtime_factory_auto_on_mac_without_kvm():
         assert backend.backend_type == IsolationBackendType.DOCKER
 
 
-def test_runtime_factory_auto_with_kvm_and_firecracker():
+def test_runtime_factory_auto_uses_docker_even_with_kvm_and_firecracker():
+    # The microVM backend cannot run worker episodes yet (no guest networking,
+    # no image store), so auto-detection never picks it.
     with patch("forge.envgen.runtime_factory.is_kvm_available", return_value=True):
         with patch("forge.envgen.runtime_factory.is_firecracker_available", return_value=True):
             backend = get_sandbox_runtime()
+            assert backend.backend_type == IsolationBackendType.DOCKER
+
+
+def test_runtime_factory_explicit_firecracker_with_kvm_and_binary():
+    with patch("forge.envgen.runtime_factory.is_kvm_available", return_value=True):
+        with patch("forge.envgen.runtime_factory.is_firecracker_available", return_value=True):
+            backend = get_sandbox_runtime("firecracker")
             assert backend.backend_type == IsolationBackendType.FIRECRACKER
 
 

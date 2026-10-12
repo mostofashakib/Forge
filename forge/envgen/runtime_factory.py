@@ -40,7 +40,7 @@ def get_sandbox_runtime(
     Precedence:
     1. Explicit `backend_type` argument
     2. Environment variable `FORGE_SANDBOX_RUNTIME` ("firecracker", "docker", "auto")
-    3. Auto-detection: Firecracker microVM if /dev/kvm is available; Docker otherwise.
+    3. Auto-detection: Docker. Firecracker runs only when requested explicitly.
     """
     configured = (
         str(backend_type).lower()
@@ -73,12 +73,7 @@ def get_sandbox_runtime(
         from forge.envgen.container import ContainerRuntime
         return ContainerRuntime()
 
-    # Auto-detection mode
-    if is_kvm_available() and is_firecracker_available():
-        logger.info("KVM detected: utilizing Firecracker microVM sandbox backend")
-        from forge.envgen.firecracker.runtime import FirecrackerMicroVMRuntime
-        return FirecrackerMicroVMRuntime()
-
-    logger.debug("KVM not available: utilizing Docker container sandbox backend")
+    # Auto-detection mode. The microVM backend has no guest networking or image
+    # store yet, so it cannot run worker episodes and is never picked here.
     from forge.envgen.container import ContainerRuntime
     return ContainerRuntime()

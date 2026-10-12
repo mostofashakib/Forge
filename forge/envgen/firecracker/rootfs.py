@@ -37,15 +37,11 @@ class RootfsManager:
         Uses sparse copy to preserve disk space and ensure sub-second rollout creation.
         """
         base_path = Path(base_rootfs)
+        if not base_path.exists():
+            raise FileNotFoundError(f"Base rootfs {base_path} does not exist. Build it before booting a microVM.")
         dest_dir = Path(destination_dir) if destination_dir else self.storage_dir / "active"
         dest_dir.mkdir(parents=True, exist_ok=True)
         target_path = dest_dir / f"{vm_id}-rootfs.ext4"
-
-        if not base_path.exists():
-            # If base rootfs does not exist on disk, create an empty sparse image for testing/init
-            logger.warning("Base rootfs %s does not exist; creating sparse stub at %s", base_path, target_path)
-            target_path.touch()
-            return target_path
 
         # Try fast copy with copy-on-write / sparse flags
         try:

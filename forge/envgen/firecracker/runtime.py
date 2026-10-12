@@ -115,20 +115,20 @@ class FirecrackerMicroVMRuntime(SandboxIsolationBackend):
         client = FirecrackerClient(socket_path)
 
         # 4. Wait for microVM API to become responsive
-        socket_ready = self._wait_for_socket(socket_path)
-        if not socket_ready:
-            logger.warning("MicroVM %s UDS socket not ready in time; proceeding with mock/simulated fallback", instance_id)
+        if not self._wait_for_socket(socket_path):
+            self._discard(proc, socket_path, ephemeral_rootfs)
+            raise RuntimeError(f"MicroVM {instance_id} API socket {socket_path} did not become ready")
 
         # 5. Configure microVM resources via REST API
         try:
-            if socket_ready:
-                client.set_machine_config(vcpu_count=cfg.vcpu_count, mem_size_mib=cfg.mem_size_mib)
-                client.set_boot_source(kernel_image_path=cfg.kernel_image_path, boot_args=cfg.boot_args)
-                client.attach_drive("rootfs", path_on_host=str(ephemeral_rootfs), is_root_device=True, is_read_only=False)
-                client.attach_network_interface("eth0", host_dev_name=cfg.net_host_dev, guest_mac=cfg.guest_mac)
-                client.start_instance()
+            client.set_machine_config(vcpu_count=cfg.vcpu_count, mem_size_mib=cfg.mem_size_mib)
+            client.set_boot_source(kernel_image_path=cfg.kernel_image_path, boot_args=cfg.boot_args)
+            client.attach_drive("rootfs", path_on_host=str(ephemeral_rootfs), is_root_device=True, is_read_only=False)
+            client.attach_network_interface("eth0", host_dev_name=cfg.net_host_dev, guest_mac=cfg.guest_mac)
+            client.start_instance()
         except Exception as exc:
-            logger.warning("Firecracker hardware boot invocation encountered: %s", exc)
+            self._discard(proc, socket_path, ephemeral_rootfs)
+            raise RuntimeError(f"MicroVM {instance_id} failed to boot: {exc}") from exc
 
         # Port where guest services are routed (or mapped via TAP / iptables)
         bound_port = 8000
@@ -168,27 +168,28 @@ class FirecrackerMicroVMRuntime(SandboxIsolationBackend):
         except Exception:
             pass
 
-        # Terminate supervisor process
-        if vm.process:
+        self._discard(vm.process, vm.socket_path, vm.rootfs_path)
+        logger.info("MicroVM %s successfully stopped and purged", instance_id)
+
+    def _discard(self, process: subprocess.Popen | None, socket_path: Path, rootfs_path: Path) -> None:
+        """Terminate the supervisor process, then remove its socket and ephemeral rootfs."""
+        if process:
             try:
-                vm.process.terminate()
-                vm.process.wait(timeout=2.0)
+                process.terminate()
+                process.wait(timeout=2.0)
             except Exception:
                 try:
-                    vm.process.kill()
+                    process.kill()
                 except Exception:
                     pass
 
-        # Cleanup socket
-        if vm.socket_path.exists():
+        if socket_path.exists():
             try:
-                vm.socket_path.unlink()
+                socket_path.unlink()
             except Exception:
                 pass
 
-        # Destroy ephemeral rootfs
-        self.rootfs_mgr.cleanup_rootfs(vm.rootfs_path)
-        logger.info("MicroVM %s successfully stopped and purged", instance_id)
+        self.rootfs_mgr.cleanup_rootfs(rootfs_path)
 
     def is_healthy(self, instance_id: str) -> bool:
         """Check if microVM process is alive and responsive."""

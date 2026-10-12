@@ -122,8 +122,8 @@ Both apps serve the same Forge protocol (`/forge/health`, `/forge/state`, `/forg
 
 ### MicroVM & Container Sandboxing
 
-- **Hardware isolation via Firecracker**: untrusted agent rollouts run in dedicated Firecracker microVMs with Linux KVM virtualization and AWS Jailer process isolation (chroot, cgroups, unprivileged UID/GID), avoiding shared-kernel risks.
-- **Dual-engine runtime**: uses Firecracker on Linux hosts with KVM, with automatic fallback to Docker for local macOS development.
+- **Sandboxed rollouts in Docker**: agent rollouts run in hardened Docker containers.
+- **Experimental Firecracker backend**: `FORGE_SANDBOX_RUNTIME=firecracker` boots KVM microVMs under the Jailer. It has no guest networking or image store yet, so it cannot run worker episodes, and auto-detection never picks it. A VM that fails to boot raises instead of being reported as running.
 - **Ephemeral rootfs disks**: each episode runs on a fresh copy-on-write sparse disk image that is discarded on teardown to prevent state contamination.
 - **LLM drift guardrails**: every generated file is post-processed before build: base image normalised, port forced to 8000, install step reduced to the hashed runtime lock
 - **Registry fallback**: four-tier fallback when Docker Hub flakes: canonical pull → AWS ECR → GCR → direct HTTPS via `httpx`. Digest-pinned images skip the HTTPS tier, since it rebuilds the manifest and cannot keep the pinned digest
