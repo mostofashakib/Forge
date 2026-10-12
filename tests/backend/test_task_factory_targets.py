@@ -154,3 +154,33 @@ def test_in_process_tools_show_parameter_types_and_allowed_values(db, envs_dir, 
         tool = target.profile().tools[0]
 
     assert tool.params == ("counter_id: string", "mode: fast|slow")
+
+
+def test_a_repo_target_is_a_cli_target_with_repo_notes(db, envs_dir, daemon):
+    import json
+
+    from backend.app.models import RepoEnvironment
+
+    cid, _ = ContainerRuntime().run_repo("acme_widgets", "forge-repo-acme-widgets:latest")
+    _sandbox(db, "acme_widgets", "repo", container_id=cid)
+    db.add(RepoEnvironment(
+        env_name="acme_widgets", full_name="acme/widgets", sha="a" * 40, license="MIT", language="Python",
+        status="ready", toolchain="python", test_command="python -m pytest -q",
+        stable_tests=json.dumps(["tests.test_app::test_ok"]),
+    ))
+    db.commit()
+
+    assert {t.name: t.family for t in list_targets(db)}["acme_widgets"] == "cli"
+    with open_target(db, "acme_widgets", "tb_1") as target:
+        assert isinstance(target.runner, CliRunner)
+        profile = target.profile()
+        assert (profile.family, profile.env_type) == ("cli", "repo")
+        assert "acme/widgets" in profile.notes and "tests.test_app::test_ok" in profile.notes
+
+
+def test_a_repo_sandbox_without_metadata_is_unavailable(db, envs_dir, daemon):
+    cid, _ = ContainerRuntime().run_repo("orphan", "forge-repo-orphan:latest")
+    _sandbox(db, "orphan", "repo", container_id=cid)
+    with pytest.raises(TargetUnavailable, match="repo metadata"):
+        with open_target(db, "orphan", "tb_1"):
+            pass

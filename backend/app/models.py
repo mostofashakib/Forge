@@ -297,3 +297,37 @@ class TrainingRun(Base):
         DateTime, default=lambda: datetime.now(timezone.utc)
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class RepoShortlist(Base):
+    """Repos discovery proposed for a brief, waiting for a person to approve them."""
+
+    __tablename__ = "repo_shortlists"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    brief: Mapped[str] = mapped_column(Text)
+    criteria: Mapped[str] = mapped_column(Text)
+    candidates: Mapped[str] = mapped_column(Text)
+    rejected: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class RepoEnvironment(Base):
+    """A GitHub repo turned into a `repo` sandbox, and how far it got."""
+
+    __tablename__ = "repo_environments"
+
+    env_name: Mapped[str] = mapped_column(String, primary_key=True)
+    full_name: Mapped[str] = mapped_column(String, index=True)
+    sha: Mapped[str] = mapped_column(String)
+    license: Mapped[str] = mapped_column(String)
+    language: Mapped[str | None] = mapped_column(String, nullable=True)
+    shortlist_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    # queued, snapshotting, building, ready, rejected, dropped, or failed
+    status: Mapped[str] = mapped_column(String, default="queued")
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    toolchain: Mapped[str | None] = mapped_column(String, nullable=True)
+    test_command: Mapped[str | None] = mapped_column(Text, nullable=True)
+    stable_tests: Mapped[str | None] = mapped_column(Text, nullable=True)
+    log: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))

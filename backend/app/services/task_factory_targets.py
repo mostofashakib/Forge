@@ -5,6 +5,7 @@ container) or a compiled in-process package under generated_envs.
 """
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -16,9 +17,10 @@ import httpx
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from backend.app.models import SandboxEnvironment
+from backend.app.models import RepoEnvironment, SandboxEnvironment
 from forge.contracts.transport import DEFAULT_TIMEOUT_S
 from forge.envgen.container import ContainerRuntime
+from forge.repogen.notes import RepoMeta, repo_notes
 from forge.settings import generated_envs_root
 from forge.taskfactory.profile import BROWSER_NOTES, CLI_NOTES, EnvironmentProfile, ToolInfo, param_hint
 from forge.taskfactory.runner import TaskRunner
@@ -28,7 +30,7 @@ from forge.taskfactory.runners.container_app import ContainerAppRunner
 from forge.taskfactory.runners.in_process import InProcessRunner
 
 IN_PROCESS = "in_process"
-_FAMILY = {"cli": "cli", "browser": "browser"}
+_FAMILY = {"cli": "cli", "repo": "cli", "browser": "browser"}
 _DEVTOOLS_PORT = 9222
 
 
@@ -109,6 +111,12 @@ def open_target(db: Session, env_name: str, batch_id: str) -> Iterator[Target]:
                 CliRunner(runtime, env_name, container.id, batch_id=batch_id),
                 lambda: EnvironmentProfile(env_name=env_name, env_type="cli", family="cli", notes=CLI_NOTES),
             )
+        elif sandbox.env_type == "repo":
+            notes = repo_notes(_repo_meta(db, env_name))
+            yield Target(
+                CliRunner(runtime, env_name, container.id, batch_id=batch_id),
+                lambda: EnvironmentProfile(env_name=env_name, env_type="repo", family="cli", notes=notes),
+            )
         elif sandbox.env_type == "browser":
             yield _browser_target(env_name, _gateway_port(runtime, container, env_name, _DEVTOOLS_PORT))
         else:
@@ -118,6 +126,16 @@ def open_target(db: Session, env_name: str, batch_id: str) -> Iterator[Target]:
                 yield Target(runner, lambda: runner.profile(env_name, sandbox.env_type))
     finally:
         client.close()
+
+
+def _repo_meta(db: Session, env_name: str) -> RepoMeta:
+    repo = db.get(RepoEnvironment, env_name)
+    if repo is None or repo.status != "ready":
+        raise TargetUnavailable(f"{env_name} has no ready repo metadata. Rebuild it from the repos page.")
+    return RepoMeta(
+        full_name=repo.full_name, sha=repo.sha, toolchain=repo.toolchain or "",
+        test_command=repo.test_command or "", stable_tests=json.loads(repo.stable_tests or "[]"),
+    )
 
 
 def _gateway_port(runtime: ContainerRuntime, container, env_name: str, container_port: int | None) -> int:
