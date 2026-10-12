@@ -35,6 +35,7 @@ from backend.app.api.task_factory import router as task_factory_router
 from backend.app.api.reliability import router as reliability_router
 from backend.app.api.distributed import router as distributed_router
 from backend.app.api.training import router as training_router
+from backend.app.api.repos import router as repos_router
 from backend.app.database import init_db
 from backend.app.docker_utils import is_docker_daemon_unavailable
 
@@ -81,6 +82,7 @@ app.include_router(task_factory_router)
 app.include_router(reliability_router)
 app.include_router(distributed_router)
 app.include_router(training_router)
+app.include_router(repos_router)
 
 
 def _reattach_containers() -> None:

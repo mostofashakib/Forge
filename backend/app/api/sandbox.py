@@ -14,6 +14,7 @@ from backend.app.api.sandbox_schemas import (
 from backend.app.database import get_db
 from backend.app.docker_utils import is_docker_daemon_unavailable
 from backend.app.models import SandboxEnvironment
+from backend.app.services.sandbox_capacity import active_criteria, active_sandbox_count
 from forge.envgen.docker_images import is_shell_image
 from forge.settings import generated_envs_root, redis_url, sandbox_limit
 
@@ -28,23 +29,6 @@ _dispatch_pool = concurrent.futures.ThreadPoolExecutor(
 )
 
 
-def _active_criteria() -> list:
-    """Predicate for a genuinely active sandbox.
-
-    A sandbox is inactive if it was deleted/expired *or* its TTL has already
-    lapsed — even when the periodic cleanup sweep has not yet flipped its
-    status, a time-expired environment must never appear in active inventory.
-    """
-    return [
-        SandboxEnvironment.status.notin_(["deleted", "expired"]),
-        SandboxEnvironment.expires_at > datetime.now(timezone.utc),
-    ]
-
-
-def _active_sandbox_count(db: Session) -> int:
-    return db.query(SandboxEnvironment).filter(*_active_criteria()).count()
-
-
 def _remove_undispatched_sandbox(db: Session, sandbox: SandboxEnvironment) -> None:
     """Remove a build record when Celery definitively rejected the dispatch."""
     db.delete(sandbox)
@@ -55,7 +39,7 @@ def _remove_undispatched_sandbox(db: Session, sandbox: SandboxEnvironment) -> No
 def create_sandbox(request: CreateSandboxRequest, db: Session = Depends(get_db)):
     logger.info("[sandbox] POST /api/sandbox/ — env_name=%s", request.env_name)
 
-    active_count = _active_sandbox_count(db)
+    active_count = active_sandbox_count(db)
     max_environments = sandbox_limit()
     if active_count >= max_environments:
         raise HTTPException(
@@ -150,7 +134,7 @@ def create_sandbox(request: CreateSandboxRequest, db: Session = Depends(get_db))
 def list_sandboxes(db: Session = Depends(get_db)):
     return (
         db.query(SandboxEnvironment)
-        .filter(*_active_criteria())
+        .filter(*active_criteria())
         .order_by(SandboxEnvironment.created_at.desc())
         .all()
     )
@@ -159,7 +143,7 @@ def list_sandboxes(db: Session = Depends(get_db)):
 @router.get("/capacity", response_model=SandboxCapacityResponse)
 def get_sandbox_capacity(db: Session = Depends(get_db)):
     return SandboxCapacityResponse(
-        active_count=_active_sandbox_count(db),
+        active_count=active_sandbox_count(db),
         limit=sandbox_limit(),
     )
 
