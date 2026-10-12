@@ -22,8 +22,9 @@ def test_the_api_has_no_model_serving_routes():
     assert not serving & _api_paths()
 
 
-def test_the_api_keeps_distributed_rollout_scheduling():
-    assert "/api/distributed/queue/enqueue" in _api_paths()
+def test_the_api_has_no_distributed_queue_or_scheduler_routes():
+    # Nothing consumed the in-memory queue, and /schedule reported builds it never ran.
+    assert not [path for path in _api_paths() if path.startswith("/api/distributed")]
 
 
 def test_the_cli_has_no_train_command():

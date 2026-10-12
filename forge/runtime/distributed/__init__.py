@@ -1,4 +1,4 @@
-"""Distributed parallel runs package: durable queues, scheduler, inference, and rollout runners."""
+"""Distributed parallel runs package: durable queues, inference, and rollout runners."""
 from __future__ import annotations
 
 from forge.runtime.distributed.inference import (
@@ -18,10 +18,6 @@ from forge.runtime.distributed.runner import (
     DistributedParallelRolloutRunner,
     DistributedRolloutBatch,
 )
-from forge.runtime.distributed.scheduler import (
-    DistributedEnvironmentScheduler,
-    EnvironmentSlot,
-)
 
 
 def create_rollout_runner(*args, **kwargs):
@@ -39,8 +35,6 @@ def run_parallel_rollouts(*args, **kwargs):
 __all__ = [
     "DurableQueueItem",
     "DurableTaskQueue",
-    "EnvironmentSlot",
-    "DistributedEnvironmentScheduler",
     "InferenceProvider",
     "InferenceRequest",
     "InferenceResponse",

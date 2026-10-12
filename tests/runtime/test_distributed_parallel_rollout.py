@@ -1,9 +1,7 @@
 import copy
 import time
 import pytest
-from fastapi.testclient import TestClient
 
-from backend.app.main import app
 from forge.contracts import InitialStateProvider
 from forge.runtime.env_builder import EnvBuilder
 from forge.runtime.transition import TransitionResult
@@ -18,11 +16,6 @@ from forge.runtime.distributed import (
     DurableQueueItem,
     DurableTaskQueue,
 )
-
-
-@pytest.fixture
-def client():
-    return TestClient(app)
 
 
 class SeededCounterFactory(InitialStateProvider):
@@ -242,24 +235,3 @@ def test_distributed_runner_dlq_tracking_on_persistent_failures():
     assert len(batch.dlq_items) == 1
     assert batch.dlq_items[0].status == "dlq"
     assert "out of memory" in batch.dlq_items[0].error
-
-
-# ---------------------------------------------------------------------------
-# 4. API Endpoints: DLQ, Redrive, and Stats
-# ---------------------------------------------------------------------------
-
-def test_api_dlq_endpoints(client):
-    # Check stats endpoint
-    stats_res = client.get("/api/distributed/queue/stats")
-    assert stats_res.status_code == 200
-    assert "total" in stats_res.json()
-
-    # Check DLQ listing endpoint
-    dlq_res = client.get("/api/distributed/queue/dlq")
-    assert dlq_res.status_code == 200
-    assert "dlq_count" in dlq_res.json()
-
-    # Check DLQ redrive endpoint
-    redrive_res = client.post("/api/distributed/queue/dlq/redrive")
-    assert redrive_res.status_code == 200
-    assert "redriven_count" in redrive_res.json()

@@ -700,7 +700,7 @@ forge/
     reward.py          # Verifier and Rubric; termination.py, episode.py
     rollout.py         # RolloutRecord: the shared collector → exporter → trainer record
   runtime/             # Gymnasium env, state, trajectory, verifiers, agents
-    distributed/       # Distributed parallel runs: DurableTaskQueue, DLQ, scheduler, partitioner, runner
+    distributed/       # Distributed parallel runs: DurableTaskQueue, DLQ, partitioner, runner
     trust_boundary/    # Domain evaluation adapters (CUA, TU, Code, Data)
     versioning/        # Prompt, verifier, and dataset version registry
     error_handling.py  # CentralizedErrorHandler catalog and tracking
