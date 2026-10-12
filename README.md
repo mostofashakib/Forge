@@ -58,7 +58,7 @@ Every Forge environment implements a shared set of interfaces in
 | `PersonaDriver` / `PersonaScheduler` | Who else is in the world, and when do they act? |
 
 `Environment` composes the concerns that describe the world. `EpisodeController`
-stays outside because a benchmark, trainer, or rollout worker drives an environment;
+stays outside because a rollout worker or agent run drives an environment;
 `Verifier` remains separate from `Rubric` because deciding whether an objective was
 met is different from assigning its reward.
 
@@ -296,32 +296,10 @@ Forge's environments are authored by an LLM. If the same model family then *grad
 
 Five of the seven paths never consult a model, and a sixth only does so when explicitly given a client. `VerifierComposer` leaves the judge layer off unless a task explicitly declares a semantic check, and the `binary_final_state` preset removes it entirely, so the default reward path is fully structural and needs no independence guarantee at all. This is the reason the layered verifier is built the way it is, not an incidental design choice.
 
-For the paths that *do* consult a model, independence is configurable and enforced:
+For the paths that *do* consult a model, independence is configurable:
 
 - **Separate judge client**: `FORGE_JUDGE_MODEL` / `FORGE_JUDGE_PROVIDER` configure grading independently of generation. Every grading call site (`TieredRewardEngine`, `ObjectiveScorer`, trajectory anomaly detection) resolves through `get_judge_client()`; generation keeps using `get_client()`. Unset, grading falls back to the generation model, a workable local default, and an explicitly non-independent one.
 - **Family-level comparison**: `model_family()` collapses tiers, so grading Sonnet-authored environments with Haiku does *not* count as separation. Swapping tiers changes cost, not provenance.
-- **Enforced before the run**: experiments declare `require_grader_independence` (default `true`). When a run would issue LLM verdicts under a judge from the generating family, `forge benchmark eval` raises `GraderContaminationError` before spending a single episode, and names the variable that fixes it.
-- **Recorded in the result**: every `result.json` carries a `grading` block naming the generating models, the judge, and whether the pair was independent. A structural run records `llm_graded: false`, which is the *positive* claim: this number came from computed checks, not from a model's opinion.
-
-```json
-"grading": {
-  "generator_models": ["claude-haiku-4-5-20251001", "claude-sonnet-4-6"],
-  "generator_families": ["claude"],
-  "judge_model": "gpt-4o",
-  "judge_family": "gpt",
-  "llm_graded": true,
-  "llm_verdicts": 412,
-  "independent": true
-}
-```
-
-**Declared before, counted after.** The reward preset describes which verifier layers are enabled; it does not describe what a grading path actually does. Each post-episode `ObjectiveScorer` call increments `EpisodeResult.llm_verdicts`, and the observed count lands in the record.
-
-The two must agree. A run that declared itself structural and then issued model verdicts raises instead of writing the record, an under-declaring grading path is a bug, and a result file that understates model involvement is worse than no file, because it is what a reader trusts when they cannot re-run the experiment.
-
-**Pass/fail is computed, not inferred from stopping.** Held-out episodes are graded by `structural_verdict`, which composes a `LayeredVerifier` from the environment's own compiled `success_conditions` and `failure_conditions` and runs it against the recorded final state and trajectory. Reaching the right final state by a forbidden route still fails. Termination reasons such as `submitted`, `dead_end`, and `max_steps` never stand in for verifier success.
-
-When a task carries no compiled ground truth, the final objective verdict is recorded as LLM-derived rather than quietly presented as computed ground truth: absent structural ground truth is *unknown*, never a free pass.
 
 ### Verdict Quorum
 
@@ -334,8 +312,6 @@ A `Jury` can vote on top of the structural verdict. Members implement one small 
 | `max_abstention_rate` | Ceiling on undecided episodes (default `0.2`) |
 
 Majority decides, but a split below the threshold is **indeterminate**: the episode leaves the pass-rate denominator instead of being counted as a failure. An abstaining member, a provider outage is missing evidence, not evidence of failure, is excluded from the agreement denominator rather than counted as a vote against.
-
-Because excluding episodes shrinks the denominator, `abstention_rate` is reported beside `heldout_pass_rate` in every `result.json`, and a run exceeding `max_abstention_rate` **fails and writes no record**. Past that point the surviving episodes are a biased sample of the ones the jury found easy, and publishing the number would be worse than failing.
 
 ### Interaction Contracts
 
@@ -365,7 +341,7 @@ Environments are deterministic by default: the same seed and same trajectory pro
 - **Replayable episodes**: every step records the tool call, emitted events, state diff, hashes, and reward; `replay_episode(env, seed, steps)` re-executes any recording and verifies every state hash and reward against it. Container/CLI/browser trajectories are written incrementally (each step flushed as it happens), so a run that crashes mid-episode still leaves a durable, replayable partial trace
 - **Pinned builds**: every base image is pinned by digest, and every container installs one hashed lock (`forge/envgen/runtime_requirements.lock`) with `pip --require-hashes`. The LLM's requirements list never reaches pip, and the correctness gate rejects imports outside the lock
 - **Fixed clocks, zones, and hash order**: premade Gmail and Slack stamp time from a SQLite-backed virtual clock and mint sequential IDs, so reset, snapshot, and restart all carry them. Containers run with `TZ=UTC` and `PYTHONHASHSEED=0`, browser pages see a fixed `Date.now()`, and the CLI image preloads libfaketime so every command starts at the same fixed epoch (file mtimes still come from the kernel clock, and statically linked binaries ignore the preload)
-- **One episode per container at a time**: a run's episodes execute in order, and a per-environment Redis lock keeps separate runs and benchmarks from driving the same container at once
+- **One episode per container at a time**: a run's episodes execute in order, and a per-environment Redis lock keeps separate runs from driving the same container at once
 - **Fast, clean starts**: app containers stay warm and reset in place. A CLI run snapshots its environment once (terminal setup included), each episode forks a fresh container from that snapshot, and a pre-started spare means the next episode starts in about 10 ms. Browser episodes each get a fresh context in the already-running Chromium, so no cookies, storage, or tabs carry over
 - **Grader separation**: agent and persona actions can never reach `/forge/*` control endpoints, so an agent cannot write the state its grader reads. CLI assertions never run in the agent's shell: the finished container is committed, a fresh copy starts with no network and none of the agent's processes, and each assertion runs through a static BusyBox toolbox mounted read-only from a pinned image
 - **Generous fixed timeouts**: 60 s per environment request, 120 s per shell command or assertion, and 120 s for a container to come up. The browser waits for the page to settle instead of sleeping a fixed second
@@ -549,7 +525,7 @@ Golden runs reuse the episode machinery: a fresh in-process environment, an app 
 
 A freshly compiled in-process environment has stub transitions that leave the state unchanged until `custom/transitions.py` overrides them (see [Environment Customization](#environment-customization)). The factory rejects every task for such an environment, because no golden solution changes anything.
 
-Each version page (`/generator/<batch>`) shows the taxonomy, every task with its golden solution, checks, and the validator's reasons, and every rejection with its stage. **Export JSON** downloads the batch as `<env>-v<version>-<date>.json`. An SFT batch adds each task's objective and golden commands as a prompt and completion. A preference-pair batch pairs each accepted task with the drafts rejected for the same slot, with the rejection reason attached. A task accepted on its first try has nothing to compare against, so it yields no pair rather than an invented one. Agent runs and the benchmark do not draw from batches yet.
+Each version page (`/generator/<batch>`) shows the taxonomy, every task with its golden solution, checks, and the validator's reasons, and every rejection with its stage. **Export JSON** downloads the batch as `<env>-v<version>-<date>.json`. An SFT batch adds each task's objective and golden commands as a prompt and completion. A preference-pair batch pairs each accepted task with the drafts rejected for the same slot, with the rejection reason attached. A task accepted on its first try has nothing to compare against, so it yields no pair rather than an invented one. Agent runs do not draw from batches yet.
 
 **Settings** (`/settings`) edits the platform settings in four groups: models (generator, judge, validation quorum, task validator, Ollama server), runtime, containers, and generation budgets. Any model field whose provider is Ollama lists every model the local server has pulled, with its family and size, disables the generator's family for the judge and validator, and labels Ollama cloud models. Saving checks every value and the model families together, refuses a judge, quorum member or validator from the generator's family, and rewrites only the changed lines in `backend/.env` through a temporary file swapped into place. The task validator applies to the next batch. Every other setting is read when the API and workers start, so the page marks it "restart pending" until you restart them. API keys, the database URL, file locations and container-internal values are not on the page. Keys stay in `backend/.env`.
 
@@ -625,103 +601,7 @@ Forge does not train models. Training is handled by [Autotune](https://github.co
 uv run autotune train exports/grpo_rollouts.parquet --objective grpo --output-dir ./policy_checkpoint
 ```
 
-A finished training run writes a `policy_checkpoint.json` manifest that runtime agents load via `forge.runtime.policy_loader.load_policy_agent`, so the same policy can collect → grade → export → train → reload.
-
----
-
-## Benchmark
-
-Benchmark runs your selected environments against **their own compiled tasks**, collects episodes, and scores each environment on four quality metrics. Results are accessible from the **Benchmark** section in the top nav.
-
-### Task Suite
-
-Each benchmarked environment is run against the tasks it was compiled with; `CompiledTaskProvider` resolves them from the environment's compiler input (its `TaskTemplate`s) and maps them onto the benchmark's task shape. There is no fixed built-in suite. Internal evaluation fails if a held-out environment has no compiled tasks, rather than silently weakening the denominator. Grading is unchanged, each generated environment is scored inside the container episode runner by its own reward function and verifiers.
-
-For policy generalization, `forge benchmark eval` loads `policy_checkpoint.json` and
-the same experiment YAML used for training. It refuses mismatched configs or leaked
-train environments, runs only `heldout_envs`, and writes
-`runs/<id>/result.json` with the config, seed, held-out pass rate, reward-hacking
-rate, and reward variance.
-
-The same evaluation is available in **Benchmark → Eval**. Choose **Forge native**,
-enter the checkpoint and experiment paths, and start the run to stream worker output
-and inspect the result metrics in the UI. **Harbor** is available as an optional
-evaluation engine for local Harbor task directories; it remains outside Forge's base
-dependencies. Install it with `uv tool install harbor`, then select the task, agent,
-and model from the Eval page.
-
-```bash
-# 1. Train on your exports using Autotune:
-uv run autotune train exports/grpo_rollouts.parquet --output-dir policy_checkpoint
-
-# 2. Start every environment listed in heldout_envs, then evaluate the checkpoint:
-forge benchmark eval \
-  --checkpoint policy_checkpoint \
-  --experiment experiments/internal_heldout.yaml \
-  --runs-dir runs
-```
-
-The evaluator requires each held-out environment to be running and to have compiled
-tasks. It rejects checkpoints missing experiment metadata, checkpoints produced from
-a different config, undeclared seeds, and any train/held-out leakage.
-
-### Policy Evaluation Metrics
-
-| Metric | Definition |
-|---|---|
-| **Held-out pass rate** | Successful compiled-task episodes divided by all evaluated held-out episodes |
-| **Reward-hacking rate** | Fraction of evaluated episodes flagged by `RewardHackingAuditor` |
-| **Reward variance** | Mean within-task population variance across repeated trajectories with the identical environment, task, and seed |
-
-Each seeded evaluation writes the paper-facing record below. The run ID is carried
-from `policy_checkpoint.json`, linking the training checkpoint to its evaluation.
-
-```text
-runs/<run-id>/
-├── eval/<environment>/<task>/seed_<seed>_repeat_<n>.jsonl
-└── result.json
-```
-
-```json
-{
-  "config": {
-    "train_envs": ["email_train", "crm_train"],
-    "heldout_envs": ["calendar_heldout"],
-    "reward_preset": "full_layered_partial",
-    "base_model": "Qwen/Qwen2.5-3B-Instruct",
-    "seeds": [0, 1, 2],
-    "determinism_repeats": 2,
-    "require_grader_independence": true
-  },
-  "seed": 0,
-  "determinism": "on",
-  "heldout_pass_rate": 0.72,
-  "reward_hacking_rate": 0.03,
-  "reward_variance": 0.08,
-  "grading": {
-    "generator_models": ["claude-haiku-4-5-20251001", "claude-sonnet-4-6"],
-    "generator_families": ["claude"],
-    "judge_model": "gpt-4o",
-    "judge_family": "gpt",
-    "llm_graded": true,
-    "llm_verdicts": 412,
-    "independent": true
-  }
-}
-```
-
-The `--depth` / **Max difficulty** slider is a ceiling: only tasks with `difficulty ≤ depth` are included (difficulty is derived from how much a task asserts). Depth 1 runs the simplest tasks only; depth 5 runs all of them.
-
-### Quality Metrics
-
-| Metric | What it measures | Target |
-|---|---|---|
-| **State Coverage** | Fraction of state schema fields touched per step on average | ≥ 0.7 |
-| **Reward Density** | Fraction of steps that produced a positive reward | ≥ 0.7 |
-| **Dead-end Rate** | Fraction of episodes that terminated with no progress | ≤ 0.3 |
-| **Action Diversity** | Unique endpoints / total endpoints called | ≥ 0.7 |
-
-The report page colour-codes each value: green ≥ 0.7, amber 0.4–0.7, red < 0.4 (dead-end rate is inverted before thresholding).
+Autotune also benchmarks the trained model against its base, on held-out exports or on Harbor tasks.
 
 ### Web UI
 
@@ -731,25 +611,6 @@ The responsive Next.js control surface uses an industrial foundry visual system 
 |---|---|
 | **Generator** | Synthesize task taxonomies and datasets with automated golden pass^k validation and dated batch versioning |
 | **Export** | Configure and export SFT, DPO, and GRPO datasets with dataset manifests ready for Autotune |
-| **Run** | Select which active environments to benchmark, max difficulty (1–5), seeds per task, inference target, and output dir; launch with live log streaming and progress |
-| **Report** | Table of quality metrics per environment for the most recent completed run; CSV download. pass@k and agreement charts appear only for runs that recorded per-task pass/fail samples |
-| **Eval** | Evaluate a policy checkpoint on the declarative internal held-out split |
-
-### CLI
-
-```bash
-forge benchmark run \
-  --domains my_env,other_env \      # comma-separated generated environment names
-  --depth 5 \
-  --seeds 5 \
-  --output benchmark_results
-
-forge benchmark report --output benchmark_results
-
-forge benchmark eval \
-  --checkpoint ./policy_checkpoint \
-  --experiment experiments/internal_heldout.yaml
-```
 
 ---
 
@@ -757,10 +618,8 @@ forge benchmark eval \
 
 Everything documented above is implemented and covered by the test suite, including distributed parallel runs across multi-worker pools with deterministic seed assignment, burst queues, retries, dead-letter queues, and run-level aggregation.
 
-There are also **no published numbers**. The evaluation protocol, metrics, and
-result-record format exist; no reference run has been executed and committed, so
-the repository currently demonstrates capability rather than results. See
-[TASKS.md](TASKS.md) for the ranked work queue.
+Model benchmarking lives in [Autotune](https://github.com/mostofashakib/Autotune).
+See [TASKS.md](TASKS.md) for the ranked work queue.
 
 ---
 
@@ -780,7 +639,7 @@ Browser / API Client
         │     ├── Observability: DevLogger (contextual binding, timers, redaction)
         │     └── Resilience:    CentralizedErrorHandler (system-wide error catalog)
         │
-        ├── SQLite (forge.db)    environments, runs, episodes, benchmark_runs, audit log
+        ├── SQLite (forge.db)    environments, runs, episodes, audit log
         │
         ├── Distributed Parallel Runner (Multi-Worker Pool)
         │     ├── DurableTaskQueue: burst queue, 10m TTL, 3-retry Dead-Letter Queue (DLQ)
@@ -821,12 +680,7 @@ Browser / API Client
   │    TelemetryClient                                     │
   └────────────────────────────────────────────────────────┘
               │
-              ├──► Export (7 formats: SFT / DPO / RL / Failure / Raw)
-              │
-              └──► Benchmark: TaskSuite → DataCollector → EnvQualityMetrics
-                                                │
-                                                ▼
-                                         BenchmarkReport → report.json / CSV
+              └──► Export (7 formats: SFT / DPO / RL / Failure / Raw)
 ```
 
 ---
@@ -885,13 +739,6 @@ forge/
     │                  #   episode_snapshots.py hold the injected collaborators
     tiered_reward.py   # TieredRewardEngine with partial credit and multi-method scoring
     ml_reward.py       # SentenceEmbeddingScorer, NGramScorer (ROUGE-L / BLEU)
-  benchmark/
-    task_suite.py      # Benchmark Task shape (resolved from each env's compiled tasks)
-    compiled_tasks.py  # CompiledTaskProvider: an env's TaskTemplates → benchmark tasks
-    data_collector.py  # Episode collection loop
-    env_quality.py     # EnvQualityMetrics: coverage, reward density, dead-end rate, diversity
-    report.py          # BenchmarkReport: paper-ready figures and summary tables
-    _eval.py           # checkpoint-backed internal held-out evaluation + result records
   contracts/           # Interface contracts: TaskSource, Rubric, StateManager
   customization/       # Per-env overrides: decorator hooks, EnvConfig, loader
   personas/            # Simulated humans: population, scheduler, guardrails, drivers, engine
@@ -907,7 +754,7 @@ forge/
     runners/           # in_process, container_app, cli, browser task runners
   settings.py          # Process-wide settings: determinism mode, seeds, paths, URLs
   reward_presets.py    # Canonical reward-ablation presets shared by every reward path
-  grading_provenance.py  # Generator/grader independence: model families, enforcement, record
+  grading_provenance.py  # Model families, for keeping generator and grader models independent
   logging_utils.py     # Credential-safe redaction for logs
   safety/              # Dataset safety gate: source policy, PII/secret scrubbing, threat, adult, and copyright checks, LLM judge
   repogen/             # GitHub repo environments: MCP discovery, safe snapshots, toolchains, builds, task notes
@@ -915,13 +762,12 @@ forge/
 
   cli/
     main.py            # forge CLI: compile, validate, run, replay, diagnose
-    benchmark.py       # forge benchmark run / report / eval
     diagnosis.py       # forge diagnose; replay_render.py renders forge replay
 backend/
   app/
     api/               # FastAPI routers: sandbox, envs, personas, episodes, agent_runs,
     │                  #   synthetic, evaluate, exports, audit, rollouts, detect, compile,
-    │                  #   benchmark, task_factory, settings
+    │                  #   task_factory, settings
     services/
       task_registry.py # Versioned task batches; task_factory_targets.py opens runners
       env_file.py      # Rewrites named keys in backend/.env for the Settings page
@@ -929,9 +775,9 @@ backend/
       export_writers/  # sft_pairs, preference_pairs, grpo_rollouts, failure_dataset, ...
     worker/            # Celery tasks, one module per job; tasks.py re-exports them
     │                  #   sandbox_build_tasks.py, rollout_tasks.py, agent_run_tasks.py,
-    │                  #   benchmark_tasks.py, task_factory.py
+    │                  #   task_factory.py
     models.py          # SQLAlchemy models: SandboxEnvironment, Episode, AgentRun,
-                       #   AuditLog, BenchmarkRun, ...
+                       #   AuditLog, ...
 frontend/
   app/
     dashboard/         # Cross-environment stats: pass rate, reward, failure clusters
@@ -942,10 +788,6 @@ frontend/
     generator/         # Synthetic data generator: new batch, live progress, versions
       [batchId]/       # One version: taxonomy, tasks, rejections, export
     settings/          # Platform settings: models, runtime, containers, budgets
-    benchmark/
-      run/             # Launch benchmark: domain/depth/seed config + live log + progress bar
-      report/          # Quality metrics table with colour coding + CSV download
-      eval/            # Internal checkpoint evaluation on held-out environments
     environments/
       new/             # 4-option landing page (CLI / Browser / Custom / Premade)
         custom/        # Prompt form, user-research toggle, and the simulated-people step
@@ -974,9 +816,8 @@ docker/
     slack/             # Slack-like environment (seeded with 7 channels, 88 thread replies)
 tests/
   runtime/             # Kernel, verifier, policy, RBAC, network isolation, PII tests
-  backend/             # API integration tests, E2E sandbox + agent-runs + benchmark tests
+  backend/             # API integration tests, E2E sandbox + agent-runs tests
   envgen/              # ContainerRuntime, normalisation, pull/mirror/HTTPS fallback tests
-  benchmark/           # Task suite, quality metric, and internal held-out eval tests
   cli/                 # forge CLI command tests (run determinism, replay)
   customization/       # Hook registry, loader, and config tests
   personas/            # Cast resolution, cadence, guardrails, drivers, both env families,
@@ -1043,7 +884,7 @@ imports, animated premade UIs, and tests that assert only the happy path.
 | `FORGE_DETERMINISM` | `on` | Set to `off` only for the determinism ablation; disables virtual time, runtime/training seeding, and determinism gates |
 | `FORGE_DEV_NETWORK` | `false` | Set to `true` to bypass network isolation in generated envs |
 | `FORGE_DISABLE_PREWARM` | unset | Set to `1` to skip base-image and CLI-image pre-warm on worker boot |
-| `REDIS_URL` | `redis://localhost:6379/0` | Redis URL for Celery and build/benchmark progress pub/sub; `run.sh` replaces this with a runtime-generated authenticated URL |
+| `REDIS_URL` | `redis://localhost:6379/0` | Redis URL for Celery and build progress pub/sub; `run.sh` replaces this with a runtime-generated authenticated URL |
 | `FORGE_REDIS_PASSWORD` | generated at startup | Optional local Redis password override used by `run.sh`; must be at least 32 hexadecimal characters and is never logged |
 | `NEXT_PUBLIC_API_URL` | `http://localhost:8000` | Backend URL used by the frontend |
 | `CORS_ORIGINS` | `http://localhost:3000` | Comma-separated origins the backend accepts browser requests from |
