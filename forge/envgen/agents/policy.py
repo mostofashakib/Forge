@@ -13,10 +13,6 @@ policies:
     condition: "action.get('count', 1) > 10"
     forbidden_actions: []
     description: "Prevent bulk operations affecting more than 10 items"
-  - id: rate_limit_placeholder
-    condition: "False"
-    forbidden_actions: []
-    description: "Placeholder — all actions rate-limited to 60/minute at proxy layer"
 """
 
 _SYSTEM = (

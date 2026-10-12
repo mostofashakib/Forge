@@ -34,6 +34,19 @@ async def test_policy_agent_uses_default_when_no_requirements():
 
 
 @pytest.mark.asyncio
+async def test_the_default_policy_has_only_rules_that_can_fire():
+    agent = PolicyAgent(client=MockLLMClient({}))
+    bus = ArtifactBus()
+    await agent.run(_ctx(policy_req=""), bus)
+
+    policies = yaml.safe_load(bus.get("policy_dsl"))["policies"]
+
+    assert [p["id"] for p in policies] == ["no_bulk_destructive"]
+    assert all(p["condition"].strip() != "False" for p in policies)
+    assert "placeholder" not in bus.get("policy_dsl").lower()
+
+
+@pytest.mark.asyncio
 async def test_policy_agent_calls_llm_when_requirements_provided():
     mock = MockLLMClient({
         "GeneratedFile": GeneratedFile(content="policies:\n  - id: no_delete\n    condition: \"False\"\n    forbidden_actions: []\n    description: no delete")
