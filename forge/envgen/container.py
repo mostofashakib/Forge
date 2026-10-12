@@ -170,6 +170,12 @@ class ContainerRuntime(SandboxIsolationBackend):
         container = self._snapshots.run_cli_container(env_name, container_name(env_name), image)
         return container.id, 0
 
+    def run_repo(self, env_name: str, image_tag: str) -> tuple[str, int]:
+        """Start a repo environment: its built image, run like a CLI shell (no port)."""
+        self._remove_existing(env_name)
+        container = self._snapshots.run_cli_container(env_name, container_name(env_name), image_tag)
+        return container.id, 0
+
     def run_browser(self, env_name: str) -> tuple[str, int]:
         """Spin up a Chromium+KasmVNC container with no route out.
 
@@ -278,6 +284,8 @@ class ContainerRuntime(SandboxIsolationBackend):
         try:
             if image_tag == "builtin:cli":
                 return self.run_cli(env_name)
+            if image_tag.startswith(docker_images.REPO_IMAGE_PREFIX):
+                return self.run_repo(env_name, image_tag)
             if image_tag == "builtin:browser":
                 return self.run_browser(env_name)
             cid, port = self.run(env_name, image_tag)
@@ -313,7 +321,7 @@ class ContainerRuntime(SandboxIsolationBackend):
             # and fall through to a fresh run.
             self._force_remove(existing)
             return None
-        if image_tag == "builtin:cli":
+        if docker_images.is_shell_image(image_tag):
             return existing.id, 0
         # Relay after the browser, since it joins the browser's namespace.
         for sidecar in self._network.sidecars_for(existing):

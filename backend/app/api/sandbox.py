@@ -14,6 +14,7 @@ from backend.app.api.sandbox_schemas import (
 from backend.app.database import get_db
 from backend.app.docker_utils import is_docker_daemon_unavailable
 from backend.app.models import SandboxEnvironment
+from forge.envgen.docker_images import is_shell_image
 from forge.settings import generated_envs_root, redis_url, sandbox_limit
 
 logger = logging.getLogger(__name__)
@@ -216,7 +217,7 @@ def _sync_with_container(sandbox: SandboxEnvironment, container, db: Session, cl
         # DB-says-running-but-port-is-null state that can happen after
         # a host reboot, a half-failed /start, or worker reattach.
         # CLI envs intentionally have no HTTP port, so leave them alone.
-        if sandbox.image_tag != "builtin:cli":
+        if not is_shell_image(sandbox.image_tag):
             from forge.envgen.container import ContainerRuntime
             # App containers publish nothing. Their port is their gateway's.
             live_port = ContainerRuntime(client).host_port(container) or 0
@@ -249,7 +250,7 @@ def start_sandbox(env_name: str, db: Session = Depends(get_db)):
     # container and resync the port. This is what fixes the
     # "running but iframe says not running" state from the user's side —
     # clicking Start now actually does something.
-    is_cli = sandbox.image_tag == "builtin:cli"
+    is_cli = is_shell_image(sandbox.image_tag)
     if sandbox.status == "running" and (is_cli or sandbox.container_port):
         return {"status": "running", "container_port": sandbox.container_port}
     if not sandbox.image_tag:

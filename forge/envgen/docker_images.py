@@ -75,6 +75,13 @@ def _cli_image_tag(dockerfile_text: str) -> str:
 
 
 CLI_RUNTIME_IMAGE = _cli_image_tag(CLI_DOCKERFILE.read_text())
+# Images built from a GitHub repo. Like the CLI image, they run as shells with no port.
+REPO_IMAGE_PREFIX = "forge-repo-"
+
+
+def is_shell_image(image_tag: str | None) -> bool:
+    """Whether an environment's image is a shell (CLI or repo) rather than an app or browser."""
+    return image_tag == "builtin:cli" or bool(image_tag and image_tag.startswith(REPO_IMAGE_PREFIX))
 
 def cli_snapshot_tag(env_name: str, run_id: str) -> str:
     """The image a run's CLI episodes fork from: the environment, frozen at run start."""

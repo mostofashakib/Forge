@@ -15,9 +15,9 @@ from pathlib import Path
 from typing import Protocol
 
 from forge.envgen.docker_cli import DockerCLI
+from forge.envgen.docker_images import REPO_IMAGE_PREFIX
 from forge.repogen.toolchains import Toolchain, detect_toolchain
 
-REPO_IMAGE_PREFIX = "forge-repo-"
 BASELINE_RUNS = 2
 _LOG_CHARS = 4000
 _FAKETIME_LIB = "/usr/local/lib/libfaketime.so.1"
