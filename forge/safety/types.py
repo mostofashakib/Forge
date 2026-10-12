@@ -2,6 +2,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import StrEnum
+
+
+class DataSource(StrEnum):
+    """Where a pipeline's data came from. It decides whether PII is scrubbed."""
+
+    MODEL = "model"
+    INTERNET = "internet"
+    HUMAN = "human"
+
+    @property
+    def scrubs_pii(self) -> bool:
+        return self is not DataSource.MODEL
 
 
 @dataclass(frozen=True)

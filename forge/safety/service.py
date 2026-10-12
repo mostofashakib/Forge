@@ -1,15 +1,21 @@
-"""One gate for every dataset row: threat rules, then scrubbing, then the judge.
+"""One gate for every dataset row: harm checks, then scrubbing, then the judge.
 
-The order matters. Threat rules read raw text, so a payload cannot hide behind
-a pseudonym. The optional LLM judge reads scrubbed text, so PII never reaches
-a model provider.
+The order matters. Threat and copyright rules read raw text, so a payload
+cannot hide behind a pseudonym. The optional LLM judge reads scrubbed text, so
+PII never reaches a model provider.
+
+Secrets are redacted for every source. PII is scrubbed only when the service
+gets a `PiiScrubbing`, which pipelines pass for internet and human data.
 """
 from __future__ import annotations
 
 import re
 from collections import Counter
+from dataclasses import dataclass
 
+from forge.safety.adult import AdultDetector
 from forge.safety.classifier import SafetyClassifier
+from forge.safety.copyright import detect_copyright
 from forge.safety.ner import NameDetector
 from forge.safety.pii import detect_pii
 from forge.safety.pseudonymizer import PSEUDONYM_PATTERN, Pseudonymizer
@@ -22,34 +28,46 @@ from forge.safety.types import Finding, ScreenResult, Span
 _SCRUBBED = re.compile(PSEUDONYM_PATTERN.pattern + "|" + re.escape(REDACTED_SECRET))
 
 
+@dataclass(frozen=True)
+class PiiScrubbing:
+    """What PII scrubbing needs: keyed pseudonyms and a name detector."""
+
+    pseudonymizer: Pseudonymizer
+    names: NameDetector
+
+
 class DatasetSafetyService:
     def __init__(
         self,
-        pseudonymizer: Pseudonymizer,
-        name_detector: NameDetector,
+        adult: AdultDetector,
+        pii: PiiScrubbing | None = None,
         classifier: SafetyClassifier | None = None,
     ) -> None:
-        self._pseudonymizer = pseudonymizer
-        self._names = name_detector
+        self._adult = adult
+        self._pii = pii
         self._classifier = classifier
 
     def screen(self, record: object) -> ScreenResult:
         """A scrubbed copy of `record`, kept only when nothing flags it."""
         texts = list(_strings(record))
-        names = self._detect_names(texts)
-        # Details quote raw text, so they are scrubbed before anyone stores them.
-        findings = [
-            Finding(finding.rule, self._scrub(finding.detail, names, Counter()))
-            for text in texts
-            for finding in detect_threats(text)
-        ]
+        names = self._detect_names(texts) if self._pii is not None else None
+        rule_findings = self._scrub_details(
+            [f for text in texts for f in detect_threats(text) + detect_copyright(text)], names
+        )
+        adult_findings = self._scrub_details(self._adult.detect(texts), names)
         replacements: Counter[str] = Counter()
         scrubbed = _map_strings(record, lambda text: self._scrub(text, names, replacements))
-        if not findings and self._classifier is not None:
-            scrubbed_text = "\n".join(_strings(scrubbed))
-            if scrubbed_text:
-                findings = self._classifier.classify(scrubbed_text)
+        findings = rule_findings + adult_findings
+        scrubbed_text = "\n".join(_strings(scrubbed))
+        # The judge sees every row no rule blocked. It also has the last word on
+        # rows only the adult classifier flagged, which misreads sex education.
+        if not rule_findings and self._classifier is not None and scrubbed_text:
+            findings = self._classifier.classify(scrubbed_text)
         return ScreenResult(scrubbed, not findings, findings, dict(replacements))
+
+    def _scrub_details(self, findings: list[Finding], names: re.Pattern[str] | None) -> list[Finding]:
+        """Details quote raw text, so they are scrubbed before anyone stores them."""
+        return [Finding(f.rule, self._scrub(f.detail, names, Counter())) for f in findings]
 
     def _detect_names(self, texts: list[str]) -> re.Pattern[str] | None:
         """One pattern matching every name the model found anywhere in the row.
@@ -58,7 +76,7 @@ class DatasetSafetyService:
         found name is replaced at every whole-word, same-case occurrence.
         """
         unique = list(dict.fromkeys(texts))
-        found = {span.value for spans in self._names.detect_many(unique) for span in spans}
+        found = {span.value for spans in self._pii.names.detect_many(unique) for span in spans}
         # A one-letter "name" would replace every "C" in "Option C".
         found = {name for name in found if len(name.strip()) >= 2}
         if not found:
@@ -67,7 +85,9 @@ class DatasetSafetyService:
         return re.compile(rf"(?<!\w)(?:{alternatives})(?!\w)")
 
     def _scrub(self, text: str, names: re.Pattern[str] | None, replacements: Counter[str]) -> str:
-        spans = detect_secrets(text) + detect_pii(text)
+        spans = detect_secrets(text)
+        if self._pii is not None:
+            spans += detect_pii(text)
         if names is not None:
             spans += [Span(m.start(), m.end(), "person", m.group()) for m in names.finditer(text)]
         for span in sorted(_resolve(spans, text), key=lambda s: s.start, reverse=True):
@@ -78,7 +98,7 @@ class DatasetSafetyService:
     def _replacement(self, span: Span) -> str:
         if span.kind == "secret":
             return REDACTED_SECRET
-        return self._pseudonymizer.replace(span.kind, span.value)
+        return self._pii.pseudonymizer.replace(span.kind, span.value)
 
 
 def _resolve(spans: list[Span], text: str) -> list[Span]:

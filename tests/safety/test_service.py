@@ -2,7 +2,7 @@
 import copy
 
 from forge.safety.pseudonymizer import Pseudonymizer
-from forge.safety.service import DatasetSafetyService
+from forge.safety.service import DatasetSafetyService, PiiScrubbing
 from forge.safety.types import Finding, Span
 
 KEY = b"test-key-not-a-secret"
@@ -47,6 +47,29 @@ class FirstMentionOnly:
         return out
 
 
+class NoAdult:
+    def detect(self, texts):
+        return []
+
+
+class AdultWhen:
+    """Flags any text containing the marker, like the classifier on explicit text."""
+
+    def __init__(self, marker):
+        self.marker = marker
+
+    def detect(self, texts):
+        return [Finding("adult", f"score 0.99: {t}") for t in texts if self.marker in t]
+
+
+def _pii(names):
+    return PiiScrubbing(Pseudonymizer(KEY), names)
+
+
+def _scrubbing(names, classifier=None, adult=None):
+    return DatasetSafetyService(adult or NoAdult(), _pii(names), classifier)
+
+
 class RecordingClassifier:
     def __init__(self, findings=()):
         self.findings = list(findings)
@@ -57,8 +80,8 @@ class RecordingClassifier:
         return self.findings
 
 
-def _service(*names, classifier=None):
-    return DatasetSafetyService(Pseudonymizer(KEY), FakeNames(*names), classifier)
+def _service(*names, classifier=None, adult=None):
+    return _scrubbing(FakeNames(*names), classifier, adult)
 
 
 def test_pii_is_pseudonymized_throughout_a_nested_record():
@@ -117,9 +140,7 @@ def test_the_longest_overlapping_span_wins():
 
 
 def test_a_secret_wins_a_tie_with_another_span():
-    service = DatasetSafetyService(
-        Pseudonymizer(KEY), FakeNames("AKIAIOSFODNN7EXAMPLE"), None
-    )
+    service = _scrubbing(FakeNames("AKIAIOSFODNN7EXAMPLE"))
     result = service.screen({"c": "AKIAIOSFODNN7EXAMPLE"})
     assert result.record["c"] == "[REDACTED_SECRET]"
 
@@ -172,14 +193,14 @@ def test_finding_details_are_scrubbed_too():
 
 
 def test_a_name_found_once_is_replaced_everywhere_in_the_row():
-    service = DatasetSafetyService(Pseudonymizer(KEY), FirstMentionOnly("Sarah Chen"), None)
+    service = _scrubbing(FirstMentionOnly("Sarah Chen"))
     result = service.screen({"a": "Sarah Chen wrote", "b": ["cc Sarah Chen", "Sarah Chen and Sarah Chen"]})
     assert "Sarah Chen" not in str(result.record)
     assert result.replacements == {"person": 4}
 
 
 def test_name_propagation_matches_whole_words_and_case():
-    service = DatasetSafetyService(Pseudonymizer(KEY), FirstMentionOnly("Al"), None)
+    service = _scrubbing(FirstMentionOnly("Al"))
     result = service.screen({"a": "Al joined", "b": "Alpha team, al dente, Al."})
     assert result.record["b"].startswith("Alpha team, al dente, Person_")
 
@@ -191,10 +212,63 @@ def test_names_are_detected_in_one_batch_of_unique_strings_per_row():
 
 
 def _service_with(names):
-    return DatasetSafetyService(Pseudonymizer(KEY), names, None)
+    return _scrubbing(names)
 
 
 def test_single_letter_names_are_never_propagated():
-    service = DatasetSafetyService(Pseudonymizer(KEY), FirstMentionOnly("C"), None)
+    service = _scrubbing(FirstMentionOnly("C"))
     result = service.screen({"a": "C", "b": "Pick Option C or B"})
     assert result.record["b"] == "Pick Option C or B"
+
+
+def test_model_data_keeps_pii_but_loses_secrets():
+    service = DatasetSafetyService(NoAdult())
+    result = service.screen({"c": "mail sarah@acme.com with KEY=sk-proj-AbCdEfGhIjKlMnOpQrStUvWx123456"})
+    assert result.kept
+    assert result.record["c"] == "mail sarah@acme.com with KEY=[REDACTED_SECRET]"
+    assert result.replacements == {"secret": 1}
+
+
+def test_model_data_is_still_screened_for_threats():
+    assert not DatasetSafetyService(NoAdult()).screen({"c": "rm -rf /"}).kept
+
+
+def test_a_copyright_finding_blocks_the_row():
+    result = _service().screen({"code": "// SPDX-License-Identifier: GPL-3.0-only"})
+    assert not result.kept
+    assert [f.rule for f in result.findings] == ["copyright"]
+
+
+def test_an_adult_finding_blocks_the_row_without_a_judge():
+    result = _service(adult=AdultWhen("EXPLICIT")).screen({"c": "EXPLICIT text for Sarah Chen"})
+    assert not result.kept
+    assert [f.rule for f in result.findings] == ["adult"]
+
+
+def test_adult_finding_details_are_scrubbed():
+    result = _service("Sarah Chen", adult=AdultWhen("EXPLICIT")).screen({"c": "EXPLICIT text for Sarah Chen"})
+    assert "Sarah Chen" not in result.findings[0].detail
+
+
+def test_the_judge_decides_a_row_only_the_adult_classifier_flagged():
+    # The classifier scores sex-education text 0.999. The judge clears it.
+    cleared = _service(classifier=RecordingClassifier(), adult=AdultWhen("sex education")).screen(
+        {"c": "The sex education unit covers consent."}
+    )
+    assert cleared.kept
+
+    confirmed = _service(
+        classifier=RecordingClassifier([Finding("llm:adult", "explicit")]), adult=AdultWhen("EXPLICIT")
+    ).screen({"c": "EXPLICIT"})
+    assert not confirmed.kept
+    assert [f.rule for f in confirmed.findings] == ["llm:adult"]
+
+
+def test_the_judge_never_clears_a_rule_finding():
+    judge = RecordingClassifier()
+    result = _service(classifier=judge, adult=AdultWhen("EXPLICIT")).screen(
+        {"c": "EXPLICIT", "code": "// SPDX-License-Identifier: AGPL-3.0-only"}
+    )
+    assert not result.kept
+    assert {f.rule for f in result.findings} == {"copyright", "adult"}
+    assert judge.texts == []

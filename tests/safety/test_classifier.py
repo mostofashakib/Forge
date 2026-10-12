@@ -47,3 +47,12 @@ def test_a_wrong_schema_from_the_judge_blocks_the_row():
 
     findings = LLMSafetyClassifier(FakeClient(Other())).classify("text")
     assert [f.rule for f in findings] == ["classifier_error"]
+
+
+def test_the_judge_is_asked_about_adult_and_copyrighted_content():
+    client = FakeClient(SafetyVerdict(harmful=False, categories=[], reason="fine"))
+    LLMSafetyClassifier(client).classify("text")
+    system = client.seen[0][0]
+    for category in ("adult", "copyrighted"):
+        assert f'"{category}"' in system
+    assert "medical" in system.lower() and "educational" in system.lower()
