@@ -11,15 +11,19 @@ from pathlib import Path
 
 from forge.safety.config import safety_service_from_env
 from forge.safety.service import DatasetSafetyService
+from forge.safety.types import DataSource
 
 QUARANTINE_FILE = "safety_quarantine.jsonl"
 
 
 class DatasetGate:
-    def __init__(self, service: DatasetSafetyService, quarantine_path: Path, mode: str) -> None:
+    def __init__(
+        self, service: DatasetSafetyService, quarantine_path: Path, mode: str, source: DataSource
+    ) -> None:
         self._service = service
         self._quarantine_path = quarantine_path
         self._mode = mode
+        self._source = source
         self._seen = 0
         self._kept = 0
         self._replacements: Counter[str] = Counter()
@@ -45,6 +49,7 @@ class DatasetGate:
 
     def stats(self) -> dict:
         return {
+            "source": self._source.value,
             "mode": self._mode,
             "rows_seen": self._seen,
             "rows_kept": self._kept,
@@ -55,7 +60,7 @@ class DatasetGate:
         }
 
 
-def gate_from_env(out_dir: Path) -> DatasetGate:
+def gate_from_env(out_dir: Path, source: DataSource) -> DatasetGate:
     """A gate configured from env. Raises SafetyConfigError when it cannot be built."""
-    safety = safety_service_from_env()
-    return DatasetGate(safety.service, out_dir / QUARANTINE_FILE, safety.mode)
+    safety = safety_service_from_env(source)
+    return DatasetGate(safety.service, out_dir / QUARANTINE_FILE, safety.mode, source)

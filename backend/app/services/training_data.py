@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from backend.app.models import Episode, TaskBatch
 from backend.app.services import task_registry
 from backend.app.services.export_writers.gate import DatasetGate, gate_from_env
+from forge.safety.types import DataSource
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +42,7 @@ def _stage_episode_exports(db: Session, data_dir: Path) -> bool:
     episode_counts = episode_counts_by_env(db)
     for target in list_targets(db):
         if episode_counts.get(target.name):
-            gate = gate_from_env(data_dir)
+            gate = gate_from_env(data_dir, DataSource.MODEL)
             for writer in (grpo_rollouts, preference_pairs, sft_pairs):
                 writer.write(target.name, db, data_dir, gate)
             return True
@@ -60,7 +61,7 @@ def _stage_latest_batch(db: Session, data_dir: Path) -> bool:
     detail = task_registry.get_batch(db, batch.id)
     if not detail:
         return False
-    stage_generator_batch(detail, data_dir, gate_from_env(data_dir))
+    stage_generator_batch(detail, data_dir, gate_from_env(data_dir, DataSource.MODEL))
     return True
 
 
@@ -69,7 +70,7 @@ def stage_batch_by_id(db: Session, batch_id: str, target_dir: Path) -> Path:
     target_dir.mkdir(parents=True, exist_ok=True)
     detail = task_registry.get_batch(db, batch_id)
     if detail:
-        stage_generator_batch(detail, target_dir, gate_from_env(target_dir))
+        stage_generator_batch(detail, target_dir, gate_from_env(target_dir, DataSource.MODEL))
     return target_dir
 
 

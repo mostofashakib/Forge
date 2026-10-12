@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from backend.app.models import ExportJob
 from backend.app.services.export_writers import WRITERS
 from backend.app.services.export_writers.gate import QUARANTINE_FILE, gate_from_env
+from forge.safety.types import DataSource
 from forge.settings import generated_envs_root
 
 logger = logging.getLogger(__name__)
@@ -25,7 +26,8 @@ def run_export(export_job_id: str, db: Session) -> None:
         formats: list[str] = json.loads(job.formats)
         out_dir = generated_envs_root() / job.env_name / "exports" / export_job_id
         # Built before the folder exists, so a misconfigured gate leaves nothing behind.
-        gate = gate_from_env(out_dir)
+        # Rollouts are model-generated: screened for harm, not PII-scrubbed.
+        gate = gate_from_env(out_dir, DataSource.MODEL)
         out_dir.mkdir(parents=True, exist_ok=True)
 
         for fmt in formats:

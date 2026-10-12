@@ -60,9 +60,13 @@ def test_create_training_run_auto_creates_missing_data_dir(client, tmp_path, mon
         assert (tmp_path / "auto_created_dir_12345").exists()
 
 
-def test_staging_without_a_scrub_key_fails_clearly_and_leaves_nothing(client, tmp_path, monkeypatch):
+def test_staging_with_a_broken_safety_model_fails_clearly_and_leaves_nothing(client, tmp_path, monkeypatch):
+    from forge.safety import config as safety_config
+
     use_safety_env(monkeypatch)
-    monkeypatch.delenv("FORGE_SCRUB_KEY")
+    def offline(_model_id):
+        raise OSError("offline")
+    monkeypatch.setattr(safety_config, "load_adult_pipeline", offline)
     _seed_rollouts({"alpha": 1})
     with patch("backend.app.api.training.threading.Thread") as thread:
         res = client.post(
@@ -71,7 +75,7 @@ def test_staging_without_a_scrub_key_fails_clearly_and_leaves_nothing(client, tm
         )
 
     assert res.status_code == 503
-    assert "FORGE_SCRUB_KEY" in res.json()["detail"]
+    assert "FORGE_ADULT_MODEL" in res.json()["detail"]
     assert not (tmp_path / "unscrubbed_dir").exists()
     thread.assert_not_called()
 
