@@ -3,11 +3,10 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import ForgeMark from "@/components/ForgeMark";
-import { Boxes, FlaskConical, Settings, Sparkles } from "lucide-react";
+import { Boxes, Settings, Sparkles } from "lucide-react";
 
 const NAV_ITEMS = [
   { label: "Generator", href: "/generator", icon: Sparkles },
-  { label: "Benchmark", href: "/benchmark", icon: FlaskConical },
   { label: "Environments", href: "/environments", icon: Boxes },
   { label: "Settings", href: "/settings", icon: Settings },
 ];

@@ -8,7 +8,6 @@ import {
   CheckCircle2,
   Compass,
   FileCheck2,
-  FlaskConical,
   Layers,
   ShieldCheck,
   Sparkles,
@@ -54,31 +53,10 @@ const ROUTE_GUIDES: RouteGuide[] = [
     ctaLabel: "Open Generator",
   },
   {
-    id: "benchmark",
-    title: "Benchmark",
-    route: "/benchmark",
-    badge: "02 // EVALUATION",
-    eyebrow: "Agent Performance & Auditing",
-    icon: FlaskConical,
-    accent: "text-emerald-500",
-    headline: "Measure Pass Rates Across Verifiable Test Suites",
-    description:
-      "Evaluate frontier agents and fine-tuned checkpoints across parallel sandbox environments. Measure Pass@1, Pass@k, tool-use fidelity, and identify exact failure clusters.",
-    whenToUse:
-      "Go here when you want to measure model accuracy, compare checkpoints, inspect step-by-step rollout traces, or find edge-case failures.",
-    keyFeatures: [
-      "Parallel rollout workers in isolated sandboxes",
-      "Pass@1 and Pass@k evaluation metrics",
-      "Step-by-step trajectory replay & inspection",
-      "Automated failure clustering & root-cause audits",
-    ],
-    ctaLabel: "Run Benchmarks",
-  },
-  {
     id: "environments",
     title: "Environments",
     route: "/environments",
-    badge: "03 // RUNTIMES",
+    badge: "02 // RUNTIMES",
     eyebrow: "Gymnasium Sandboxes",
     icon: Boxes,
     accent: "text-blue-500",
@@ -115,12 +93,6 @@ const PIPELINE_STEPS = [
     label: "Record & Export",
     target: "/environments",
     desc: "Run agents in sandboxes, grade every trajectory, and export SFT, preference, and GRPO datasets for training.",
-  },
-  {
-    step: "04",
-    label: "Benchmark & Refine",
-    target: "/benchmark",
-    desc: "Evaluate rollouts in parallel, isolate failure modes, and feed hard edge cases back into the generator.",
   },
 ];
 
@@ -159,11 +131,11 @@ export default function LandingPage() {
             <span>THE FORGE PIPELINE</span>
           </div>
           <h2 className="mt-1 text-2xl font-semibold tracking-[-0.03em] uppercase">
-            How Forge Closes the Learning Loop
+            From Environment to Verified Dataset
           </h2>
         </div>
 
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
           {PIPELINE_STEPS.map((s) => (
             <div key={s.step} className="landing-pipeline-step flex flex-col justify-between">
               <div>
