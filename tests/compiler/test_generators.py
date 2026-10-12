@@ -198,7 +198,8 @@ def test_verifier_template_uses_semantic_verifier():
     code = VerifierGenerator().generate(ci)["my_task"]
     assert "SemanticVerifier" in code
     assert "Must acknowledge the issue" in code
-    assert 'mode="mock"' in code
+    assert "mock" not in code
+    assert "llm_client=_forge_verifiers.ConfiguredJudgeClient()" in code
     assert _is_valid_python(code)
 
 

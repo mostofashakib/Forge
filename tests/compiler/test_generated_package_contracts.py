@@ -211,9 +211,17 @@ def test_generated_package_actually_imports_and_builds(tmp_path, monkeypatch):
         _clear_generated_envs_modules()
 
 
+class _GradingModel:
+    def extract(self, system, user, schema):
+        return schema(score=0.25)
+
+
 def test_generated_verifier_class_does_not_shadow_imported_verifier_of_same_name(
     tmp_path, monkeypatch
 ):
+    import forge.extraction.llm_client as llm_client
+
+    monkeypatch.setattr(llm_client, "get_judge_client", lambda: _GradingModel())
     # A task named "semantic" (or "event", "policy", "temporal", "negative",
     # "exact_state") pascal_cases to a generated class name that collides
     # with the same-named class imported from forge.runtime.verifiers (e.g.
@@ -257,6 +265,7 @@ def test_generated_verifier_class_does_not_shadow_imported_verifier_of_same_name
 
         result = module.verify_semantic({"reply_text": "hi"}, [], {})
         assert isinstance(result, VerificationResult)
+        assert result.checks[0].score == 0.25
     finally:
         _clear_generated_envs_modules()
 

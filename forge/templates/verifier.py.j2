@@ -19,7 +19,7 @@ def verify_{{ task.name }}(state: dict, trajectory, task: dict) -> VerificationR
 {% elif cond.type == "policy_check" %}
     checks.append(_forge_verifiers.PolicyVerifier({{ cond.expression | tojson }}).check(state, trajectory, task))
 {% elif cond.type == "semantic_check" %}
-    checks.append(_forge_verifiers.SemanticVerifier(rubric={{ cond.rubric | tojson }}, state_field={{ cond.expression | tojson }}, mode="mock").check(state, trajectory, task))
+    checks.append(_forge_verifiers.SemanticVerifier(rubric={{ cond.rubric | tojson }}, state_field={{ cond.expression | tojson }}, llm_client=_forge_verifiers.ConfiguredJudgeClient()).check(state, trajectory, task))
 {% elif cond.type == "negative_check" %}
     checks.append(_forge_verifiers.NegativeVerifier({{ cond.expression | tojson }}).check(state, trajectory, task))
 {% else %}
