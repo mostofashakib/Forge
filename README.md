@@ -34,6 +34,7 @@ Forge generates training data for autonomous agents and reasoning models. It bui
 | **Custom** | LLM-generated FastAPI app | Simulate any business app from a plain-English description or by dropping a product URL (where the user research agent inspects the real product) |
 | **CLI** | Ubuntu 22.04 shell, no network, frozen clock | Shell scripting, sysadmin, and file tasks |
 | **Browser** | Chromium + KasmVNC, no internet | Automating pages the environment serves, form filling, navigation |
+| **Repo** | A permissively licensed GitHub repo at a pinned commit, dependencies installed, no network, frozen clock | Code repair and implementation tasks graded by the repo's own tests |
 
 
 ### Environment Contracts
@@ -542,6 +543,7 @@ What a task's seed, golden solution, and checks look like depends on the environ
 | In-process, custom apps, premade apps | Rows merged by id into the reset state | Actions with arguments | Row exists, row absent, row count, value at a path, actions called (optionally in order), actions never called |
 | CLI | Setup shell commands | Shell commands that exit 0 | Shell assertions, run in the networkless grading sandbox |
 | Browser | 1 to 3 static HTML pages and a start page | goto, click, fill, select, press, check | DOM text, value, or attribute, element exists or absent, page path |
+| Repo | Setup commands that plant a bug or stub a function in `/repo` | Shell commands that repair the source | The repo's own stable tests, run in the networkless grading sandbox |
 
 Golden runs reuse the episode machinery: a fresh in-process environment, an app reset in place, a CLI fork from a snapshot taken for the round, or a fresh browser context. Browser tasks need no server. Playwright answers requests to `http://task.local` from the task's stored pages and aborts everything else. Seeds merge into, and checks read, an app's full restorable state. Premade apps expose it at `GET /forge/dump`, because their `/forge/state` is a view that hides archived and sent mail. A round holds the environment's lock, so agent runs on that environment wait until it finishes. An app's state is saved before each round and restored after it.
 
@@ -550,6 +552,18 @@ A freshly compiled in-process environment has stub transitions that leave the st
 Each version page (`/generator/<batch>`) shows the taxonomy, every task with its golden solution, checks, and the validator's reasons, and every rejection with its stage. **Export JSON** downloads the batch as `<env>-v<version>-<date>.json`. An SFT batch adds each task's objective and golden commands as a prompt and completion. A preference-pair batch pairs each accepted task with the drafts rejected for the same slot, with the rejection reason attached. A task accepted on its first try has nothing to compare against, so it yields no pair rather than an invented one. Agent runs and the benchmark do not draw from batches yet.
 
 **Settings** (`/settings`) edits the platform settings in four groups: models (generator, judge, validation quorum, task validator, Ollama server), runtime, containers, and generation budgets. Any model field whose provider is Ollama lists every model the local server has pulled, with its family and size, disables the generator's family for the judge and validator, and labels Ollama cloud models. Saving checks every value and the model families together, refuses a judge, quorum member or validator from the generator's family, and rewrites only the changed lines in `backend/.env` through a temporary file swapped into place. The task validator applies to the next batch. Every other setting is read when the API and workers start, so the page marks it "restart pending" until you restart them. API keys, the database URL, file locations and container-internal values are not on the page. Keys stay in `backend/.env`.
+
+### GitHub Repo Environments
+
+Turn permissively licensed GitHub repos into coding environments. You describe what you want, approve a shortlist, and each approved repo becomes a `repo` environment the task factory can target.
+
+1. **Discover** (`POST /api/repos/discover`). The LLM turns your brief, such as "Python HTTP clients with real test suites", into a few search phrases. Searches run through [GitHub's MCP server](https://github.com/github/github-mcp-server). Code adds and re-checks the hard filters on every result: a permissive license (the same allowlist as the [Safety Gate](#safety-gate)), not archived, not a fork, enough stars, a recent push, and Python, TypeScript, or JavaScript. READMEs pass the safety gate before the LLM ranks the candidates for fit and test coverage. Repos without a test suite are dropped, and every rejection keeps its reason.
+2. **Approve** (`POST /api/repos/shortlists/{id}/approve`). Each approved repo is pinned to its branch head SHA and queued as a sandbox. Approvals count against `FORGE_SANDBOX_LIMIT` like every other environment.
+3. **Snapshot.** A Celery job downloads the tarball for that SHA (size-capped) and extracts it through tarfile's `data` filter, which refuses path escapes, links outside the folder, and device files. Every source file passes the safety gate as internet data. Code skips the person-name model, because it reads identifiers like a package name as people. Regex PII is still pseudonymized, consistently, so tests comparing equal strings still pass. One flagged file, such as a vendored GPL file, rejects the whole repo.
+4. **Build.** Forge writes its own Dockerfile beside the repo, so the repo's Dockerfile and `.dockerignore` are never used. It installs dependencies with network (pip for Python, npm, pnpm, or yarn by lockfile for Node), then runs the tests twice in fresh containers with no network and a frozen clock. Tests that pass both runs become the stable set. A repo is dropped, with its build log, when the install fails or fewer than `FORGE_REPO_MIN_STABLE_TESTS` tests are stable.
+5. **Use.** A ready repo runs like a CLI environment. The task factory's writer gets the repo, its test command, and its stable tests, and writes tasks that plant a bug or stub a function. Checks run the affected stable tests in the grading sandbox.
+
+`GET /api/repos` lists every repo environment with its status (`queued`, `snapshotting`, `building`, `ready`, `rejected`, `dropped`, or `failed`) and reason.
 
 ### Dataset Export
 
@@ -581,7 +595,7 @@ Each pipeline declares where its data came from. Model-generated data (Forge rol
 2. **Copyright rules** keep only permissively licensed code (MIT, Apache-2.0, BSD-2/3-Clause, ISC, Unlicense, CC0, 0BSD). They flag other `SPDX-License-Identifier` values, GPL-family license terms, and proprietary notices in comments. A BSD header's "All rights reserved" and an email footer pass.
 3. **Adult content** is scored by a [local DistilBERT classifier](https://huggingface.co/eliasalbouzidi/distilbert-nsfw-text-classifier). A row is scored as one text, since a lone field like the folder name `trash` reads as explicit, and every 1,500-character window counts.
 4. **Secrets** (OpenAI, Anthropic, AWS, GitHub, Slack keys, bearer tokens, private keys, URL passwords) become `[REDACTED_SECRET]`.
-5. **PII** (internet and human data) becomes a stable keyed pseudonym, so one person stays one person across a trajectory. Regex covers email, phone, SSN, card (Luhn), IBAN (mod-97), public IPs, and US street addresses. Person names come from [GLiNER2-PII](https://huggingface.co/fastino/gliner2-privacy-filter-PII-multi), run locally. With your key, `sarah@acme.com` becomes something like `user_3f9a2c1d@example.invalid`, and `Sarah Chen` becomes `Person_8b04e6aa`.
+5. **PII** (internet and human data; code skips the name model) becomes a stable keyed pseudonym, so one person stays one person across a trajectory. Regex covers email, phone, SSN, card (Luhn), IBAN (mod-97), public IPs, and US street addresses. Person names come from [GLiNER2-PII](https://huggingface.co/fastino/gliner2-privacy-filter-PII-multi), run locally. With your key, `sarah@acme.com` becomes something like `user_3f9a2c1d@example.invalid`, and `Sarah Chen` becomes `Person_8b04e6aa`.
 6. **LLM judge** (optional, `FORGE_SAFETY_LLM=1`) reviews the scrubbed row through the `FORGE_JUDGE_*` client and adds adult and copyrighted-passage categories. It has the final say on rows only the adult classifier flagged, since the classifier misreads sex-education text. It never clears a rule finding, and a judge error blocks the row.
 
 A flagged row goes to `safety_quarantine.jsonl` with its reasons, so you can audit false positives. The quarantine is left out of the manifest's `files` list. `dataset_manifest.json` gains a `safety` block with the source, rows seen, kept, and quarantined, replacements by kind, and quarantined rows by rule.
@@ -929,6 +943,7 @@ forge/
   grading_provenance.py  # Generator/grader independence: model families, enforcement, record
   logging_utils.py     # Credential-safe redaction for logs
   safety/              # Dataset safety gate: source policy, PII/secret scrubbing, threat, adult, and copyright checks, LLM judge
+  repogen/             # GitHub repo environments: MCP discovery, safe snapshots, toolchains, builds, task notes
   paths.py             # Confined-path helpers for generated-env file access
 
   cli/
@@ -1064,6 +1079,15 @@ imports, animated premade UIs, and tests that assert only the happy path.
 | `CORS_ORIGINS` | `http://localhost:3000` | Comma-separated origins the backend accepts browser requests from |
 | `CELERY_BROKER_URL` / `CELERY_RESULT_BACKEND` | `REDIS_URL` | Override the Celery broker or result store separately from progress pub/sub |
 | `FORGE_DEBUG` | unset | Set to any value for debug-level backend logs |
+
+### GitHub Repo Environments
+
+| Variable | Default | Description |
+|---|---|---|
+| `GITHUB_TOKEN` | - | GitHub token with public read access. Required for repo discovery and downloads |
+| `FORGE_GITHUB_MCP_URL` | `https://api.githubcopilot.com/mcp/` | GitHub MCP server endpoint (streamable HTTP) |
+| `FORGE_REPO_MAX_TARBALL_MB` | `200` | Largest repo download accepted. Extraction is capped at 5 times this |
+| `FORGE_REPO_MIN_STABLE_TESTS` | `10` | Fewest tests that must pass both baseline runs for a repo to be kept |
 
 ### Container Images & Resource Limits
 
