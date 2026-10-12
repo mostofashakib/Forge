@@ -211,13 +211,16 @@ def _run_reward_eval_ml(
         return _RewardEvalResult(reevaluations=[], summary=f"Unknown scoring method: {method!r}")
 
     reevals: list[_RewardReevaluation] = []
+    failed = 0
     for ep, steps in episodes:
         candidate = _traj_to_text(steps)
         try:
             raw = scorer.score(requirements, candidate)
         except Exception as exc:
+            # An episode the scorer could not score is left out, not given a zero.
             logger.warning("[evaluate] ML score failed for ep %s: %s", ep.id, exc)
-            raw = 0.0
+            failed += 1
+            continue
         delta = round(raw - (ep.total_reward or 0.0), 4)
         reevals.append(_RewardReevaluation(
             episode_id=ep.id,
@@ -227,11 +230,12 @@ def _run_reward_eval_ml(
             key_factors=[f"{method} similarity = {raw:.3f}"],
         ))
 
-    avg = sum(r.new_score for r in reevals) / len(reevals) if reevals else 0.0
-    return _RewardEvalResult(
-        reevaluations=reevals,
-        summary=f"ML re-evaluation ({method}) across {len(reevals)} episodes. Avg score: {avg:.3f}.",
-    )
+    summary = f"ML re-evaluation ({method}) across {len(reevals)} episodes."
+    if reevals:
+        summary += f" Avg score: {sum(r.new_score for r in reevals) / len(reevals):.3f}."
+    if failed:
+        summary += f" {failed} of {len(episodes)} episodes could not be scored."
+    return _RewardEvalResult(reevaluations=reevals, summary=summary)
 
 
 def _run_reward_eval_multi(

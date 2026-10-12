@@ -6,13 +6,10 @@ Two strategies:
 
 Both expose .score(reference, candidate) -> float where 0.0 = no match
 and 1.0 = perfect match. Imports are lazy so missing optional deps only
-fail at call time, not at module import.
+fail at call time, not at module import. A scorer that cannot score raises.
+It never reports a zero it did not measure.
 """
 from __future__ import annotations
-
-import logging
-
-logger = logging.getLogger(__name__)
 
 _MODEL_NAME = "all-MiniLM-L6-v2"
 _embedding_model = None
@@ -23,33 +20,30 @@ def _get_embedding_model():
     if _embedding_model is None:
         try:
             from sentence_transformers import SentenceTransformer  # type: ignore
-            _embedding_model = SentenceTransformer(_MODEL_NAME)
-        except ImportError:
-            logger.warning(
-                "[ml_reward] sentence-transformers not installed. "
-                "Run: pip install sentence-transformers"
-            )
+        except ImportError as exc:
+            raise ImportError(
+                "Embedding scoring needs sentence-transformers. Run: pip install sentence-transformers"
+            ) from exc
+        _embedding_model = SentenceTransformer(_MODEL_NAME)
     return _embedding_model
 
 
 class SentenceEmbeddingScorer:
     """Cosine similarity of sentence embeddings (all-MiniLM-L6-v2)."""
 
+    def __init__(self, model: object | None = None) -> None:
+        self._model = model
+
     def score(self, reference: str, candidate: str) -> float:
         if not reference.strip() or not candidate.strip():
             return 0.0
-        model = _get_embedding_model()
-        if model is None:
-            return 0.0
-        try:
-            import numpy as np  # type: ignore
-            embs = model.encode([reference, candidate], normalize_embeddings=True)
-            raw = float(np.dot(embs[0], embs[1]))
-            # cosine is in [-1, 1]; map to [0, 1]
-            return max(0.0, min(1.0, (raw + 1.0) / 2.0))
-        except Exception as exc:
-            logger.warning("[ml_reward] embedding score failed: %s", exc)
-            return 0.0
+        import numpy as np  # type: ignore
+
+        model = self._model or _get_embedding_model()
+        embs = model.encode([reference, candidate], normalize_embeddings=True)
+        # Unrelated text lands near 0 and opposed text below it. Both mean no
+        # similarity, so negatives clip to 0 instead of shifting everything up.
+        return max(0.0, min(1.0, float(np.dot(embs[0], embs[1]))))
 
 
 class NGramScorer:
@@ -66,13 +60,9 @@ class NGramScorer:
     def score(self, reference: str, candidate: str) -> float:
         if not reference.strip() or not candidate.strip():
             return 0.0
-        try:
-            if self._metric.startswith("rouge"):
-                return self._rouge_score(reference, candidate)
-            return self._bleu_score(reference, candidate)
-        except Exception as exc:
-            logger.warning("[ml_reward] ngram score failed: %s", exc)
-            return 0.0
+        if self._metric.startswith("rouge"):
+            return self._rouge_score(reference, candidate)
+        return self._bleu_score(reference, candidate)
 
     def _rouge_score(self, reference: str, candidate: str) -> float:
         from rouge_score import rouge_scorer as rs  # type: ignore
