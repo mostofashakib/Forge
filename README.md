@@ -627,6 +627,14 @@ uv run autotune train exports/grpo_rollouts.parquet --objective grpo --output-di
 
 A finished training run writes a `policy_checkpoint.json` manifest that runtime agents load via `forge.runtime.policy_loader.load_policy_agent`, so the same policy can collect → grade → export → train → reload.
 
+For embedded SFT training, `forge.training.AutotuneTrainer` requires an injected
+`TrainingBackend`. Its `train` method receives the base model, typed examples,
+output directory, and step limit, then returns the trained model path. Forge reads
+`sft_pairs.jsonl`, filters exact environment names, and records the example count
+and available reward mean in the checkpoint. Missing training signal, malformed
+JSONL, unsupported objectives, and missing backends fail explicitly. Forge does
+not generate fallback examples or report training success without a backend.
+
 ---
 
 ## Benchmark
@@ -692,6 +700,10 @@ forge benchmark transfer \
 A run with no training data or a misconfigured split fails with a clear error and
 reports no numbers. The API confines the experiment, data, and output paths to the
 project directory.
+
+The default transfer entry points have no training backend configured. Wire a
+`TrainingBackend` into `AutotuneTrainer` before using the integrated transfer
+pipeline. Otherwise, train externally and use `forge benchmark eval`.
 
 ### Policy Evaluation Metrics
 
@@ -870,6 +882,8 @@ Browser / API Client
 forge/
   config.py            # CentralizedConfig: forge.config.yaml registry & versions
   dev_logger.py        # DevLogger: contextual binding, timers, PII/secret redaction
+  jsonl.py             # Streaming JSONL object reader with strict and tolerant modes
+  training.py          # SFT adapter and typed training backend boundary
   contracts/           # The interfaces every environment family implements
     types.py           # Shared shapes: Task, Action, Observation, ToolSpec, results
     environment.py     # Environment facade composing ten of the eleven contracts
@@ -1049,13 +1063,17 @@ The development runner configures Redis with a TCP backlog of 128 to match the d
 
 **Run tests:**
 ```bash
-uv run pytest                                  # full suite (1,870 tests)
+uv run pytest                                  # full Python suite
 uv run pytest tests/architecture               # boundary, UI-determinism, and diversity gates only
 uv run pytest tests/runtime tests/envgen       # kernel + generation pipeline
+npm --prefix frontend test                     # polling lifecycle tests
+npm --prefix frontend run lint
+npm --prefix frontend exec -- tsc --noEmit --project frontend/tsconfig.json
+npm --prefix frontend run build
 ```
 
-The full suite completes in about 12 seconds because LLM calls are mocked and no container is
-built. `tests/architecture` doubles as a review gate: it fails the build on cross-layer
+The Python suite mocks LLM calls and avoids container builds. Runtime depends on
+your machine and installed optional dependencies. `tests/architecture` doubles as a review gate: it fails the build on cross-layer
 imports, animated premade UIs, and tests that assert only the happy path.
 
 ---

@@ -98,3 +98,16 @@ def test_read_trajectory_steps_skips_blank_corrupt_and_summary_lines(tmp_path):
     )
 
     assert list(read_trajectory_steps(path)) == [{"step_index": 0}, {"step_index": 1}]
+
+
+@pytest.mark.parametrize("bad_record", ["null", "[]"])
+def test_episode_step_reader_skips_bad_records_and_the_summary(tmp_path, caplog, bad_record):
+    from forge.contracts.episode import read_trajectory_steps
+
+    path = tmp_path / "partial.jsonl"
+    path.write_text(
+        '\n{"step_index": 0}\n' + bad_record + '\n{"type": "episode_summary"}\n{"step_index": 1}',
+        encoding="utf-8",
+    )
+    assert list(read_trajectory_steps(path)) == [{"step_index": 0}, {"step_index": 1}]
+    assert "partial.jsonl" in caplog.text

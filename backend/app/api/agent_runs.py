@@ -6,11 +6,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from backend.app.database import get_db
 from backend.app.models import AgentRun, AgentEpisode, SandboxEnvironment
+from backend.app.services.trajectory_files import iter_trajectory_lines, read_trajectory
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/sandbox", tags=["agent-runs"])
@@ -33,6 +35,13 @@ class CreateAgentRunRequest(BaseModel):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _require_run(env_name: str, run_id: str, db: Session) -> AgentRun:
+    run = db.get(AgentRun, run_id)
+    if run is None or run.env_name != env_name:
+        raise HTTPException(status_code=404, detail="AgentRun not found")
+    return run
+
 
 def _run_to_dict(run: AgentRun) -> dict:
     return {
@@ -137,17 +146,13 @@ def list_agent_runs(env_name: str, db: Session = Depends(get_db)):
 
 @router.get("/{env_name}/agent-runs/{run_id}")
 def get_agent_run(env_name: str, run_id: str, db: Session = Depends(get_db)):
-    run = db.get(AgentRun, run_id)
-    if run is None or run.env_name != env_name:
-        raise HTTPException(status_code=404, detail="AgentRun not found")
+    run = _require_run(env_name, run_id, db)
     return _run_to_dict(run)
 
 
 @router.get("/{env_name}/agent-runs/{run_id}/episodes")
 def list_agent_episodes(env_name: str, run_id: str, db: Session = Depends(get_db)):
-    run = db.get(AgentRun, run_id)
-    if run is None or run.env_name != env_name:
-        raise HTTPException(status_code=404, detail="AgentRun not found")
+    _require_run(env_name, run_id, db)
     episodes = (
         db.query(AgentEpisode)
         .filter(AgentEpisode.run_id == run_id)
@@ -159,52 +164,43 @@ def list_agent_episodes(env_name: str, run_id: str, db: Session = Depends(get_db
 
 @router.get("/{env_name}/agent-runs/{run_id}/episodes/{episode_id}/trajectory")
 def get_trajectory(env_name: str, run_id: str, episode_id: str, db: Session = Depends(get_db)):
+    _require_run(env_name, run_id, db)
     ep = db.get(AgentEpisode, episode_id)
     if ep is None or ep.run_id != run_id:
         raise HTTPException(status_code=404, detail="Episode not found")
 
-    if ep.jsonl_path is None or not Path(ep.jsonl_path).exists():
+    if ep.jsonl_path is None:
         raise HTTPException(status_code=404, detail="Trajectory file not yet available")
 
-    lines = Path(ep.jsonl_path).read_text(encoding="utf-8").strip().splitlines()
-    steps = []
-    summary = None
-    for line in lines:
-        record = json.loads(line)
-        if record.get("type") == "episode_summary":
-            summary = record
-        else:
-            steps.append(record)
+    try:
+        trajectory = read_trajectory(Path(ep.jsonl_path))
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Trajectory file not yet available") from exc
+    except (OSError, ValueError) as exc:
+        logger.exception("Could not read trajectory %s for episode %s", ep.jsonl_path, episode_id)
+        raise HTTPException(status_code=500, detail="Trajectory file is unreadable") from exc
 
     return {
         "episode_id": episode_id,
-        "steps": steps,
-        "summary": summary,
+        "steps": trajectory.steps,
+        "summary": trajectory.summary,
     }
 
 
 @router.get("/{env_name}/agent-runs/{run_id}/export")
 def export_trajectories(env_name: str, run_id: str, db: Session = Depends(get_db)):
     """Return all completed episode trajectories concatenated as JSONL text."""
-    run = db.get(AgentRun, run_id)
-    if run is None or run.env_name != env_name:
-        raise HTTPException(status_code=404, detail="AgentRun not found")
+    _require_run(env_name, run_id, db)
 
-    episodes = (
-        db.query(AgentEpisode)
+    paths = (
+        db.query(AgentEpisode.jsonl_path)
         .filter(AgentEpisode.run_id == run_id, AgentEpisode.status == "completed")
         .order_by(AgentEpisode.episode_index)
         .all()
     )
 
-    all_lines: list[str] = []
-    for ep in episodes:
-        if ep.jsonl_path and Path(ep.jsonl_path).exists():
-            all_lines.append(Path(ep.jsonl_path).read_text(encoding="utf-8").strip())
-
-    from fastapi.responses import PlainTextResponse
-    return PlainTextResponse(
-        "\n".join(all_lines),
+    return StreamingResponse(
+        iter_trajectory_lines(Path(path) for (path,) in paths if path),
         media_type="application/x-ndjson",
         headers={"Content-Disposition": f'attachment; filename="run_{run_id[:8]}_trajectories.jsonl"'},
     )
@@ -213,9 +209,7 @@ def export_trajectories(env_name: str, run_id: str, db: Session = Depends(get_db
 @router.delete("/{env_name}/agent-runs/{run_id}", status_code=204)
 def delete_agent_run(env_name: str, run_id: str, db: Session = Depends(get_db)):
     """Delete a run, all its episodes, and their JSONL trajectory files."""
-    run = db.get(AgentRun, run_id)
-    if run is None or run.env_name != env_name:
-        raise HTTPException(status_code=404, detail="AgentRun not found")
+    run = _require_run(env_name, run_id, db)
 
     episodes = (
         db.query(AgentEpisode)

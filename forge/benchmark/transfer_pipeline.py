@@ -105,7 +105,7 @@ class TransferPipeline:
 def run_transfer_pipeline(config: TransferConfig) -> TransferResult:
     """Production transfer: GPU training backends and container episodes."""
     from forge.benchmark._eval import evaluate_on_suite
-    from backend.app.api.training import AutotuneTrainer as PolicyTrainer
+    from forge.training import AutotuneTrainer as PolicyTrainer
 
     return TransferPipeline(trainer=PolicyTrainer(), evaluate=evaluate_on_suite)(config)
 

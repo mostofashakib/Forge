@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { API_BASE } from "@/lib/api";
-import { CheckCircle2, AlertCircle, ArrowUpRight, Play, RefreshCw } from "lucide-react";
+import { startPolling } from "@/lib/polling";
+import { ArrowUpRight, Play, RefreshCw } from "lucide-react";
 import { InferenceModePicker, type InferenceMode } from "@/components/InferenceModePicker";
 
 interface TrainingRun {
@@ -46,20 +47,6 @@ interface DataSource {
   suggested_objective?: "grpo" | "dpo" | "sft" | "ppo";
 }
 
-interface HardwareInfo {
-  hardware: {
-    cuda_available: boolean;
-    mps_available: boolean;
-    device_count: number;
-    devices: { id: number; name: string; total_memory_mb?: number }[];
-  };
-  default_mode: string;
-  api_gateway: {
-    endpoint_url: string;
-    has_api_key: boolean;
-  };
-}
-
 const TRAINING_STAGES = [
   { key: "env", label: "Env & Device" },
   { key: "dataset", label: "Dataset" },
@@ -72,10 +59,8 @@ const TRAINING_STAGES = [
 export default function TrainingPage() {
   const [runs, setRuns] = useState<TrainingRun[]>([]);
   const [checkpoints, setCheckpoints] = useState<Checkpoint[]>([]);
-  const [hardware, setHardware] = useState<HardwareInfo | null>(null);
   const [dataSources, setDataSources] = useState<DataSource[]>([]);
   const [selectedSource, setSelectedSource] = useState<string>("exports");
-  const [loading, setLoading] = useState(true);
 
   // Form State
   const [objective, setObjective] = useState<"grpo" | "dpo" | "sft" | "ppo">("grpo");
@@ -101,30 +86,29 @@ export default function TrainingPage() {
     });
   };
 
-  const loadData = useCallback(async () => {
+  const loadData = useCallback(async (signal?: AbortSignal) => {
     try {
-      const [runsRes, cpRes, hwRes, dsRes] = await Promise.all([
-        fetch(`${API_BASE}/api/training/runs`, { cache: "no-store" }),
-        fetch(`${API_BASE}/api/training/checkpoints`, { cache: "no-store" }),
-        fetch(`${API_BASE}/api/training/hardware`, { cache: "no-store" }),
-        fetch(`${API_BASE}/api/training/data-sources`, { cache: "no-store" }),
+      const responses = await Promise.all([
+        fetch(`${API_BASE}/api/training/runs`, { cache: "no-store", signal }),
+        fetch(`${API_BASE}/api/training/checkpoints`, { cache: "no-store", signal }),
+        fetch(`${API_BASE}/api/training/data-sources`, { cache: "no-store", signal }),
       ]);
-
-      if (runsRes.ok) setRuns(await runsRes.json());
-      if (cpRes.ok) setCheckpoints(await cpRes.json());
-      if (hwRes.ok) setHardware(await hwRes.json());
-      if (dsRes.ok) setDataSources(await dsRes.json());
+      const [runsData, checkpointData, sourceData] = await Promise.all(
+        responses.map((response) => response.ok ? response.json() : null),
+      );
+      if (signal?.aborted) return;
+      if (runsData) setRuns(runsData);
+      if (checkpointData) setCheckpoints(checkpointData);
+      if (sourceData) setDataSources(sourceData);
     } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setLoading(false);
+      if (!signal?.aborted) setError(err instanceof Error ? err.message : "Could not load training data");
     }
   }, []);
 
   useEffect(() => {
-    loadData();
-    const interval = setInterval(loadData, 5000);
-    return () => clearInterval(interval);
+    return startPolling(loadData, 5000, (cause) => {
+      setError(cause instanceof Error ? cause.message : "Could not load training data");
+    });
   }, [loadData]);
 
   async function handleLaunch() {
@@ -594,7 +578,7 @@ export default function TrainingPage() {
             </button>
           </div>
           <button
-            onClick={loadData}
+            onClick={() => void loadData()}
             className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1.5"
           >
             <RefreshCw size={12} />

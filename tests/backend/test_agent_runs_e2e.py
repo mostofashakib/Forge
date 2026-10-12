@@ -747,6 +747,64 @@ def _add_run(run_id: str, env_name: str, num_episodes: int = 1) -> None:
         db.commit()
 
 
+def _recorded_trajectory(tmp_path, content):
+    from backend.app import database
+
+    _add_run("file_run", "file_env")
+    path = tmp_path / "recorded.jsonl"
+    path.write_text(content, encoding="utf-8")
+    with database.get_session_factory()() as db:
+        db.add(AgentEpisode(
+            id="file_episode", run_id="file_run", episode_index=0, seed=0,
+            status="completed", started_at=datetime.now(timezone.utc), jsonl_path=str(path),
+        ))
+        db.commit()
+    return path
+
+
+def test_trajectory_rejects_an_episode_requested_under_another_environment(client, tmp_path):
+    _recorded_trajectory(tmp_path, '{"step_index": 0}')
+    response = client.get("/api/sandbox/foreign/agent-runs/file_run/episodes/file_episode/trajectory")
+    assert response.status_code == 404
+
+
+@pytest.mark.parametrize("content", ['{"step_index": 0}\n{broken', "null", "[]"])
+def test_trajectory_reports_unreadable_records_as_an_http_error(client, tmp_path, content, caplog):
+    _recorded_trajectory(tmp_path, content)
+    response = client.get("/api/sandbox/file_env/agent-runs/file_run/episodes/file_episode/trajectory")
+    assert response.status_code == 500
+    assert "trajectory" in response.json()["detail"].lower()
+    assert "recorded.jsonl" in caplog.text
+
+
+def test_export_uses_a_streaming_response(client, tmp_path):
+    from fastapi.responses import StreamingResponse
+    from backend.app import database
+    from backend.app.api.agent_runs import export_trajectories
+
+    _recorded_trajectory(tmp_path, '{"step_index": 0}')
+    with database.get_session_factory()() as db:
+        response = export_trajectories("file_env", "file_run", db)
+    assert isinstance(response, StreamingResponse)
+
+
+def test_export_streams_files_and_normalizes_record_boundaries(client, tmp_path, monkeypatch):
+    from pathlib import Path
+
+    path = _recorded_trajectory(tmp_path, '\n {"step_index": 0}\n\n{"step_index": 1}  ')
+    original = Path.read_text
+
+    def reject_whole_trajectory_read(self, *args, **kwargs):
+        if self == path:
+            pytest.fail("Trajectory export must stream instead of reading the entire file")
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", reject_whole_trajectory_read)
+    response = client.get("/api/sandbox/file_env/agent-runs/file_run/export")
+    assert response.status_code == 200
+    assert response.text == '{"step_index": 0}\n{"step_index": 1}\n'
+
+
 def test_episode_for_a_lost_container_still_counts_toward_the_run(client):
     from backend.app import database
     from backend.app.worker.tasks import run_container_episode_task

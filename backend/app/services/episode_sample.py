@@ -1,7 +1,6 @@
 """The recent agent episodes that evaluation and anomaly detection grade."""
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,6 +8,7 @@ from pathlib import Path
 from sqlalchemy.orm import Session
 
 from backend.app.models import AgentEpisode, AgentRun
+from backend.app.services.trajectory_files import read_trajectory
 
 logger = logging.getLogger(__name__)
 
@@ -58,12 +58,10 @@ def load_trajectory_steps(episode: AgentEpisode, *, max_steps: int) -> list[dict
     if not episode.jsonl_path:
         return []
     path = Path(episode.jsonl_path)
-    if not path.exists():
-        return []
     try:
-        records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
-    except (OSError, json.JSONDecodeError) as exc:
+        return read_trajectory(path, max_steps=max_steps).steps
+    except FileNotFoundError:
+        return []
+    except (OSError, ValueError) as exc:
         logger.warning("[episode-sample] unreadable trajectory %s: %s", path, exc)
         return []
-    steps = [record for record in records if record.get("type") != "episode_summary"]
-    return steps[-max_steps:]

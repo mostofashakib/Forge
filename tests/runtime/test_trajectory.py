@@ -52,3 +52,30 @@ def test_to_jsonl_produces_one_json_object_per_line():
 def test_empty_trajectory_has_no_policy_violations():
     store = TrajectoryStore("ep_0000")
     assert store.to_trajectory().has_policy_violation is False
+
+
+def test_policy_violation_check_stops_at_the_first_violation():
+    first = make_snapshot("ep", 0, "a")
+    first.events = [{"type": "policy_violation"}]
+
+    class UnreadableStep:
+        @property
+        def events(self):
+            raise AssertionError("Steps after the first violation must not be inspected")
+
+    assert Trajectory("ep", [first, UnreadableStep()]).has_policy_violation is True
+
+
+def test_policy_violation_check_with_extra_events_short_circuits_recorded_steps():
+    store = TrajectoryStore("ep")
+    first = make_snapshot("ep", 0, "a")
+    first.events = [{"type": "policy_violation"}]
+    store.record(first)
+
+    class UnreadableStep:
+        @property
+        def events(self):
+            raise AssertionError("Steps after the first violation must not be inspected")
+
+    store.record(UnreadableStep())
+    assert store.to_trajectory_with_events([{"type": "other"}]).has_policy_violation is True

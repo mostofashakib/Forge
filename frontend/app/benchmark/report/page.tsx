@@ -35,7 +35,7 @@ interface GraphData {
     robustness_gap_k: number;
     genuine_learning_index: number;
   };
-  chart_configs: Record<string, any>;
+  chart_configs: Record<string, unknown>;
 }
 
 function colorClass(value: number, inverted = false): string {

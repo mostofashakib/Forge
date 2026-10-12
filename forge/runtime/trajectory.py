@@ -14,7 +14,10 @@ class Trajectory:
 
     @property
     def has_policy_violation(self) -> bool:
-        return any(e.get("type") == "policy_violation" for e in self.events)
+        return any(
+            event.get("type") == "policy_violation"
+            for step in self.steps for event in step.events
+        )
 
     @property
     def step_count(self) -> int:
@@ -64,11 +67,14 @@ class _TrajectoryWithExtraEvents:
 
     @property
     def events(self) -> list[dict]:
-        return self.steps.__class__([e for step in self.steps for e in step.events]) + self._extra_events
+        return [event for step in self.steps for event in step.events] + self._extra_events
 
     @property
     def has_policy_violation(self) -> bool:
-        return any(e.get("type") == "policy_violation" for e in self.events)
+        return any(
+            event.get("type") == "policy_violation"
+            for step in self.steps for event in step.events
+        ) or any(event.get("type") == "policy_violation" for event in self._extra_events)
 
     @property
     def step_count(self) -> int:

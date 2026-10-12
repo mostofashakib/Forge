@@ -18,6 +18,7 @@ from pathlib import Path
 from forge.contracts.types import AgentAdapter
 from forge.contracts.evaluation import EpisodeEvaluation
 from forge.contracts.rollout import RolloutRecord
+from forge.jsonl import iter_jsonl_objects
 
 
 @dataclass(kw_only=True)
@@ -188,17 +189,9 @@ def read_trajectory_steps(path: Path) -> Iterator[dict]:
     Blank and unparseable lines are skipped, as is the closing summary line,
     so a partial trace from a crashed run still reads cleanly.
     """
-    with path.open(encoding="utf-8") as handle:
-        for line in handle:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if record.get("type") != "episode_summary":
-                yield record
+    for record in iter_jsonl_objects(path, skip_invalid=True):
+        if record.get("type") != "episode_summary":
+            yield record
 
 
 class TrajectoryWriter:

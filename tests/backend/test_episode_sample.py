@@ -104,3 +104,28 @@ def test_corrupt_trajectory_is_reported_not_hidden(tmp_path, caplog):
     with caplog.at_level(logging.WARNING):
         assert load_trajectory_steps(episode, max_steps=5) == []
     assert "ep.jsonl" in caplog.text
+
+
+def test_zero_step_limit_returns_no_steps(tmp_path):
+    episode = _episode_with_file(tmp_path, ['{"step_index": 0}'])
+    assert load_trajectory_steps(episode, max_steps=0) == []
+
+
+def test_trajectory_sampling_streams_instead_of_reading_the_whole_file(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    episode = _episode_with_file(tmp_path, [json.dumps({"step_index": i}) for i in range(200)])
+
+    def forbid_read_text(*args, **kwargs):
+        pytest.fail("Sampling must stream the trajectory instead of loading the entire file")
+
+    monkeypatch.setattr(Path, "read_text", forbid_read_text)
+    assert load_trajectory_steps(episode, max_steps=2) == [{"step_index": 198}, {"step_index": 199}]
+
+
+@pytest.mark.parametrize("record", ["null", "[]", '"text"'])
+def test_non_object_trajectory_records_are_reported(tmp_path, caplog, record):
+    episode = _episode_with_file(tmp_path, [record])
+    with caplog.at_level(logging.WARNING):
+        assert load_trajectory_steps(episode, max_steps=2) == []
+    assert "ep.jsonl" in caplog.text

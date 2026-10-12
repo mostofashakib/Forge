@@ -375,7 +375,7 @@ def test_flow_gpu_inference_contract_and_hybrid_fallback_e2e():
     assert resp_local.metadata["precision"] == "bf16"
 
     # 2. Cloud API Gateway Provider execution
-    gateway_spec = APIGatewaySpec(endpoint_url="https://api.mock-gateway.forge.ai/v1", timeout_seconds=10)
+    gateway_spec = APIGatewaySpec(endpoint_url="https://api.mock-gateway.forge.ai/v1", timeout_s=10)
     gateway_provider = CloudGatewayInferenceProvider(gateway_spec)
 
     # Use patch to simulate remote HTTP gateway response
@@ -395,12 +395,13 @@ def test_flow_gpu_inference_contract_and_hybrid_fallback_e2e():
     # 3. Hybrid GPU Inference Engine Fallback (Local failure -> Gateway fallback)
     contract = GPUInferenceContract(
         mode=InferenceMode.AUTO,
-        gpu_spec=GPUDeviceSpec(device_type="cuda"),  # CUDA will fail if host has no CUDA
-        api_gateway=gateway_spec,
+        gpu_spec=GPUDeviceSpec(device_type="cuda"),
+        api_gateway_spec=gateway_spec,
     )
     hybrid_engine = HybridGPUInferenceEngine(contract)
 
-    with patch.object(LocalGPUInferenceProvider, "generate", side_effect=RuntimeError("CUDA out of memory")), \
+    with patch.object(GPUDeviceSpec, "probe_hardware", return_value={"cuda_available": True}), \
+         patch.object(LocalGPUInferenceProvider, "generate", side_effect=RuntimeError("CUDA out of memory")), \
          patch("urllib.request.urlopen") as mock_urlopen_fb:
         mock_fb = MagicMock()
         mock_fb.read.return_value = json.dumps({
@@ -413,6 +414,7 @@ def test_flow_gpu_inference_contract_and_hybrid_fallback_e2e():
         fallback_resp = hybrid_engine.generate(req)
         assert fallback_resp.content == "Fallback gateway action response"
         assert fallback_resp.metadata.get("fallback_from") == "local_gpu"
+        assert fallback_resp.metadata["gateway_url"] == "https://api.mock-gateway.forge.ai/v1"
 
 
 # ==============================================================================

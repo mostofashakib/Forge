@@ -1,10 +1,10 @@
 from __future__ import annotations
-import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
 
 from forge.schema.state_schema import StateSchemaManifest
+from forge.jsonl import iter_jsonl_objects
 
 logger = logging.getLogger(__name__)
 
@@ -25,55 +25,43 @@ def compute_env_quality(
     manifest: StateSchemaManifest,
 ) -> EnvQualityMetrics:
     """Compute quality metrics from JSONL episode files in episode_dir."""
-    jsonl_files = list(episode_dir.rglob("*.jsonl"))
-
     total_steps = 0
     steps_with_reward = 0
     coverage_sum = 0.0
     dead_end_episodes = 0
-    all_endpoints: list[str] = []
+    endpoint_count = 0
     unique_endpoints: set[str] = set()
     num_episodes = 0
 
-    for jsonl_path in jsonl_files:
-        try:
-            lines = jsonl_path.read_text().splitlines()
-        except Exception as exc:
-            logger.warning("Could not read %s: %s", jsonl_path, exc)
-            continue
-
+    for jsonl_path in episode_dir.rglob("*.jsonl"):
         episode_counted = False
-        for line in lines:
-            if not line.strip():
-                continue
-            try:
-                rec = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-
-            if rec.get("type") == "episode_summary":
+        try:
+            for rec in iter_jsonl_objects(jsonl_path, skip_invalid=True):
                 if not episode_counted:
                     num_episodes += 1
                     episode_counted = True
-                if rec.get("termination_reason") == "dead_end":
-                    dead_end_episodes += 1
-                continue
+                if rec.get("type") == "episode_summary":
+                    if rec.get("termination_reason") == "dead_end":
+                        dead_end_episodes += 1
+                    continue
 
-            total_steps += 1
-            reward = rec.get("reward", 0.0)
-            if reward > 0:
-                steps_with_reward += 1
+                total_steps += 1
+                reward = rec.get("reward", 0.0)
+                if reward > 0:
+                    steps_with_reward += 1
 
-            state_after = rec.get("state_after", {})
-            coverage_sum += manifest.coverage_score(state_after)
+                state_after = rec.get("state_after", {})
+                coverage_sum += manifest.coverage_score(state_after)
 
-            endpoint = rec.get("action", {}).get("endpoint", "")
-            if endpoint:
-                all_endpoints.append(endpoint)
-                unique_endpoints.add(endpoint)
+                endpoint = rec.get("action", {}).get("endpoint", "")
+                if endpoint:
+                    endpoint_count += 1
+                    unique_endpoints.add(endpoint)
 
-        if not episode_counted and lines:
-            num_episodes += 1
+            if not episode_counted and jsonl_path.stat().st_size:
+                num_episodes += 1
+        except (OSError, UnicodeError) as exc:
+            logger.warning("Could not read %s: %s", jsonl_path, exc)
 
     if total_steps == 0:
         return EnvQualityMetrics(
@@ -91,7 +79,7 @@ def compute_env_quality(
         state_coverage_score=coverage_sum / total_steps,
         reward_density=steps_with_reward / total_steps,
         dead_end_rate=dead_end_episodes / max(num_episodes, 1),
-        action_diversity=len(unique_endpoints) / len(all_endpoints) if all_endpoints else 0.0,
+        action_diversity=len(unique_endpoints) / endpoint_count if endpoint_count else 0.0,
         num_episodes=num_episodes,
         num_steps=total_steps,
     )

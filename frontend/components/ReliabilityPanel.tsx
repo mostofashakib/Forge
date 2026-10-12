@@ -30,23 +30,32 @@ export function ReliabilityPanel({ envName }: { envName: string }) {
   const [loading, setLoading] = useState(true);
   const [actioningId, setActioningId] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    try {
-      const res = await fetch(`${API_BASE}/api/reliability/environments/${envName}`);
-      if (res.ok) {
-        const json = await res.json();
+  const load = useCallback((signal?: AbortSignal) => {
+    return fetch(`${API_BASE}/api/reliability/environments/${envName}`, { signal })
+      .then((res) => {
+        if (!res.ok) throw new Error(`Reliability request failed (${res.status})`);
+        return res.json() as Promise<ReliabilityData>;
+      })
+      .then((json) => {
+        if (signal?.aborted) return;
         setData(json);
-      }
-    } catch {
-      // ignore fetch errors
-    } finally {
-      setLoading(false);
-    }
+        setError(null);
+      })
+      .catch((cause: unknown) => {
+        if (signal?.aborted) return;
+        setError(cause instanceof Error ? cause.message : "Could not load reliability status");
+      })
+      .finally(() => {
+        if (!signal?.aborted) setLoading(false);
+      });
   }, [envName]);
 
   useEffect(() => {
-    load();
+    const controller = new AbortController();
+    void load(controller.signal);
+    return () => controller.abort();
   }, [load]);
 
   const handleRelease = async (id: string, taskId: string) => {
@@ -115,7 +124,11 @@ export function ReliabilityPanel({ envName }: { envName: string }) {
         </div>
       )}
 
-      {!hasIssues ? (
+      {error && (
+        <p role="alert" className="mt-4 text-sm text-red-600">{error}</p>
+      )}
+
+      {!hasIssues && !error ? (
         <p className="text-sm text-muted-foreground">
           No quarantined tasks or flagged versions. All episodes and environments are operating reliably.
         </p>
