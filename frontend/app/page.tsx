@@ -7,10 +7,9 @@ import {
   Boxes,
   CheckCircle2,
   Compass,
-  Cpu,
+  FileCheck2,
   FlaskConical,
   Layers,
-  RotateCcw,
   ShieldCheck,
   Sparkles,
   Workflow,
@@ -55,31 +54,10 @@ const ROUTE_GUIDES: RouteGuide[] = [
     ctaLabel: "Open Generator",
   },
   {
-    id: "training",
-    title: "Training",
-    route: "/training",
-    badge: "02 // RLVR & SFT",
-    eyebrow: "Policy Optimization Engine",
-    icon: Cpu,
-    accent: "text-primary",
-    headline: "Train Models with Verifiable Execution Rewards",
-    description:
-      "Run state-of-the-art policy optimization with real-world execution rewards instead of subjective LLM vibes. Supports GRPO, PPO, DPO, and SFT with live telemetry feeds and checkpoint management.",
-    whenToUse:
-      "Go here when you have generated datasets or task directories and want to update model weights using RLVR or fine-tuning.",
-    keyFeatures: [
-      "GRPO, PPO, DPO, and SFT algorithms",
-      "Online self-play vs. Offline cross-family alignment",
-      "Real-time loss & mean reward telemetry",
-      "One-click checkpointing and export",
-    ],
-    ctaLabel: "Launch Training",
-  },
-  {
     id: "benchmark",
     title: "Benchmark",
     route: "/benchmark",
-    badge: "03 // EVALUATION",
+    badge: "02 // EVALUATION",
     eyebrow: "Agent Performance & Auditing",
     icon: FlaskConical,
     accent: "text-emerald-500",
@@ -100,7 +78,7 @@ const ROUTE_GUIDES: RouteGuide[] = [
     id: "environments",
     title: "Environments",
     route: "/environments",
-    badge: "04 // RUNTIMES",
+    badge: "03 // RUNTIMES",
     eyebrow: "Gymnasium Sandboxes",
     icon: Boxes,
     accent: "text-blue-500",
@@ -134,9 +112,9 @@ const PIPELINE_STEPS = [
   },
   {
     step: "03",
-    label: "Train & Align",
-    target: "/training",
-    desc: "Optimize agent policies using GRPO, PPO, or DPO backed by verifiable rewards in online or offline modes.",
+    label: "Record & Export",
+    target: "/environments",
+    desc: "Run agents in sandboxes, grade every trajectory, and export SFT, preference, and GRPO datasets for training.",
   },
   {
     step: "04",
@@ -165,10 +143,10 @@ export default function LandingPage() {
           </h1>
 
           <p className="mx-auto max-w-2xl text-xs leading-5 text-muted-foreground sm:text-sm sm:leading-6">
-            Forge is the complete platform for post-training reasoning models and autonomous agents.
+            Forge is the synthetic data engine for reasoning models and autonomous agents.
             Synthesize noise-free datasets with automated <span className="font-mono font-medium text-foreground">pass^k</span> code execution,
-            train policies using <span className="font-mono font-medium text-foreground">RLVR</span> and preference alignment,
-            and benchmark rollouts inside hardened <span className="font-mono font-medium text-foreground">Gymnasium</span> sandboxes.
+            record graded agent trajectories inside hardened <span className="font-mono font-medium text-foreground">Gymnasium</span> sandboxes,
+            and export them as training-ready datasets.
           </p>
         </div>
       </section>
@@ -231,11 +209,11 @@ export default function LandingPage() {
 
           <div className="border border-foreground/20 bg-card p-6 space-y-3">
             <div className="grid size-9 place-items-center border border-foreground/20 bg-background text-primary">
-              <RotateCcw size={16} />
+              <FileCheck2 size={16} />
             </div>
-            <h3 className="font-semibold text-base">Online & Offline Training</h3>
+            <h3 className="font-semibold text-base">Screened Dataset Exports</h3>
             <p className="text-xs leading-relaxed text-muted-foreground line-clamp-3">
-              Run Online Mode for self-play policy rollouts where generator models match the actor, or Offline Mode to align models across verified cross-family datasets.
+              Every exported row passes a safety gate. PII gets consistent pseudonyms, secrets are redacted, and harmful, adult, or unlicensed content is quarantined.
             </p>
           </div>
 

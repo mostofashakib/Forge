@@ -10,12 +10,6 @@ const SIDEBAR_ITEMS = [
     available: true,
     badge: undefined,
   },
-  {
-    href: "/benchmark/transfer",
-    label: "Transfer",
-    available: true,
-    badge: "GPU",
-  },
   { href: "/benchmark/eval", label: "Eval", available: true, badge: "held-out" },
 ];
 
