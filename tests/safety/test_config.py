@@ -133,3 +133,13 @@ def test_a_judge_that_cannot_be_built_fails_clearly(env, monkeypatch):
     monkeypatch.setattr(config, "get_judge_client", broken)
     with pytest.raises(SafetyConfigError, match="FORGE_SAFETY_LLM"):
         safety_service_from_env(DataSource.MODEL)
+
+
+def test_code_scrubbing_skips_the_name_model_but_still_needs_the_key(env, monkeypatch):
+    safety = safety_service_from_env(DataSource.INTERNET, detect_names=False)
+    assert env["ner"] == []
+    result = safety.service.screen({"c": "import Widgets  # maintainer bob@acme.com"})
+    assert result.record["c"].startswith("import Widgets  # maintainer user_")
+    monkeypatch.delenv("FORGE_SCRUB_KEY")
+    with pytest.raises(SafetyConfigError, match="FORGE_SCRUB_KEY"):
+        safety_service_from_env(DataSource.INTERNET, detect_names=False)

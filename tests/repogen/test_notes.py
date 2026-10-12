@@ -21,6 +21,8 @@ def test_python_notes_name_the_repo_tests_and_grader_path():
     assert "python -m pytest -q tests/test_app.py::test_ok" in notes
     assert "--junitxml" not in notes
     assert "NotImplementedError" in notes
+    # Class-based pytest ids keep the class as a node, not a folder.
+    assert "tests.test_signer.TestSigner::test_sign is tests/test_signer.py::TestSigner::test_sign" in notes
 
 
 def test_node_notes_use_jest_selection_and_js_stubs():

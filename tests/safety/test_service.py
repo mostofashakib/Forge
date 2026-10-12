@@ -272,3 +272,10 @@ def test_the_judge_never_clears_a_rule_finding():
     assert not result.kept
     assert {f.rule for f in result.findings} == {"copyright", "adult"}
     assert judge.texts == []
+
+
+def test_pii_scrubbing_without_a_name_detector_keeps_names_and_identifiers():
+    service = DatasetSafetyService(NoAdult(), PiiScrubbing(Pseudonymizer(KEY), names=None))
+    result = service.screen({"code": "from itsdangerous import Signer  # by Armin, armin@pocoo.org"})
+    assert result.record["code"].startswith("from itsdangerous import Signer  # by Armin, user_")
+    assert result.replacements == {"email": 1}

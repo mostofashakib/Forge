@@ -14,7 +14,9 @@ _PYTHON = {
     "language": "Python",
     "run_one": "python -m pytest -q tests/test_app.py::test_ok",
     "select": "Stable ids read module.path::test_name. Dots in the module path are folders, "
-              "so tests.test_app::test_ok is tests/test_app.py::test_ok.",
+              "so tests.test_app::test_ok is tests/test_app.py::test_ok. A final CamelCase part is a "
+              "test class, so tests.test_signer.TestSigner::test_sign is "
+              "tests/test_signer.py::TestSigner::test_sign.",
     "stub": "raise NotImplementedError",
 }
 _NODE = {

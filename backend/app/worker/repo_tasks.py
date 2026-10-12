@@ -27,7 +27,8 @@ def production_build_deps():
 
     _, token = github_settings_from_env()
     limits = repo_limits_from_env()
-    safety = safety_service_from_env(DataSource.INTERNET).service
+    # Code keeps names: the name model would rewrite identifiers like package names.
+    safety = safety_service_from_env(DataSource.INTERNET, detect_names=False).service
 
     def download(full_name: str, sha: str, work_dir: Path) -> Path:
         tarball = fetch_tarball(full_name, sha, token, work_dir / "repo.tgz", max_bytes=limits.max_tarball_bytes)

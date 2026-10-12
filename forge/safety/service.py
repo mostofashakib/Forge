@@ -30,10 +30,14 @@ _SCRUBBED = re.compile(PSEUDONYM_PATTERN.pattern + "|" + re.escape(REDACTED_SECR
 
 @dataclass(frozen=True)
 class PiiScrubbing:
-    """What PII scrubbing needs: keyed pseudonyms and a name detector."""
+    """What PII scrubbing needs: keyed pseudonyms, and a name detector unless names stay.
+
+    Source code passes `names=None`: the name model reads identifiers such as
+    a package name as people, and rewriting them breaks the code.
+    """
 
     pseudonymizer: Pseudonymizer
-    names: NameDetector
+    names: NameDetector | None
 
 
 class DatasetSafetyService:
@@ -50,7 +54,7 @@ class DatasetSafetyService:
     def screen(self, record: object) -> ScreenResult:
         """A scrubbed copy of `record`, kept only when nothing flags it."""
         texts = list(_strings(record))
-        names = self._detect_names(texts) if self._pii is not None else None
+        names = self._detect_names(texts) if self._pii is not None and self._pii.names is not None else None
         rule_findings = self._scrub_details(
             [f for text in texts for f in detect_threats(text) + detect_copyright(text)], names
         )

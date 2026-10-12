@@ -32,10 +32,14 @@ class ConfiguredSafety(NamedTuple):
     mode: str
 
 
-def safety_service_from_env(source: DataSource) -> ConfiguredSafety:
-    """The gate for one pipeline. Only internet and human data load PII scrubbing."""
+def safety_service_from_env(source: DataSource, *, detect_names: bool = True) -> ConfiguredSafety:
+    """The gate for one pipeline. Only internet and human data load PII scrubbing.
+
+    `detect_names=False` keeps regex PII scrubbing but skips the name model,
+    which source code needs because the model reads identifiers as people.
+    """
     adult = _adult_from_env()
-    pii = _pii_from_env() if source.scrubs_pii else None
+    pii = _pii_from_env(detect_names) if source.scrubs_pii else None
     if os.environ.get("FORGE_SAFETY_LLM", "0").strip() != "1":
         return ConfiguredSafety(DatasetSafetyService(adult, pii), "rules")
     try:
@@ -55,19 +59,22 @@ def _adult_from_env() -> DistilBertAdultDetector:
         raise SafetyConfigError(f"FORGE_ADULT_MODEL={model_id!r} could not be used: {exc}") from exc
 
 
-def _pii_from_env() -> PiiScrubbing:
+def _pii_from_env(detect_names: bool) -> PiiScrubbing:
     key = os.environ.get("FORGE_SCRUB_KEY", "").strip()
     if not key:
         raise SafetyConfigError(
             "FORGE_SCRUB_KEY is not set. It keys PII pseudonyms and is required for internet and human data."
         )
+    pseudonymizer = Pseudonymizer(key.encode())
+    if not detect_names:
+        return PiiScrubbing(pseudonymizer, names=None)
     threshold = _unit_float("FORGE_NER_THRESHOLD", DEFAULT_NER_THRESHOLD)
     model_id = os.environ.get("FORGE_NER_MODEL") or DEFAULT_NER_MODEL
     try:
         model = load_gliner(model_id)
     except Exception as exc:
         raise SafetyConfigError(f"FORGE_NER_MODEL={model_id!r} could not be loaded: {exc}") from exc
-    return PiiScrubbing(Pseudonymizer(key.encode()), GlinerNameDetector(model, threshold))
+    return PiiScrubbing(pseudonymizer, GlinerNameDetector(model, threshold))
 
 
 def _unit_float(name: str, default: float) -> float:
