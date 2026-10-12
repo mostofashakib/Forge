@@ -18,6 +18,7 @@ from typing import Any, Protocol
 
 from mcp.types import CallToolResult, EmbeddedResource, TextContent
 
+from forge.credentials import GITHUB_TOKEN, CredentialNotConfigured, require_credential
 from forge.repogen.types import RepoCandidate
 
 DEFAULT_GITHUB_MCP_URL = "https://api.githubcopilot.com/mcp/"
@@ -100,9 +101,10 @@ class McpGitHubSource:
 
 def github_settings_from_env() -> tuple[str, str]:
     """The MCP endpoint and token. A missing token raises naming `GITHUB_TOKEN`."""
-    token = os.environ.get("GITHUB_TOKEN", "").strip()
-    if not token:
-        raise RepoConfigError("GITHUB_TOKEN is not set. Repo discovery needs a GitHub token with public read access.")
+    try:
+        token = require_credential(GITHUB_TOKEN)
+    except CredentialNotConfigured as exc:
+        raise RepoConfigError(str(exc)) from exc
     return os.environ.get("FORGE_GITHUB_MCP_URL") or DEFAULT_GITHUB_MCP_URL, token
 
 

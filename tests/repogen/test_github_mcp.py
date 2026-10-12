@@ -123,6 +123,12 @@ def test_settings_need_a_token_and_default_the_url(monkeypatch):
     assert github_settings_from_env()[0] == "http://localhost:8082/mcp"
 
 
+def test_the_placeholder_token_is_rejected(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "mock_key")
+    with pytest.raises(RepoConfigError, match="GITHUB_TOKEN"):
+        github_settings_from_env()
+
+
 def test_a_listing_in_an_unexpected_shape_raises():
     caller = FakeCaller({"get_file_contents": _text({"type": "file", "name": "README.md"})})
     with pytest.raises(GitHubMcpError, match="get_file_contents"):

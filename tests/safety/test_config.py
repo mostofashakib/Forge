@@ -65,6 +65,12 @@ def test_a_blank_scrub_key_fails_too(env, monkeypatch):
         safety_service_from_env(DataSource.HUMAN)
 
 
+def test_the_placeholder_scrub_key_fails_too(env, monkeypatch):
+    monkeypatch.setenv("FORGE_SCRUB_KEY", "mock_key")
+    with pytest.raises(SafetyConfigError, match="FORGE_SCRUB_KEY"):
+        safety_service_from_env(DataSource.INTERNET)
+
+
 def test_the_ner_model_is_configurable(env, monkeypatch):
     monkeypatch.setenv("FORGE_NER_MODEL", "org/other-model")
     safety_service_from_env(DataSource.INTERNET)

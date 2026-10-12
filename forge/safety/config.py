@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 from typing import NamedTuple
 
+from forge.credentials import FORGE_SCRUB_KEY, CredentialNotConfigured, require_credential
 from forge.extraction.llm_client import generation_models, get_judge_client
 from forge.safety.adult import (
     DEFAULT_ADULT_MODEL,
@@ -60,11 +61,10 @@ def _adult_from_env() -> DistilBertAdultDetector:
 
 
 def _pii_from_env(detect_names: bool) -> PiiScrubbing:
-    key = os.environ.get("FORGE_SCRUB_KEY", "").strip()
-    if not key:
-        raise SafetyConfigError(
-            "FORGE_SCRUB_KEY is not set. It keys PII pseudonyms and is required for internet and human data."
-        )
+    try:
+        key = require_credential(FORGE_SCRUB_KEY)
+    except CredentialNotConfigured as exc:
+        raise SafetyConfigError(str(exc)) from exc
     pseudonymizer = Pseudonymizer(key.encode())
     if not detect_names:
         return PiiScrubbing(pseudonymizer, names=None)
