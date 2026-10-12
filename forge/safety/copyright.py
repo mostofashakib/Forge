@@ -35,7 +35,8 @@ _ALL_RIGHTS = re.compile(r"all\s+rights\s+reserved", _I)
 _PERMISSIVE_GRANT = re.compile(
     r"Permission is hereby granted|Redistribution and use in source and binary forms"
     r"|Licensed under the Apache License|Permission to use, copy, modify"
-    r"|free and unencumbered software", _I
+    r"|free and unencumbered software"
+    r"|governed by (?:a|an|the) (?:BSD|MIT|Apache|ISC)[\w-]*(?: style)? license", _I
 )
 
 

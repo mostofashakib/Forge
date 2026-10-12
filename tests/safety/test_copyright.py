@@ -45,6 +45,9 @@ def test_non_permissive_or_proprietary_code_is_flagged(text):
     BSD_HEADER,
     "# Copyright (c) 2024 Jane Doe\n# Permission is hereby granted, free of charge, to any person. All rights reserved.",
     "© 2026 Acme Inc. All rights reserved. Unsubscribe here.",
+    "// Copyright 2020 The Go Authors. All rights reserved.\n"
+    "// Use of this source code is governed by a BSD-style license that can be found in the LICENSE file.",
+    "# Copyright 2024 Acme. All rights reserved.\n# Use of this source code is governed by the MIT license.",
     "This email is proprietary and confidential. Do not distribute.",
     "We avoid GPL dependencies because of the GNU license terms.",
     "def close_ticket(ticket_id): return api.close(ticket_id)",
