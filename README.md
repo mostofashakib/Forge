@@ -581,7 +581,7 @@ Seven export formats from the per-environment **Export Dataset** page:
 
 #### Safety Gate
 
-Every row passes one gate before it is written, in every format above and in training-data staging. Raw rows never touch disk.
+Every row passes one gate before it is written, in every format above. Raw rows never touch disk.
 
 Each pipeline declares where its data came from. Model-generated data (Forge rollouts, task-factory batches) is screened for harm but keeps its text. Internet and human data is also PII-scrubbed.
 
@@ -616,9 +616,9 @@ results internally.
 
 **Runnable source export**: separately from the datasets, any generated environment can be downloaded as a self-contained zip (`GET /api/envs/{env_name}/download`, or the download action on the environment page). `build_source_bundle` packages the generated app, `container_env.py`, `reward_fn.py`, `state_schema.json`, and any `custom/` overrides alongside a README and a `docker-compose.yml`, while filtering runtime artifacts (`episodes/`, `__pycache__`, `.pyc`). It runs with one command so an environment can be published, reviewed, or archived independently.
 
-### Policy Training
+### Training
 
-Training is handled by [Autotune](https://github.com/mostofashakib/Autotune). Export your verified rollouts or preference datasets from Forge, then train your policy:
+Forge does not train models. Training is handled by [Autotune](https://github.com/mostofashakib/Autotune). Export your verified rollouts or preference datasets from Forge, then train your policy:
 
 ```bash
 # SFT or GRPO training with automated LoRA/QLoRA recipe selection
@@ -626,14 +626,6 @@ uv run autotune train exports/grpo_rollouts.parquet --objective grpo --output-di
 ```
 
 A finished training run writes a `policy_checkpoint.json` manifest that runtime agents load via `forge.runtime.policy_loader.load_policy_agent`, so the same policy can collect → grade → export → train → reload.
-
-For embedded SFT training, `forge.training.AutotuneTrainer` requires an injected
-`TrainingBackend`. Its `train` method receives the base model, typed examples,
-output directory, and step limit, then returns the trained model path. Forge reads
-`sft_pairs.jsonl`, filters exact environment names, and records the example count
-and available reward mean in the checkpoint. Missing training signal, malformed
-JSONL, unsupported objectives, and missing backends fail explicitly. Forge does
-not generate fallback examples or report training success without a backend.
 
 ---
 
@@ -672,38 +664,6 @@ forge benchmark eval \
 The evaluator requires each held-out environment to be running and to have compiled
 tasks. It rejects checkpoints missing experiment metadata, checkpoints produced from
 a different config, undeclared seeds, and any train/held-out leakage.
-
-### Transfer Benchmark
-
-`forge benchmark transfer` (and **Benchmark → Transfer**) measures whether training on
-one set of environments helps on others. It reads the same experiment YAML, then:
-
-1. Checks the request before any training: the base model must match the experiment
-   (leave it blank to use the experiment's), the seeds must be declared, and each task
-   needs at least 3 samples so pass@3 is a real estimate.
-2. Fine-tunes once on demonstrations from `train_envs` only. Rows from held-out
-   environments are dropped.
-3. Evaluates the checkpoint on `heldout_envs` once per seed, writing one result record
-   per seed.
-4. Pools each task's decided samples across seeds and reports task completion rate,
-   pass@1, and pass@3. Abstentions are left out, and passes the reward-hacking audit
-   flags count as failures.
-
-```bash
-forge benchmark transfer \
-  --data ./sft_data \
-  --experiment experiments/internal_heldout.yaml \
-  --seeds 2 \
-  --max-steps 500
-```
-
-A run with no training data or a misconfigured split fails with a clear error and
-reports no numbers. The API confines the experiment, data, and output paths to the
-project directory.
-
-The default transfer entry points have no training backend configured. Wire a
-`TrainingBackend` into `AutotuneTrainer` before using the integrated transfer
-pipeline. Otherwise, train externally and use `forge benchmark eval`.
 
 ### Policy Evaluation Metrics
 
@@ -773,7 +733,6 @@ The responsive Next.js control surface uses an industrial foundry visual system 
 | **Export** | Configure and export SFT, DPO, and GRPO datasets with dataset manifests ready for Autotune |
 | **Run** | Select which active environments to benchmark, max difficulty (1–5), seeds per task, inference target, and output dir; launch with live log streaming and progress |
 | **Report** | Table of quality metrics per environment for the most recent completed run; CSV download. pass@k and agreement charts appear only for runs that recorded per-task pass/fail samples |
-| **Transfer** | Fine-tune on the experiment's training environments, then measure task completion, pass@1, and pass@3 on its held-out environments, with live log streaming |
 | **Eval** | Evaluate a policy checkpoint on the declarative internal held-out split |
 
 ### CLI
@@ -789,10 +748,6 @@ forge benchmark report --output benchmark_results
 
 forge benchmark eval \
   --checkpoint ./policy_checkpoint \
-  --experiment experiments/internal_heldout.yaml
-
-forge benchmark transfer \
-  --data ./sft_data \
   --experiment experiments/internal_heldout.yaml
 ```
 
@@ -883,7 +838,6 @@ forge/
   config.py            # CentralizedConfig: forge.config.yaml registry & versions
   dev_logger.py        # DevLogger: contextual binding, timers, PII/secret redaction
   jsonl.py             # Streaming JSONL object reader with strict and tolerant modes
-  training.py          # SFT adapter and typed training backend boundary
   contracts/           # The interfaces every environment family implements
     types.py           # Shared shapes: Task, Action, Observation, ToolSpec, results
     environment.py     # Environment facade composing ten of the eleven contracts
@@ -937,9 +891,8 @@ forge/
     data_collector.py  # Episode collection loop
     env_quality.py     # EnvQualityMetrics: coverage, reward density, dead-end rate, diversity
     report.py          # BenchmarkReport: paper-ready figures and summary tables
-    transfer_pipeline.py  # Fine-tune on train envs, pass@k on held-out envs
     _eval.py           # checkpoint-backed internal held-out evaluation + result records
-  contracts/           # Interface contracts: TaskSource, Rubric, StateManager, Training
+  contracts/           # Interface contracts: TaskSource, Rubric, StateManager
   customization/       # Per-env overrides: decorator hooks, EnvConfig, loader
   personas/            # Simulated humans: population, scheduler, guardrails, drivers, engine
   schema/              # StateSchemaManifest and related schemas
@@ -961,8 +914,8 @@ forge/
   paths.py             # Confined-path helpers for generated-env file access
 
   cli/
-    main.py            # forge CLI: compile, validate, run, replay, diagnose, train
-    benchmark.py       # forge benchmark run / transfer / report / eval
+    main.py            # forge CLI: compile, validate, run, replay, diagnose
+    benchmark.py       # forge benchmark run / report / eval
     diagnosis.py       # forge diagnose; replay_render.py renders forge replay
 backend/
   app/
@@ -992,7 +945,6 @@ frontend/
     benchmark/
       run/             # Launch benchmark: domain/depth/seed config + live log + progress bar
       report/          # Quality metrics table with colour coding + CSV download
-      transfer/        # Transfer benchmark: fine-tune, then held-out pass@k
       eval/            # Internal checkpoint evaluation on held-out environments
     environments/
       new/             # 4-option landing page (CLI / Browser / Custom / Premade)
