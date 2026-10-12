@@ -24,6 +24,8 @@ _PIP = "pip install --no-cache-dir"
 class Toolchain(Protocol):
     name: str
     base_image: str
+    # Where the test command writes its per-test report inside the container.
+    report_path: str
 
     def detect(self, root: Path) -> bool: ...
 
@@ -38,6 +40,7 @@ class Toolchain(Protocol):
 class PythonToolchain:
     name = "python"
     base_image = "python:3.12-slim"
+    report_path = "/tmp/forge-report.xml"
 
     def detect(self, root: Path) -> bool:
         return any((root / name).exists() for name in ("pyproject.toml", "setup.py", "setup.cfg")) or any(
@@ -72,6 +75,7 @@ class PythonToolchain:
 class NodeToolchain:
     name = "node"
     base_image = "node:20-slim"
+    report_path = "/tmp/forge-report.json"
 
     def detect(self, root: Path) -> bool:
         package = _package_json(root)
