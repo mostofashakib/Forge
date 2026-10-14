@@ -8,6 +8,39 @@ user's request, in place of the plan's stacked milestone branches).
 
 ## Phase 1. Everything the agent does alone
 
+### A3. deploy/README.md lists every wiring ID
+
+`grep -oE '\b[WX][0-9]+\b' deploy/README.md | sort -u -V`
+```
+W1 W2 W3 W4 W5 W6 W7 W8 W9 W10 W11 W12 W13 W14 W15 W16 W17 W18 W19 X1 X2 X3 X4 X5
+```
+
+### A6. Health endpoint
+
+Tests: `uv run pytest -q tests/backend/test_health_api.py` gives `21 passed`. With the
+router unregistered, 8 endpoint tests fail. Full suite: `2718 passed, 2 skipped`.
+
+Live checks ran on an isolated stack (Redis 6391, API 8191, its own Celery worker,
+a scratch database) because ports 8000 and 3000 belong to another project on
+this laptop, and `run.sh` would kill them.
+
+```
+== all up
+{"status":"ok","checks":{"database":"ok","redis":"ok","docker":"ok","worker":"ok","llm":"ok","backup":"disabled"}} 200
+== redis down
+{"status":"degraded","checks":{..."redis":"Error 61 connecting to 127.0.0.1:6391. Connection refused.",...,"worker":"Error 61 connecting to 127.0.0.1:6391. Connection refused.",...}} 503
+== redis back (no API restart)
+{"status":"ok",...} 200
+== worker down
+{"status":"degraded","checks":{...,"worker":"no Celery worker answered a ping",...}} 503
+== worker back
+{"status":"ok",...} 200
+== OLLAMA_BASE_URL pointing at a closed port
+"llm":"could not list models from http://127.0.0.1:11999/api/tags: [Errno 61] Connection refused"
+== curl -s localhost:8191/api/health | grep -Ei 'redis://|password|sk-|key='
+(no output, grep exit 1)
+```
+
 ## Phase 2. The full system on the laptop
 
 ## Phase 3. The VM
