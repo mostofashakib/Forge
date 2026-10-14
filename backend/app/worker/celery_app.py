@@ -6,6 +6,10 @@ from celery import Celery
 from celery.schedules import crontab
 from celery.signals import worker_ready
 
+from backend.app.production_checks import enforce_production_settings
+
+enforce_production_settings()
+
 log = logging.getLogger(__name__)
 
 default_redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")

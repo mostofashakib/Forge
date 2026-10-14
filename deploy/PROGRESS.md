@@ -96,6 +96,30 @@ application firewall is on and drops incoming connections to Node on that addres
 Allowing Node through the firewall needs the user. The same reachability is checked
 through Caddy at A36 and from the tailnet at A54.
 
+### A18. Production startup checks
+
+`uv run pytest -q tests/backend/test_production_checks.py`: `21 passed`. Full suite:
+`2759 passed, 2 skipped`.
+
+Refinement: Forge reads only `REDIS_URL`, so the check requires that `REDIS_URL`
+carries a password (the problem line names `FORGE_REDIS_PASSWORD`), in place of
+requiring a `FORGE_REDIS_PASSWORD` variable Forge never reads.
+
+```
+$ FORGE_ENV=production FORGE_SCRUB_KEY= ... uvicorn backend.app.main:app
+[forge] FORGE_SCRUB_KEY is not set. It keys PII pseudonyms in internet and human data.
+exit 1
+$ FORGE_ENV=production FORGE_SCRUB_KEY= ... celery -A backend.app.worker.celery_app worker
+[forge] FORGE_SCRUB_KEY is not set. It keys PII pseudonyms in internet and human data.
+exit 1
+$ FORGE_ENV=production (every value set) uvicorn ... --port 8193; curl /api/health
+{"status":"ok","checks":{"database":"ok","redis":"ok","docker":"ok","worker":"ok","llm":"ok","backup":"disabled"}} 200
+```
+With `FORGE_ENV` unset, the API starts as before (the isolated stack on 8191 runs that way).
+
+`deploy/.env.production.example` added. `.gitignore` gains `!deploy/.env.production.example`,
+and `git check-ignore` still ignores `deploy/.env.production` and `deploy/.env.vm`.
+
 ## Phase 2. The full system on the laptop
 
 ## Phase 3. The VM

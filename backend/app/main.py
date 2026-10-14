@@ -8,6 +8,10 @@ from fastapi import FastAPI
 
 load_dotenv(Path(__file__).parent.parent / ".env")
 
+from backend.app.production_checks import enforce_production_settings
+
+enforce_production_settings()
+
 logging.basicConfig(
     level=logging.DEBUG if os.environ.get("FORGE_DEBUG") else logging.INFO,
     format="%(asctime)s %(levelname)-8s %(name)s — %(message)s",
