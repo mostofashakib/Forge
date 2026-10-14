@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from backend.app.worker.env_artifacts import load_manifest, load_personas
-from forge.settings import experiment_seed
+from forge.settings import experiment_seed, sandbox_url
 
 logger = logging.getLogger(__name__)
 
@@ -141,7 +141,7 @@ def _run_browser_attempt(episode: ContainerEpisode, runtime, attempt_seed: int):
 def _run_browser_on(episode: ContainerEpisode, agent, cdp_port: int | None):
     from forge.envgen.browser_runner import BrowserEpisodeConfig, BrowserEpisodeRunner
 
-    config = BrowserEpisodeConfig(cdp_url=f"http://localhost:{cdp_port}", **episode.limits())
+    config = BrowserEpisodeConfig(cdp_url=sandbox_url(cdp_port), **episode.limits())
     return BrowserEpisodeRunner(config).run_episode(
         agent, episode_id=episode.episode_id, jsonl_path=episode.jsonl_path
     )
@@ -167,7 +167,7 @@ def _run_http_on(episode: ContainerEpisode, agent, port: int):
     from forge.envgen.episode_runner import ContainerEpisodeRunner, EpisodeConfig
 
     config = EpisodeConfig(
-        base_url=f"http://localhost:{port}",
+        base_url=sandbox_url(port),
         personas=load_personas(episode.env_dir),
         **episode.limits(),
     )

@@ -21,7 +21,7 @@ from backend.app.models import RepoEnvironment, SandboxEnvironment
 from forge.contracts.transport import DEFAULT_TIMEOUT_S
 from forge.envgen.container import ContainerRuntime
 from forge.repogen.notes import RepoMeta, repo_notes
-from forge.settings import generated_envs_root
+from forge.settings import generated_envs_root, sandbox_url
 from forge.taskfactory.profile import BROWSER_NOTES, CLI_NOTES, EnvironmentProfile, ToolInfo, param_hint
 from forge.taskfactory.runner import TaskRunner
 from forge.taskfactory.runners.browser import BrowserRunner
@@ -121,7 +121,7 @@ def open_target(db: Session, env_name: str, batch_id: str) -> Iterator[Target]:
             yield _browser_target(env_name, _gateway_port(runtime, container, env_name, _DEVTOOLS_PORT))
         else:
             port = _gateway_port(runtime, container, env_name, None)
-            with httpx.Client(base_url=f"http://127.0.0.1:{port}", timeout=DEFAULT_TIMEOUT_S) as http:
+            with httpx.Client(base_url=sandbox_url(port), timeout=DEFAULT_TIMEOUT_S) as http:
                 runner = ContainerAppRunner(http)
                 yield Target(runner, lambda: runner.profile(env_name, sandbox.env_type))
     finally:
@@ -178,7 +178,7 @@ def _browser_target(env_name: str, cdp_port: int) -> Target:
         from playwright.sync_api import sync_playwright
 
         with sync_playwright() as playwright:
-            browser = playwright.chromium.connect_over_cdp(f"http://127.0.0.1:{cdp_port}")
+            browser = playwright.chromium.connect_over_cdp(sandbox_url(cdp_port))
             try:
                 yield browser
             finally:

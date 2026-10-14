@@ -41,6 +41,23 @@ this laptop, and `run.sh` would kill them.
 (no output, grep exit 1)
 ```
 
+### A9. One setting for the sandbox host
+
+`grep -rnE "f[\"']https?://(localhost|127\.0\.0\.1):\{" forge backend --include='*.py' | grep -v tests/`
+prints nothing (grep exit 1). The plan listed four call sites. A fifth,
+`task_factory_targets.py:181` (the browser CDP URL), was also moved to `sandbox_url`.
+
+New tests: `10 passed`. Reverting `sandbox_build_tasks.py:352` to a hand-built URL fails
+the architecture test with `'backend/app/worker/sandbox_build_tasks.py:352'`, and
+restoring it passes. One existing test expected `http://localhost:{port}` for the CDP
+URL and now expects `http://127.0.0.1:{port}`, the published gateway address.
+Full suite: `2728 passed, 2 skipped`.
+
+Live, on the isolated stack: `POST /api/sandbox/ {"env_name":"m2-gmail","env_type":"premade:gmail"}`
+reached `running` on port 50646. A 1-episode `random` agent run finished
+`completed 1`, episode `completed 4 steps, reward 0.7, submitted`. The worker log shows
+19 requests to `http://127.0.0.1:50646` and none to `localhost:<sandbox port>`.
+
 ## Phase 2. The full system on the laptop
 
 ## Phase 3. The VM

@@ -10,6 +10,7 @@ DEFAULT_REDIS_URL = "redis://localhost:6379/0"
 DEFAULT_DATABASE_URL = "sqlite:///./forge.db"
 DEFAULT_GENERATED_ENVS_DIR = "generated_envs"
 DEFAULT_SANDBOX_LIMIT = 10
+DEFAULT_SANDBOX_HOST = "127.0.0.1"
 
 
 def determinism_enabled() -> bool:
@@ -42,3 +43,11 @@ def database_url() -> str:
 
 def sandbox_limit() -> int:
     return int(os.environ.get("FORGE_SANDBOX_LIMIT", str(get_config().sandbox.sandbox_limit)))
+
+
+def sandbox_url(port: int, scheme: str = "http") -> str:
+    """The URL of a sandbox port. FORGE_SANDBOX_HOST names the machine sandboxes run on."""
+    if not isinstance(port, int) or not 0 < port < 65536:
+        raise ValueError(f"sandbox port must be 1-65535, got {port!r}")
+    host = os.environ.get("FORGE_SANDBOX_HOST", "").strip() or DEFAULT_SANDBOX_HOST
+    return f"{scheme}://{host}:{port}"

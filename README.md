@@ -882,6 +882,7 @@ imports, animated premade UIs, and tests that assert only the happy path.
 | `FORGE_GENERATED_ENVS_DIR` | `generated_envs` | Where compiled environments are written |
 | `FORGE_DB_URL` | `sqlite:///./forge.db` | Backend database URL |
 | `FORGE_SANDBOX_LIMIT` | `10` | Maximum active sandbox environments |
+| `FORGE_SANDBOX_HOST` | `127.0.0.1` | Host that sandbox ports are reached on, by the worker and the sandbox proxy |
 | `FORGE_HOST` | `127.0.0.1` | Backend bind host used by `run.sh` |
 | `FORGE_DETERMINISM` | `on` | Set to `off` only for the determinism ablation; disables virtual time, runtime/training seeding, and determinism gates |
 | `FORGE_DEV_NETWORK` | `false` | Set to `true` to bypass network isolation in generated envs |

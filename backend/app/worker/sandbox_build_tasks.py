@@ -13,7 +13,7 @@ from pathlib import Path
 
 from backend.app.worker.celery_app import celery
 from backend.app.worker.env_artifacts import load_manifest
-from forge.settings import generated_envs_root, redis_url
+from forge.settings import generated_envs_root, redis_url, sandbox_url
 
 logger = logging.getLogger("backend.app.worker.tasks")
 
@@ -349,7 +349,7 @@ async def build_generated(request: BuildRequest, reporter: BuildReporter) -> Non
     reporter.log(f"[forge] container running on port {port} ✓")
     reporter.running(container_id, port, image_tag)
 
-    base_url = f"http://localhost:{port}"
+    base_url = sandbox_url(port)
     if determinism_enabled():
         await _check_correctness(base_url, [a.name for a in compiler_input.actions], reporter.publish)
     else:

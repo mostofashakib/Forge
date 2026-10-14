@@ -1098,7 +1098,7 @@ def test_browser_episode_reaches_devtools_through_the_gateway(client):
          patch("forge.envgen.agents.browser_agent.make_browser_agent"):
         tasks.run_container_episode_task("run_web", 0, 0)
 
-    assert runner_cls.call_args.args[0].cdp_url == f"http://localhost:{cdp_port}"
+    assert runner_cls.call_args.args[0].cdp_url == f"http://127.0.0.1:{cdp_port}"
 
 
 SECRET = "sk-ant-api03-AbCdEfGhIjKlMnOpQrStUv_wxyz"
