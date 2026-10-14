@@ -90,7 +90,7 @@ gateways on `127.0.0.1`, the same way `run.sh` works today.
 | W8 | api, worker | SQLite | `/data/forge.db` on volume `forge-data` | file permissions (uid `forge`) | both containers write and read a row |
 | W9 | api, worker | Docker daemon | `/var/run/docker.sock` | `docker` group | `docker compose exec worker docker version` |
 | W10 | worker | environment gateways | `sandbox_url(port)` from `FORGE_SANDBOX_HOST` | none | start a premade environment and `GET` its gateway |
-| W11 | frontend proxy route | environment gateways | `FORGE_SANDBOX_HOST:{port}` | none | `GET https://<host>/api/proxy/<env>/` returns the environment's page |
+| W11 | frontend `/api/proxy` route (general sandboxes, HTTP), and api `/api/sandbox/{env}/browser/` route (browser sandboxes, HTTP and WebSocket) | environment gateways | `FORGE_SANDBOX_HOST:{port}` | none | `GET https://<host>/api/proxy/<env>/` returns the environment's page, and a `wss://` handshake to `/api/sandbox/<env>/browser/api/websockets` succeeds |
 | W12 | api, worker | LLM provider | Ollama at `OLLAMA_BASE_URL`, or the hosted provider's HTTPS API | provider key via `forge/credentials.py` | `/api/health` reports `llm: ok` |
 | W13 | Litestream | `forge.db`, then the backup bucket | volume `forge-data`, `forge-backups/<deploy>/db` | key scoped to `forge-backups` | `litestream snapshots` lists a snapshot under 1 h old |
 | W14 | backup | volume `generated-envs`, then the backup bucket | read-only mount, `forge-backups/<deploy>/files` | same key, `RESTIC_PASSWORD` | `restic snapshots` lists one under 25 h old |
