@@ -34,6 +34,7 @@ from backend.app.api.task_factory import router as task_factory_router
 from backend.app.api.reliability import router as reliability_router
 from backend.app.api.repos import router as repos_router
 from backend.app.api.health import router as health_router
+from backend.app.api.sandbox_browser_proxy import router as sandbox_browser_proxy_router
 from backend.app.database import init_db
 from backend.app.docker_utils import is_docker_daemon_unavailable
 
@@ -79,6 +80,7 @@ app.include_router(task_factory_router)
 app.include_router(reliability_router)
 app.include_router(repos_router)
 app.include_router(health_router)
+app.include_router(sandbox_browser_proxy_router)
 
 
 def _reattach_containers() -> None:

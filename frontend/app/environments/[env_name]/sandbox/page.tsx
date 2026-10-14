@@ -40,6 +40,9 @@ export default function SandboxPage({ params }: Props) {
   const [resetting, setResetting] = useState(false);
   const [mountedAt] = useState(() => Date.now());
 
+  // The desktop streams over a WebSocket, so it goes through the API proxy, not /api/proxy.
+  const browserDesktopUrl = `${API_BASE}/api/sandbox/${env_name}/browser/`;
+
   // Iframe ref for Reload control
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
@@ -215,7 +218,7 @@ export default function SandboxPage({ params }: Props) {
                 Reload
               </button>
               <a
-                href={`http://localhost:${info.container_port}/`}
+                href={browserDesktopUrl}
                 target="_blank"
                 rel="noreferrer"
                 className="px-3 py-1 border rounded text-sm hover:bg-gray-50"
@@ -296,7 +299,7 @@ export default function SandboxPage({ params }: Props) {
           isRunning && info?.container_port ? (
             <iframe
               ref={iframeRef}
-              src={`http://localhost:${info.container_port}/`}
+              src={browserDesktopUrl}
               className="w-full h-full border-0"
               title={`${env_name} browser`}
             />

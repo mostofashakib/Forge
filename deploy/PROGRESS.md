@@ -58,6 +58,44 @@ reached `running` on port 50646. A 1-episode `random` agent run finished
 `completed 1`, episode `completed 4 steps, reward 0.7, submitted`. The worker log shows
 19 requests to `http://127.0.0.1:50646` and none to `localhost:<sandbox port>`.
 
+### A14. Sandbox pages through the proxy
+
+Finding: the browser sandbox's desktop is Selkies, which opens its WebSocket at
+`<page directory>/api/websockets`. The Next.js `/api/proxy` route carries only HTTP,
+so browser sandboxes now go through a new API route,
+`/api/sandbox/{env_name}/browser/{path}`, that carries HTTP and WebSocket traffic and
+reaches only the port the database records for that sandbox. General sandboxes keep
+`/api/proxy`, now with its upstream host from `FORGE_SANDBOX_HOST`.
+
+Consequence for the Caddyfile (A25): `/api/proxy/*` must route to the frontend, ahead
+of the `/api/*` rule that routes to the API.
+
+`grep -rn 'localhost:\${' frontend/app frontend/components frontend/lib` prints nothing.
+`npm --prefix frontend test`: `pass 9, fail 0`. `npm --prefix frontend run build`: passes.
+`uv run pytest -q tests/backend/test_sandbox_browser_proxy.py`: `10 passed`. Full suite:
+`2738 passed, 2 skipped`.
+
+Live, headless Chrome on the isolated stack (frontend 3191, API 8191):
+```
+browser sandbox page (m3-browser, raw port 50717)
+hosts contacted: ['localhost:3191', 'localhost:8191']
+proxied: http://localhost:8191/api/sandbox/m3-browser/browser/assets/selkies-core-BbKps5RD.js (and 5 more)
+websocket: ws://localhost:8191/api/sandbox/m3-browser/browser/api/websockets frames received: 137
+failures: none
+(the screenshot shows the Chromium desktop rendered in the iframe)
+
+gmail sandbox page (m2-gmail, raw port 50915)
+hosts contacted: ['fonts.googleapis.com', 'fonts.gstatic.com', 'localhost:3191', 'localhost:8191']
+proxied: http://localhost:3191/api/proxy/m2-gmail/ui, .../forge/state
+failures: none
+Compose and Send inside the iframe: sent_count 5 -> 6, read back through /api/proxy/m2-gmail/forge/state
+```
+
+Not run: fetching the proxy from the laptop's LAN address (192.168.1.202). The macOS
+application firewall is on and drops incoming connections to Node on that address.
+Allowing Node through the firewall needs the user. The same reachability is checked
+through Caddy at A36 and from the tailnet at A54.
+
 ## Phase 2. The full system on the laptop
 
 ## Phase 3. The VM

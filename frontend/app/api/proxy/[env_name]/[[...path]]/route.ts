@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { sandboxHost, sandboxUpstreamUrl } from "@/lib/sandboxProxy";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -34,9 +35,12 @@ async function proxyRequest(
     );
   }
 
-  const pathStr = path && path.length > 0 ? path.join("/") : "";
-  const qs = req.nextUrl.search;
-  const url = `http://localhost:${port}/${pathStr}${qs}`;
+  let url: string;
+  try {
+    url = sandboxUpstreamUrl(sandboxHost(process.env), port, path, req.nextUrl.search);
+  } catch (error) {
+    return new NextResponse(error instanceof Error ? error.message : "invalid sandbox path", { status: 400 });
+  }
   const headers = new Headers(req.headers);
   headers.set("X-Forge-Actor", "user");
   headers.delete("host");
