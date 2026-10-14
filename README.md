@@ -975,3 +975,11 @@ forge diagnose <env_name> [--json]   # Analyse episode quality across all runs
 (`seeded_random_policy`), not an LLM adapter; LLM/scripted agents run through the
 backend agent-run API and the **Agent** page. Both commands run the launch-time
 determinism check before the first `reset()`.
+
+---
+
+## License
+
+MIT. See [LICENSE](https://github.com/mostofashakib/VidQ/blob/main/LICENSE).
+
+Built by [Mostofa Shakib](https://www.mostofashakib.com/).
