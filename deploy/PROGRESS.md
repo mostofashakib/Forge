@@ -284,6 +284,28 @@ Rehearsal result after the fix, same request (`gen-todo`, the todo-list descript
 - qwen3.6:35b: failed at `scenario_builder`. The JSON parsed but broke the
   `ScenarioSuite` schema (missing fields, objects where strings belong).
 
+### Fields named `title` reach the model
+
+`_inline_refs` dropped every `"title"` key to strip JSON Schema metadata, and with it
+every real field called `title`. The scenario source object listed `title` as
+required with no property for it, so the model could never emit it. It now keeps
+keys under `"properties"`. This schema goes to Anthropic and OpenAI too. Test:
+`test_flat_schema_keeps_a_field_named_title`. Full suite: `2779 passed, 2 skipped`.
+
+Every local model with thinking off, after both fixes, on the same request:
+
+| Model | Result |
+|---|---|
+| gemma4:26b | All stages ran (4 min 46 s). Review rejected it: Python that does not parse, no `forge.contracts` base classes |
+| qwen2.5vl:7b | All stages ran (14 min). Review rejected it: an unterminated f-string, no list endpoint |
+| gemma3:1b | Failed the first step (`TaskExtractionResult`). Too small |
+| qwen3.6:35b | Failed at `backend_builder`: empty JSON |
+| glm-4.7-flash | Failed the first step: empty JSON |
+
+qwen3.6:35b and glm-4.7-flash ignore the JSON schema when thinking is off on the
+Mac's Ollama 0.35.1. They answer in a markdown code block with a shape of their own.
+With thinking on, both follow the schema. gemma4:26b follows it with thinking off.
+
 The services, the LLM path, and every generation stage work in the rehearsal. The
 gate catches bad output as designed. A full generation needs a stronger model than
 these local ones, which is A41's decision (hosted provider or a larger model).
