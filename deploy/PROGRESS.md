@@ -305,6 +305,11 @@ Every local model with thinking off, after both fixes, on the same request:
 qwen3.6:35b and glm-4.7-flash ignore the JSON schema when thinking is off on the
 Mac's Ollama 0.35.1. They answer in a markdown code block with a shape of their own.
 With thinking on, both follow the schema. gemma4:26b follows it with thinking off.
+qwen3.6:35b with thinking on ran 39 min and still failed at `backend_builder` with
+empty JSON: its reasoning spent the token budget on the largest step. Thinking stays
+off for every model, and qwen3 and glm-4 models do not work with Forge on this Ollama.
+All local models are Q4_K_M already. A smaller quantization trades away the quality
+these failures lack.
 
 The services, the LLM path, and every generation stage work in the rehearsal. The
 gate catches bad output as designed. A full generation needs a stronger model than
