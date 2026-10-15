@@ -1,6 +1,8 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // A self-contained server for the Docker image (frontend/Dockerfile).
+  output: "standalone",
   // The synthetic task generator moved from /tasks. Old links still land on it.
   async redirects() {
     return [

@@ -125,6 +125,28 @@ With `FORGE_ENV` unset, the API starts as before (the isolated stack on 8191 run
 `deploy/.env.production.example` added. `.gitignore` gains `!deploy/.env.production.example`,
 and `git check-ignore` still ignores `deploy/.env.production` and `deploy/.env.vm`.
 
+### A23. Container images
+
+```
+$ docker buildx build --platform linux/amd64,linux/arm64 -f docker/forge/Dockerfile .      -> exit 0
+$ docker buildx build --platform linux/amd64,linux/arm64 frontend (NEXT_PUBLIC_API_URL arg) -> exit 0
+$ docker run --rm forge-backend:dev id -u     -> 10001
+$ docker run --rm forge-frontend:dev id -u    -> 1000
+$ docker run --rm forge-backend:dev python -c "import backend.app.main"   -> exit 0
+$ docker run --rm forge-backend:dev sh -c 'ls -a / /app | grep -E "\.env$|forge\.db"'   -> no output
+  (a full `find / -xdev` for .env, .env.*, forge.db* in both images also finds nothing)
+$ docker history --no-trunc forge-backend:dev | grep -Ei 'api_key|token|password='    -> no output
+$ docker history --no-trunc forge-frontend:dev | grep -Ei 'api_key|token|password='   -> no output
+$ docker images   -> forge-backend:dev 2.77GB, forge-frontend:dev 295MB
+```
+The first build was 4.6 GB and 405 MB. The uv download cache had landed in the
+dependency layer (fixed with a BuildKit cache mount), and the Debian Node base was
+replaced with Alpine. Linux PyTorch now comes from the CPU wheel index (approved by
+the user), pinned to 2.13.0 on every platform, which removed 15 CUDA packages.
+
+Models: loading all three into an empty volume took 112 s and 1.5 GB. Documented in
+`deploy/README.md` rather than baked into the image.
+
 ## Phase 2. The full system on the laptop
 
 ## Phase 3. The VM

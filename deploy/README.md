@@ -17,6 +17,29 @@ Pending. Each answer gets the date and who decided.
 | Who gets alert emails | pending | | |
 
 
+## Images
+
+| Image | Built from | arm64 size | Runs as |
+|---|---|---|---|
+| `forge-backend` | `docker/forge/Dockerfile` (one image, API and worker commands) | 2.77 GB | uid 10001 (`forge`) |
+| `forge-frontend` | `frontend/Dockerfile` (Next.js standalone, Alpine) | 295 MB | uid 1000 (`node`) |
+
+Both build for `linux/amd64` and `linux/arm64`. Linux installs take PyTorch's CPU
+wheels (`[tool.uv.sources]` in `pyproject.toml`), which keeps about 3 GB of CUDA
+libraries out of the backend image.
+
+The safety models (GLiNER2 PII, the DistilBERT adult-content classifier) and the
+MiniLM embedding model are not in the image. They download into the `model-cache`
+volume (`HF_HOME=/models`) the first time an export or reward needs them: 1.5 GB,
+112 s on a fast connection. The first export after a fresh deploy waits that long once.
+
+## Known gaps
+
+- The Settings page saves to `backend/.env` inside the container, which a restart
+  discards. In production, set values in the deployment's env file instead.
+- If Caddy stops, the heartbeat stays green, because it calls the api directly.
+  Only `smoke.sh` catches it.
+
 ## Stack
 
 Everything except the VM is open source or free on every provider.

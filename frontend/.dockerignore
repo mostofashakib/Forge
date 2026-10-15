@@ -1,0 +1,11 @@
+# Never send secrets, local state, or build output to the Docker daemon.
+.env
+.env.*
+node_modules/
+.next/
+tests/
+tsconfig.tsbuildinfo
+Dockerfile
+.dockerignore
+.DS_Store
+*.log
