@@ -91,10 +91,15 @@ failures: none
 Compose and Send inside the iframe: sent_count 5 -> 6, read back through /api/proxy/m2-gmail/forge/state
 ```
 
-Not run: fetching the proxy from the laptop's LAN address (192.168.1.202). The macOS
-application firewall is on and drops incoming connections to Node on that address.
-Allowing Node through the firewall needs the user. The same reachability is checked
-through Caddy at A36 and from the tailnet at A54.
+From the laptop's LAN address (frontend bound to all interfaces):
+```
+$ curl -s -o /dev/null -w '%{http_code}' http://192.168.1.202:3191/api/proxy/m2-gmail/ui
+200
+$ curl -s http://192.168.1.202:3191/api/proxy/m2-gmail/ui | grep -o "<title>[^<]*</title>"
+<title>Gmail</title>
+```
+(The first attempt timed out while the macOS application firewall held the connection.
+It passed once Node was allowed through.)
 
 ### A18. Production startup checks
 
