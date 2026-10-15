@@ -1,5 +1,5 @@
 # The one front door. Everything else binds to 127.0.0.1.
-# FORGE_SITE_ADDRESS is the tailnet name on the VM, localhost on a test machine.
+# FORGE_SITE_ADDRESS is the host browsers use: the tailnet name on the VM.
 # FORGE_TLS is "internal" (Caddy's own CA) or "<cert file> <key file>" from tailscale cert.
 {
 	admin 127.0.0.1:2019

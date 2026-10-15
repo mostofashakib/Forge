@@ -60,7 +60,7 @@ services:
     image: caddy:2.11.7
     network_mode: host
     environment:
-      FORGE_SITE_ADDRESS: ${FORGE_TAILNET_HOST:-localhost}
+      FORGE_SITE_ADDRESS: ${FORGE_PUBLIC_HOST}
       FORGE_TLS: ${FORGE_TLS}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
@@ -192,6 +192,7 @@ services:
       DOZZLE_NO_ANALYTICS: "true"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      - dozzle-data:/data
     healthcheck:
       test: ["CMD", "/dozzle", "healthcheck"]
       interval: 30s
@@ -221,3 +222,4 @@ volumes:
   caddy-data:
   caddy-config:
   ollama-models:
+  dozzle-data:

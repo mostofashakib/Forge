@@ -22,11 +22,9 @@ env_value() { grep -E "^$1=" "$ENV_FILE" | tail -1 | cut -d= -f2- | sed -e 's/^"
 configured() { local value; value=$(env_value "$1"); [[ -n "$value" && "$value" != "mock_key" ]]; }
 
 TAILNET_HOST=$(env_value FORGE_TAILNET_HOST)
-if [[ -n "$TAILNET_HOST" ]]; then
-    BASE="https://$TAILNET_HOST"; TLS=()
-else
-    BASE="https://localhost"; TLS=(-k)   # Caddy's internal CA on a test machine
-fi
+BASE="https://$(env_value FORGE_PUBLIC_HOST)"
+TLS=()
+[[ "$(env_value FORGE_TLS)" == "internal" ]] && TLS=(-k)   # Caddy's own CA on a test machine
 ORIGIN=$(env_value CORS_ORIGINS | cut -d, -f1)
 BACKEND_IMAGE="$(env_value FORGE_IMAGE_REPO)/forge-backend:$(env_value FORGE_IMAGE_TAG)"
 
@@ -41,7 +39,7 @@ hcurl() { docker run --rm --network host "$CURL_IMAGE" -sS --max-time 15 "${TLS[
 in_service() { local service="$1"; shift; "${COMPOSE[@]}" exec -T "$service" "$@"; }
 ws_status() {  # HTTP status of a WebSocket upgrade; 101 means the handshake succeeded
     hcurl --max-time 5 -o /dev/null -w '%{http_code}' --http1.1 -H "Connection: Upgrade" -H "Upgrade: websocket" \
-        -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Key: d2lyaW5nLWNoZWNrLWtleTE=" "$1" || true
+        -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Key: Zm9yZ2Utd2lyaW5nLWtleQ==" "$1" || true
 }
 health_field() { in_service api python -c "import json,urllib.request,sys
 try: body = urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=10).read()
@@ -94,7 +92,7 @@ w9_api=$(in_service api docker version --format '{{.Server.Version}}' 2>&1) \
 if [[ -n "$GATEWAY_PORT" ]]; then
     check W10 in_service worker python -c "import httpx; from forge.settings import sandbox_url; httpx.get(sandbox_url($GATEWAY_PORT), timeout=5).raise_for_status()"
     w11_reach=$(in_service frontend node -e "fetch('http://' + process.env.FORGE_SANDBOX_HOST + ':$GATEWAY_PORT/').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))" 2>&1 && echo ok)
-    w11_proxy=$(hcurl -o /dev/null -w '%{http_code}' "$BASE/api/proxy/wiring-check-missing/" || true)
+    w11_proxy=$(hcurl -o /dev/null -w '%{http_code}' "$BASE/api/proxy/wiring-check-missing/ui" || true)
     w11_browser=$(hcurl -s "$BASE/api/sandbox/wiring-check-missing/browser/" || true)
     if [[ "$w11_reach" == *ok && "$w11_proxy" == "503" && "$w11_browser" == *"not found"* ]]; then pass W11
     else fail W11 "frontend reach: ${w11_reach:-failed}, /api/proxy HTTP $w11_proxy, browser proxy: ${w11_browser:0:80}"; fi

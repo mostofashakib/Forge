@@ -17,6 +17,35 @@ Pending. Each answer gets the date and who decided.
 | Who gets alert emails | pending | | |
 
 
+## Running the stack
+
+```
+docker compose -f deploy/docker-compose.yml --env-file deploy/.env.production up -d
+# with Ollama on this machine:
+docker compose -f deploy/docker-compose.yml --env-file deploy/.env.production --profile ollama up -d
+docker compose -f deploy/docker-compose.yml --env-file deploy/.env.production exec ollama ollama pull "$FORGE_LLM_MODEL"
+deploy/wiring-check.sh deploy/.env.production
+deploy/smoke.sh https://<FORGE_PUBLIC_HOST>            # add --insecure with FORGE_TLS=internal
+```
+
+Ollama starts empty. Pull `FORGE_LLM_MODEL` (and `FORGE_LLM_MODEL_CAPABLE` if it
+differs) once, or `/api/health` reports `llm` failing.
+
+Litestream 0.5 replaced `snapshots`, `generations`, and `wal` with `ltx` and `status`:
+```
+docker compose ... exec litestream litestream ltx -config /etc/litestream.yml /data/forge.db
+docker compose ... exec litestream litestream status -config /etc/litestream.yml
+```
+
+### Rehearsing on a Mac
+
+Docker Desktop cannot run this host-network layout. Run it in a Linux VM instead,
+for example Colima: `colima start forge --cpu 4 --memory 16 --disk 100 --vm-type vz --network-address`.
+Set `FORGE_PUBLIC_HOST`, `CORS_ORIGINS`, and `NEXT_PUBLIC_API_URL` to the VM's address
+(`colima list`), `FORGE_TLS=internal`, `DOCKER_GID` to the VM's docker group
+(`colima ssh -p forge -- stat -c %g /var/run/docker.sock`), and prefix commands with
+`DOCKER_CONTEXT=colima-forge`.
+
 ## Images
 
 | Image | Built from | arm64 size | Runs as |
@@ -39,6 +68,9 @@ volume (`HF_HOME=/models`) the first time an export or reward needs them: 1.5 GB
   discards. In production, set values in the deployment's env file instead.
 - If Caddy stops, the heartbeat stays green, because it calls the api directly.
   Only `smoke.sh` catches it.
+- A generated environment whose name has a hyphen fails at the end of its build:
+  the build uses the name as a Python package name. Use underscores. Premade, CLI,
+  and browser environments are not affected.
 
 ## Stack
 
@@ -113,9 +145,9 @@ gateways on `127.0.0.1`, the same way `run.sh` works today.
 | W8 | api, worker | SQLite | `/data/forge.db` on volume `forge-data` | file permissions (uid `forge`) | both containers write and read a row |
 | W9 | api, worker | Docker daemon | `/var/run/docker.sock` | `docker` group | `docker compose exec worker docker version` |
 | W10 | worker | environment gateways | `sandbox_url(port)` from `FORGE_SANDBOX_HOST` | none | start a premade environment and `GET` its gateway |
-| W11 | frontend `/api/proxy` route (general sandboxes, HTTP), and api `/api/sandbox/{env}/browser/` route (browser sandboxes, HTTP and WebSocket) | environment gateways | `FORGE_SANDBOX_HOST:{port}` | none | `GET https://<host>/api/proxy/<env>/` returns the environment's page, and a `wss://` handshake to `/api/sandbox/<env>/browser/api/websockets` succeeds |
+| W11 | frontend `/api/proxy` route (general sandboxes, HTTP), and api `/api/sandbox/{env}/browser/` route (browser sandboxes, HTTP and WebSocket) | environment gateways | `FORGE_SANDBOX_HOST:{port}` | none | the frontend reaches a stand-in gateway at `FORGE_SANDBOX_HOST`, `/api/proxy/<missing>/ui` answers the frontend's 503 page, and `/api/sandbox/<missing>/browser/` answers the api's 404 |
 | W12 | api, worker | LLM provider | Ollama at `OLLAMA_BASE_URL`, or the hosted provider's HTTPS API | provider key via `forge/credentials.py` | `/api/health` reports `llm: ok` |
-| W13 | Litestream | `forge.db`, then the backup bucket | volume `forge-data`, `forge-backups/<deploy>/db` | key scoped to `forge-backups` | `litestream snapshots` lists a snapshot under 1 h old |
+| W13 | Litestream | `forge.db`, then the backup bucket | volume `forge-data`, `forge-backups/<deploy>/db` | key scoped to `forge-backups` | `litestream ltx` lists a replica file under 1 h old |
 | W14 | backup | volume `generated-envs`, then the backup bucket | read-only mount, `forge-backups/<deploy>/files` | same key, `RESTIC_PASSWORD` | `restic snapshots` lists one under 25 h old |
 | W15 | heartbeat | api, then Healthchecks.io | `http://127.0.0.1:8000/api/health`, `FORGE_HC_HEALTH_URL` | ping URL in the env file | the Healthchecks.io API shows `forge-health` pinged in the last 10 min |
 | W16 | backup | Healthchecks.io | `FORGE_HC_BACKUP_URL` | ping URL in the env file | the Healthchecks.io API shows `forge-backup` pinged in the last 25 h |

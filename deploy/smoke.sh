@@ -52,7 +52,7 @@ step "progress websocket handshake"
 ws_url="$BASE/api/sandbox/ws/progress/$ENV_NAME"
 status=$("${CURL[@]}" --max-time 5 -o /dev/null -w '%{http_code}' --http1.1 \
     -H "Connection: Upgrade" -H "Upgrade: websocket" -H "Sec-WebSocket-Version: 13" \
-    -H "Sec-WebSocket-Key: c21va2UtdGVzdC1rZXktMTY=" "$ws_url" || true)
+    -H "Sec-WebSocket-Key: Zm9yZ2Utc21va2Uta2V5IQ==" "$ws_url" 2>/dev/null || true)  # curl times out after the 101, by design
 [[ "$status" == "101" ]] || fail "expected 101 Switching Protocols from $ws_url, got $status"
 pass
 
