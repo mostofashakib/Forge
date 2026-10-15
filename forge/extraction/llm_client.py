@@ -185,18 +185,6 @@ class AnthropicClient:
 # Ollama
 # ---------------------------------------------------------------------------
 
-# Model families that ignore Ollama's JSON schema when thinking is off (checked
-# on Ollama 0.35.1). They keep their default thinking. Every other model runs
-# with thinking off, or its hidden reasoning spends num_predict and cuts off the JSON.
-OLLAMA_SCHEMA_NEEDS_THINKING = ("qwen3", "glm-4")
-
-
-def _ollama_think_option(model: str) -> dict[str, bool]:
-    if model.startswith(OLLAMA_SCHEMA_NEEDS_THINKING):
-        return {}
-    return {"think": False}
-
-
 class OllamaClient:
     """LLM client backed by a local Ollama instance.
 
@@ -238,7 +226,9 @@ class OllamaClient:
                         {"role": "user", "content": user},
                     ],
                     format=json_schema,
-                    **_ollama_think_option(self._model),
+                    # A thinking model otherwise spends num_predict on hidden
+                    # reasoning and the JSON comes back cut off.
+                    think=False,
                     options={"num_predict": self._max_tokens},
                 )
                 data = json.loads(response.message.content)

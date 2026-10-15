@@ -351,32 +351,3 @@ def test_flat_schema_keeps_a_field_named_title():
     assert set(source["required"]) <= set(source["properties"])
     assert source["properties"]["title"] == {"type": "string"}
     assert "title" not in schema
-
-
-@pytest.mark.parametrize(("model", "think_sent"), [
-    ("gemma4:26b", False),
-    ("qwen2.5vl:7b", False),
-    ("qwen3.6:35b", None),
-    ("glm-4.7-flash:latest", None),
-])
-def test_ollama_thinking_follows_how_each_model_honours_the_schema(monkeypatch, model, think_sent):
-    """qwen3 and glm ignore the JSON schema with thinking off, so they keep their default."""
-    import sys
-    import types
-    from forge.extraction.llm_client import OllamaClient
-
-    calls = []
-
-    class _Client:
-        def __init__(self, host):
-            pass
-
-        def chat(self, **kwargs):
-            calls.append(kwargs)
-            return types.SimpleNamespace(message=types.SimpleNamespace(content='{"value": "ok"}'))
-
-    monkeypatch.setitem(sys.modules, "ollama", types.SimpleNamespace(Client=_Client))
-
-    OllamaClient(model=model).extract("system", "user", _SimpleSchema)
-
-    assert calls[0].get("think") is think_sent
