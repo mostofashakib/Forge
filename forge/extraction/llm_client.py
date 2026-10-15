@@ -222,6 +222,9 @@ class OllamaClient:
                         {"role": "user", "content": user},
                     ],
                     format=json_schema,
+                    # A thinking model otherwise spends num_predict on hidden
+                    # reasoning and the JSON comes back cut off.
+                    think=False,
                     options={"num_predict": self._max_tokens},
                 )
                 data = json.loads(response.message.content)

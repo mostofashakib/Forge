@@ -308,3 +308,27 @@ def test_openai_client_passes_the_configured_key(monkeypatch):
     with pytest.raises(_Refused):
         OpenAIClient(model="gpt-4o", max_retries=1).extract("system", "user", _SimpleSchema)
     assert seen == {"api_key": "sk-openai-configured"}
+
+
+def test_ollama_extraction_turns_thinking_off(monkeypatch):
+    """A thinking model spends num_predict on hidden reasoning and returns truncated JSON."""
+    import sys
+    import types
+    from forge.extraction.llm_client import OllamaClient
+
+    calls = []
+
+    class _Client:
+        def __init__(self, host):
+            pass
+
+        def chat(self, **kwargs):
+            calls.append(kwargs)
+            return types.SimpleNamespace(message=types.SimpleNamespace(content='{"value": "ok"}'))
+
+    monkeypatch.setitem(sys.modules, "ollama", types.SimpleNamespace(Client=_Client))
+
+    result = OllamaClient(model="gemma4:26b").extract("system", "user", _SimpleSchema)
+
+    assert result.value == "ok"
+    assert calls[0]["think"] is False
