@@ -332,3 +332,22 @@ def test_ollama_extraction_turns_thinking_off(monkeypatch):
 
     assert result.value == "ok"
     assert calls[0]["think"] is False
+
+
+def test_flat_schema_keeps_a_field_named_title():
+    """Schema metadata titles go, but a real field called `title` stays in properties."""
+    from forge.extraction.llm_client import _flat_schema
+
+    class _Source(BaseModel):
+        title: str
+        url: str
+
+    class _Wrapper(BaseModel):
+        source: _Source
+
+    schema = _flat_schema(_Wrapper)
+    source = schema["properties"]["source"]
+
+    assert set(source["required"]) <= set(source["properties"])
+    assert source["properties"]["title"] == {"type": "string"}
+    assert "title" not in schema

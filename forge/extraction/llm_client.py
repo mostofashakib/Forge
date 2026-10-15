@@ -41,7 +41,11 @@ def _inline_refs(obj: Any, defs: dict[str, Any]) -> Any:
         if "$ref" in obj:
             ref_name = obj["$ref"].split("/")[-1]
             return _inline_refs(defs[ref_name], defs)
-        return {k: _inline_refs(v, defs) for k, v in obj.items() if k != "title"}
+        flat = {k: _inline_refs(v, defs) for k, v in obj.items() if k not in ("title", "properties")}
+        if "properties" in obj:
+            # Keys under "properties" are field names, so a field called "title" stays.
+            flat["properties"] = {name: _inline_refs(field, defs) for name, field in obj["properties"].items()}
+        return flat
     return obj
 
 
