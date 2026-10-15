@@ -23,3 +23,10 @@ export function sandboxUpstreamUrl(
   const path = parts.map(encodeURIComponent).join("/");
   return `http://${host}:${port}/${path}${search}`;
 }
+
+// The API as the Next.js server reaches it. FORGE_API_URL is a server-only,
+// direct address (http://127.0.0.1:8000 in the Compose stack), so the lookup
+// skips the public TLS host the browser uses.
+export function serverApiBase(env: Record<string, string | undefined>): string {
+  return env.FORGE_API_URL?.trim() || env.NEXT_PUBLIC_API_URL?.trim() || "http://localhost:8000";
+}

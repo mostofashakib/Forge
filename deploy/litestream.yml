@@ -1,0 +1,12 @@
+# Continuous SQLite replication to the backup bucket (S3 API: R2, S3, or Cloud
+# Storage with HMAC keys). Litestream fills in the variables from its environment.
+# Its local state lives in /data/.forge.db-litestream, which /api/health watches.
+dbs:
+  - path: /data/forge.db
+    replica:
+      type: s3
+      bucket: ${BACKUP_S3_BUCKET}
+      path: ${FORGE_DEPLOY_NAME}/db
+      endpoint: ${BACKUP_S3_ENDPOINT}
+      region: ${BACKUP_S3_REGION}
+      force-path-style: true

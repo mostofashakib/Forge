@@ -1,0 +1,27 @@
+# The one front door. Everything else binds to 127.0.0.1.
+# FORGE_SITE_ADDRESS is the tailnet name on the VM, localhost on a test machine.
+# FORGE_TLS is "internal" (Caddy's own CA) or "<cert file> <key file>" from tailscale cert.
+{
+	admin 127.0.0.1:2019
+	auto_https disable_redirects
+}
+
+{$FORGE_SITE_ADDRESS} {
+	tls {$FORGE_TLS}
+
+	# The Next.js sandbox proxy lives under /api but belongs to the frontend.
+	handle /api/proxy/* {
+		reverse_proxy 127.0.0.1:3000
+	}
+	# HTTP and WebSocket upgrades to the api.
+	handle /api/* {
+		reverse_proxy 127.0.0.1:8000
+	}
+	# Dozzle serves under /logs itself (DOZZLE_BASE), so the path is kept.
+	handle /logs* {
+		reverse_proxy 127.0.0.1:9999
+	}
+	handle {
+		reverse_proxy 127.0.0.1:3000
+	}
+}

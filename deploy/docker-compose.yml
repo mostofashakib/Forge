@@ -1,0 +1,223 @@
+# Forge's production stack: every service, wired as deploy/README.md's wiring map says.
+#
+#   docker compose -f deploy/docker-compose.yml --env-file deploy/.env.production up -d
+#   (add --profile ollama to run the LLM on this machine)
+#
+# api, worker, frontend, caddy, redis, heartbeat, dozzle, and ollama share the
+# host's network, so they reach environment gateways on 127.0.0.1 the way run.sh
+# does. Each binds to 127.0.0.1 only, except Caddy, the one front door.
+# Each service receives only the variables it needs.
+
+name: forge
+
+x-restart: &restart
+  restart: unless-stopped
+
+x-backend-env: &backend-env
+  FORGE_ENV: ${FORGE_ENV}
+  CORS_ORIGINS: ${CORS_ORIGINS}
+  FORGE_DB_URL: ${FORGE_DB_URL}
+  FORGE_GENERATED_ENVS_DIR: ${FORGE_GENERATED_ENVS_DIR}
+  FORGE_SANDBOX_HOST: ${FORGE_SANDBOX_HOST}
+  FORGE_SANDBOX_LIMIT: ${FORGE_SANDBOX_LIMIT}
+  FORGE_SCRUB_KEY: ${FORGE_SCRUB_KEY}
+  REDIS_URL: redis://:${FORGE_REDIS_PASSWORD}@127.0.0.1:6379/0
+  CELERY_BROKER_URL: redis://:${FORGE_REDIS_PASSWORD}@127.0.0.1:6379/0
+  CELERY_RESULT_BACKEND: redis://:${FORGE_REDIS_PASSWORD}@127.0.0.1:6379/0
+  FORGE_LLM_PROVIDER: ${FORGE_LLM_PROVIDER}
+  FORGE_LLM_MODEL: ${FORGE_LLM_MODEL}
+  FORGE_LLM_MODEL_CAPABLE: ${FORGE_LLM_MODEL_CAPABLE}
+  OLLAMA_BASE_URL: ${OLLAMA_BASE_URL}
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+  OPENAI_API_KEY: ${OPENAI_API_KEY}
+  GEMINI_API_KEY: ${GEMINI_API_KEY}
+  GITHUB_TOKEN: ${GITHUB_TOKEN}
+  # Where Litestream keeps its local copy, so /api/health can report replication lag.
+  FORGE_LITESTREAM_DIR: ${FORGE_LITESTREAM_DIR}
+
+x-backend: &backend
+  <<: *restart
+  image: ${FORGE_IMAGE_REPO}/forge-backend:${FORGE_IMAGE_TAG}
+  build:
+    context: ..
+    dockerfile: docker/forge/Dockerfile
+  network_mode: host
+  # The host's docker group, so the non-root forge user can use the socket.
+  group_add: ["${DOCKER_GID}"]
+  environment: *backend-env
+  volumes:
+    - forge-data:/data
+    - generated-envs:/generated_envs
+    - model-cache:/models
+    - /var/run/docker.sock:/var/run/docker.sock
+  depends_on:
+    redis:
+      condition: service_healthy
+
+services:
+  caddy:
+    <<: *restart
+    image: caddy:2.11.7
+    network_mode: host
+    environment:
+      FORGE_SITE_ADDRESS: ${FORGE_TAILNET_HOST:-localhost}
+      FORGE_TLS: ${FORGE_TLS}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+      - /etc/forge/certs:/certs:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:2019/config/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  frontend:
+    <<: *restart
+    image: ${FORGE_IMAGE_REPO}/forge-frontend:${FORGE_IMAGE_TAG}
+    build:
+      context: ../frontend
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+    network_mode: host
+    environment:
+      HOSTNAME: 127.0.0.1
+      PORT: "3000"
+      # The proxy route's server-side lookups go straight to the api, not through Caddy.
+      FORGE_API_URL: http://127.0.0.1:8000
+      FORGE_SANDBOX_HOST: ${FORGE_SANDBOX_HOST}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  api:
+    <<: *backend
+    command: ["uvicorn", "backend.app.main:app", "--host", "127.0.0.1", "--port", "8000"]
+    healthcheck:
+      # urlopen raises on a 503, so any failing dependency marks the api unhealthy.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=8)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  worker:
+    <<: *backend
+    # --beat runs the daily expired-sandbox cleanup scheduled in celery_app.py.
+    command: ["celery", "-A", "backend.app.worker.celery_app", "worker", "--loglevel=INFO",
+              "--concurrency=2", "--without-gossip", "--without-mingle",
+              "--beat", "--schedule=/data/celerybeat-schedule"]
+    healthcheck:
+      test: ["CMD", "celery", "-A", "backend.app.worker.celery_app", "inspect", "ping", "--timeout=5"]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      start_period: 60s
+
+  redis:
+    <<: *restart
+    image: valkey/valkey:9.0.6-alpine
+    network_mode: host
+    environment:
+      FORGE_REDIS_PASSWORD: ${FORGE_REDIS_PASSWORD}
+    command: ["sh", "-c", "exec valkey-server --bind 127.0.0.1 --port 6379 --requirepass \"$$FORGE_REDIS_PASSWORD\" --appendonly yes --dir /data"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$FORGE_REDIS_PASSWORD\" valkey-cli -h 127.0.0.1 ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  litestream:
+    <<: *restart
+    image: litestream/litestream:0.5.17
+    # Same uid as the api, so it can read the database and write its own state beside it.
+    user: "10001:10001"
+    command: ["replicate", "-config", "/etc/litestream.yml"]
+    environment:
+      LITESTREAM_ACCESS_KEY_ID: ${BACKUP_S3_ACCESS_KEY_ID}
+      LITESTREAM_SECRET_ACCESS_KEY: ${BACKUP_S3_SECRET_ACCESS_KEY}
+      BACKUP_S3_ENDPOINT: ${BACKUP_S3_ENDPOINT}
+      BACKUP_S3_REGION: ${BACKUP_S3_REGION}
+      BACKUP_S3_BUCKET: ${BACKUP_S3_BUCKET}
+      FORGE_DEPLOY_NAME: ${FORGE_DEPLOY_NAME}
+    volumes:
+      - forge-data:/data
+      - ./litestream.yml:/etc/litestream.yml:ro
+    depends_on:
+      api:
+        condition: service_started
+
+  backup:
+    <<: *restart
+    image: restic/restic:0.19.1
+    entrypoint: ["/bin/sh", "/backup.sh"]
+    environment:
+      RESTIC_REPOSITORY: s3:${BACKUP_S3_ENDPOINT}/${BACKUP_S3_BUCKET}/${FORGE_DEPLOY_NAME}/files
+      RESTIC_PASSWORD: ${RESTIC_PASSWORD}
+      AWS_ACCESS_KEY_ID: ${BACKUP_S3_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${BACKUP_S3_SECRET_ACCESS_KEY}
+      AWS_DEFAULT_REGION: ${BACKUP_S3_REGION}
+      FORGE_HC_BACKUP_URL: ${FORGE_HC_BACKUP_URL}
+    volumes:
+      - generated-envs:/generated_envs:ro
+      - ./backup.sh:/backup.sh:ro
+
+  heartbeat:
+    <<: *restart
+    image: curlimages/curl:8.23.0
+    network_mode: host
+    entrypoint: ["/bin/sh", "/heartbeat.sh"]
+    environment:
+      FORGE_HC_HEALTH_URL: ${FORGE_HC_HEALTH_URL}
+    volumes:
+      - forge-data:/data:ro
+      - ./heartbeat.sh:/heartbeat.sh:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  dozzle:
+    <<: *restart
+    image: amir20/dozzle:v11.3.2
+    network_mode: host
+    environment:
+      DOZZLE_ADDR: 127.0.0.1:9999
+      DOZZLE_BASE: /logs
+      DOZZLE_NO_ANALYTICS: "true"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    healthcheck:
+      test: ["CMD", "/dozzle", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  ollama:
+    <<: *restart
+    profiles: ["ollama"]
+    image: ollama/ollama:0.40.4
+    network_mode: host
+    environment:
+      OLLAMA_HOST: 127.0.0.1:11434
+    volumes:
+      - ollama-models:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  forge-data:
+  generated-envs:
+  model-cache:
+  redis-data:
+  caddy-data:
+  caddy-config:
+  ollama-models:

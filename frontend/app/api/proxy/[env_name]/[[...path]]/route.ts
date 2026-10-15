@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { sandboxHost, sandboxUpstreamUrl } from "@/lib/sandboxProxy";
+import { sandboxHost, sandboxUpstreamUrl, serverApiBase } from "@/lib/sandboxProxy";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const API_BASE = serverApiBase(process.env);
 
 async function getContainerPort(envName: string): Promise<number | null> {
   try {

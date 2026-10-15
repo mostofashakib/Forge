@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { sandboxHost, sandboxUpstreamUrl } from "../lib/sandboxProxy.ts";
+import { sandboxHost, sandboxUpstreamUrl, serverApiBase } from "../lib/sandboxProxy.ts";
 
 test("builds the upstream URL from the sandbox host, port, path, and query", () => {
   assert.equal(
@@ -33,4 +33,17 @@ test("the sandbox host comes from FORGE_SANDBOX_HOST, falling back to loopback w
   assert.equal(sandboxHost({ FORGE_SANDBOX_HOST: "10.0.0.5" }), "10.0.0.5");
   assert.equal(sandboxHost({ FORGE_SANDBOX_HOST: "   " }), "127.0.0.1");
   assert.equal(sandboxHost({}), "127.0.0.1");
+});
+
+test("the server reaches the API at FORGE_API_URL, so it skips the public TLS host", () => {
+  assert.equal(
+    serverApiBase({ FORGE_API_URL: "http://127.0.0.1:8000", NEXT_PUBLIC_API_URL: "https://localhost" }),
+    "http://127.0.0.1:8000",
+  );
+});
+
+test("without FORGE_API_URL the server falls back to the public API URL, then the dev default", () => {
+  assert.equal(serverApiBase({ NEXT_PUBLIC_API_URL: "https://forge.example.ts.net" }), "https://forge.example.ts.net");
+  assert.equal(serverApiBase({ FORGE_API_URL: " " }), "http://localhost:8000");
+  assert.equal(serverApiBase({}), "http://localhost:8000");
 });
