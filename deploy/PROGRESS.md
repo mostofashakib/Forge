@@ -245,6 +245,49 @@ $ npm --prefix frontend test -> pass 11, fail 0; npm --prefix frontend run build
 `provision-vm.sh lockdown` and `restore.sh` run for real at A46 and A61, which need the
 VM and the backup bucket.
 
+## Fixes after Phase 1
+
+### Redis password no longer logged
+
+`POST /api/sandbox/` logged `checking Redis at redis://:<password>@...` on every create,
+and the failure path logged the raw exception, which can quote the URL.
+`forge.credentials.redact_url_credentials` now strips the user and password from every
+URL in a log line or message, and `/api/health` uses the same function. Tests:
+`test_create_sandbox_never_logs_the_redis_password` (the password is absent from all
+log records, the host is present) and `TestRedactUrlCredentials`.
+
+### Generated environments with hyphens build
+
+The API accepts `my-env`, but the build passed the name on as the generated Python
+package name, which must be an identifier, so the build failed after the LLM work.
+`forge.paths.module_name_for` now turns the environment name into a package name:
+hyphens become underscores, a leading digit gets an `env_` prefix, and a Python keyword
+gets an `_env` suffix. The environment keeps its name everywhere else. Tests:
+`tests/test_paths.py` and `test_a_hyphenated_env_name_reaches_extraction_as_a_module_name`
+(failed with `project_name: 'my-env'` before the fix). Full suite: `2777 passed, 2 skipped`.
+
+### Ollama extraction no longer returns cut-off JSON
+
+Generating `gen-todo` on gemma4:26b failed after three attempts with
+`Unterminated string starting at: line 14 column 22`. gemma4 thinks by default in
+Ollama, and the hidden reasoning used the whole `num_predict` budget. A direct probe
+with a 400-token budget: thinking on gave `done_reason=length` and 0 characters of
+content, thinking off gave valid JSON in 5 s. `OllamaClient.extract` now passes
+`think=False`. gemma3:1b (no thinking mode) accepts the flag. Test:
+`test_ollama_extraction_turns_thinking_off`. Full suite: `2778 passed, 2 skipped`.
+
+Rehearsal result after the fix, same request (`gen-todo`, the todo-list description):
+
+- gemma4:26b: every stage ran, 24 LLM calls in 4 min 20 s. The review gate rejected
+  the output: two files do not parse, the state bridge and reward skip the
+  `forge.contracts` base classes.
+- qwen3.6:35b: failed at `scenario_builder`. The JSON parsed but broke the
+  `ScenarioSuite` schema (missing fields, objects where strings belong).
+
+The services, the LLM path, and every generation stage work in the rehearsal. The
+gate catches bad output as designed. A full generation needs a stronger model than
+these local ones, which is A41's decision (hosted provider or a larger model).
+
 ## Phase 2. The full system on the laptop
 
 ## Phase 3. The VM
