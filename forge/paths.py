@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import keyword
 import re
 from pathlib import Path
 
@@ -16,6 +17,21 @@ def validate_identifier(value: str, *, label: str = "identifier") -> str:
             "digits, and underscores"
         )
     return value
+
+
+def module_name_for(env_name: str) -> str:
+    """The Python package name for an environment's generated code.
+
+    Environment names may hold hyphens and start with a digit, and generated
+    code imports from this package, so hyphens become underscores, a leading
+    digit gets an env_ prefix, and a Python keyword gets an _env suffix.
+    """
+    module = validate_path_segment(env_name, label="env_name").replace("-", "_")
+    if module[0].isdigit():
+        module = f"env_{module}"
+    if keyword.iskeyword(module):
+        module = f"{module}_env"
+    return module
 
 
 def validate_path_segment(value: str, *, label: str = "name") -> str:

@@ -13,6 +13,7 @@ from pathlib import Path
 
 from backend.app.worker.celery_app import celery
 from backend.app.worker.env_artifacts import load_manifest
+from forge.paths import module_name_for
 from forge.settings import generated_envs_root, redis_url, sandbox_url
 
 logger = logging.getLogger("backend.app.worker.tasks")
@@ -321,7 +322,7 @@ async def build_generated(request: BuildRequest, reporter: BuildReporter) -> Non
     reporter.log("[forge] running extraction (LLM pass 1)…")
     compiler_input = await _off_loop(lambda: extraction_service.run_extraction(
         prompt=request.description,
-        project_name=env_name,
+        project_name=module_name_for(env_name),
         domain=request.domain or "localhost",
     ))
     reporter.log("[forge] extraction complete — starting agents…")

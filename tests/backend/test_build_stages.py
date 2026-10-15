@@ -136,3 +136,36 @@ async def test_unreachable_container_stops_manifest_validation(db_env):
     assert validator.return_value.validate.call_count == 1
     assert logs[-1] == {"log": "[forge] manifest validation error (container not ready?): refused"}
     assert _sandbox().state_schema is None
+
+
+# ── generated build naming ───────────────────────────────────────────────────
+
+async def test_a_hyphenated_env_name_reaches_extraction_as_a_module_name(monkeypatch):
+    """The API accepts my-env. Its generated code imports from my_env."""
+    from backend.app.services import extraction_service, env_orchestrator
+
+    seen: dict = {}
+
+    def extract(prompt, project_name, domain):
+        seen["project_name"] = project_name
+        return MagicMock()
+
+    class StopAfterExtraction(Exception):
+        pass
+
+    class Orchestrator:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def run(self, **kwargs):
+            seen["env_name"] = kwargs["env_name"]
+            raise StopAfterExtraction
+
+    monkeypatch.setattr(extraction_service, "run_extraction", extract)
+    monkeypatch.setattr(env_orchestrator, "EnvironmentOrchestrator", Orchestrator)
+    reporter = MagicMock()
+
+    with pytest.raises(StopAfterExtraction):
+        await tasks.build_generated(tasks.BuildRequest(env_name="my-env", description="a todo app"), reporter)
+
+    assert seen == {"project_name": "my_env", "env_name": "my-env"}
