@@ -15,6 +15,7 @@ from backend.app.database import get_db
 from backend.app.docker_utils import is_docker_daemon_unavailable
 from backend.app.models import SandboxEnvironment
 from backend.app.services.sandbox_capacity import active_criteria, active_sandbox_count
+from forge.credentials import redact_url_credentials
 from forge.envgen.docker_images import is_shell_image
 from forge.settings import generated_envs_root, redis_url, sandbox_limit
 
@@ -61,7 +62,7 @@ def create_sandbox(request: CreateSandboxRequest, db: Session = Depends(get_db))
             raise HTTPException(status_code=409, detail=f"Sandbox '{request.env_name}' already exists")
 
     redis_connection_url = redis_url()
-    logger.info("[sandbox] checking Redis at %s…", redis_connection_url)
+    logger.info("[sandbox] checking Redis at %s…", redact_url_credentials(redis_connection_url))
     try:
         pong = redis.from_url(
             redis_connection_url, socket_connect_timeout=2, socket_timeout=2
@@ -70,7 +71,9 @@ def create_sandbox(request: CreateSandboxRequest, db: Session = Depends(get_db))
             raise RuntimeError("PING returned false")
         logger.info("[sandbox] Redis healthy")
     except Exception as exc:
-        logger.error("[sandbox] Redis health check failed — %s: %s", type(exc).__name__, exc)
+        logger.error(
+            "[sandbox] Redis health check failed — %s: %s", type(exc).__name__, redact_url_credentials(str(exc))
+        )
         raise HTTPException(
             status_code=503,
             detail="Worker unavailable — Redis is not responding. Run: redis-server --daemonize yes",

@@ -76,3 +76,27 @@ def test_credential_names_are_unique():
     names = [var for credential in CREDENTIALS for var in credential.env_vars]
 
     assert len(names) == len(set(names))
+
+
+class TestRedactUrlCredentials:
+    def test_removes_the_password_and_user_from_a_url(self):
+        from forge.credentials import redact_url_credentials
+
+        assert redact_url_credentials("redis://:s3cret@127.0.0.1:6379/0") == "redis://***@127.0.0.1:6379/0"
+        assert redact_url_credentials("postgres://forge:pw@db/forge") == "postgres://***@db/forge"
+
+    def test_redacts_every_url_inside_free_text(self):
+        from forge.credentials import redact_url_credentials
+
+        text = "Error 111 connecting to redis://:a1@h:6379/0, fell back to amqp://u:b2@q:5672//"
+
+        redacted = redact_url_credentials(text)
+
+        assert "a1" not in redacted and "b2" not in redacted
+        assert "redis://***@h:6379/0" in redacted
+
+    def test_leaves_a_url_without_credentials_unchanged(self):
+        from forge.credentials import redact_url_credentials
+
+        assert redact_url_credentials("redis://127.0.0.1:6379/0") == "redis://127.0.0.1:6379/0"
+        assert redact_url_credentials("not a url") == "not a url"

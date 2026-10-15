@@ -8,6 +8,7 @@ falls back to reading a placeholder from the environment on its own.
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -67,3 +68,15 @@ def require_credential(credential: Credential, env: Mapping[str, str] | None = N
             f"{names} is not configured. Set it in backend/.env. Forge needs it for {credential.purpose}."
         )
     return value
+
+
+_URL_USERINFO = re.compile(r"(\b[a-z][a-z0-9+.-]*://)[^/@\s]*@", re.IGNORECASE)
+
+
+def redact_url_credentials(text: str) -> str:
+    """The text with the user and password of every URL in it replaced by ***.
+
+    Use it on anything that goes to a log or an API response and might hold a
+    connection string, such as REDIS_URL or an exception message that quotes one.
+    """
+    return _URL_USERINFO.sub(r"\1***@", text)

@@ -1204,3 +1204,15 @@ def test_cli_environments_never_report_a_ui(client):
         })
 
     assert client.get("/api/sandbox/shell_env").json()["has_ui"] is False
+
+
+def test_create_sandbox_never_logs_the_redis_password(client, caplog, monkeypatch):
+    monkeypatch.setenv("REDIS_URL", "redis://:hunter2redis@127.0.0.1:6379/0")
+    redis_client = MagicMock()
+    redis_client.ping.side_effect = ConnectionError("Error 111 connecting to redis://:hunter2redis@127.0.0.1:6379/0")
+
+    with caplog.at_level(logging.DEBUG), patch("backend.app.api.sandbox.redis.from_url", return_value=redis_client):
+        client.post("/api/sandbox/", json={"env_name": "log_safety"})
+
+    assert "hunter2redis" not in caplog.text
+    assert "127.0.0.1:6379" in caplog.text

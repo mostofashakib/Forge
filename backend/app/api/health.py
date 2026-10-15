@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import re
 from collections.abc import Callable
 from pathlib import Path
 
@@ -18,7 +17,7 @@ from sqlalchemy import text
 
 from backend.app.services.ollama_catalog import list_ollama_models
 from backend.app.services.settings_registry import DEFAULT_OLLAMA_URL
-from forge.credentials import PROVIDER_CREDENTIALS, is_configured
+from forge.credentials import PROVIDER_CREDENTIALS, is_configured, redact_url_credentials
 from forge.extraction.llm_client import generation_models
 from forge.settings import database_url, redis_url
 
@@ -29,13 +28,10 @@ CHECK_TIMEOUT_S = 2.0
 MAX_BACKUP_LAG_S = 600
 PASSING = ("ok", "disabled")
 
-_URL_USERINFO = re.compile(r"(\b[a-z][a-z0-9+.-]*://)[^/@\s]*@", re.IGNORECASE)
-
-
 def describe_error(exc: BaseException) -> str:
     """The error's text, with credentials inside any URL replaced."""
     message = str(exc) or type(exc).__name__
-    return _URL_USERINFO.sub(r"\1***@", message)[:500]
+    return redact_url_credentials(message)[:500]
 
 
 def check_database() -> str:
