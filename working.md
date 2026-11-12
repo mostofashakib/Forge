@@ -449,6 +449,29 @@ lines of output, or the measured numbers.
 
 ### M1
 
+Branch `factory/m1-merge-synthetic`. Commits: `3a2b99f` (edge cases), `78e7adc` (Synthetic Data Engine removed).
+
+Baseline on `main` before M1: `uv run pytest -q` 2779 passed, 2 skipped. Frontend tests 11 passed. Lint 0 errors, 6 warnings.
+
+On the branch:
+- `uv run pytest -q`: 2819 passed, 2 skipped. The 40 new tests cover slot planning, the static check, writer and reviewer prompts, the pipeline, the API, the job, the migration, and the replay takeover.
+- `npm --prefix frontend test`: 16 passed, 0 failed.
+- `npm --prefix frontend run build`: compiled. One earlier run failed while downloading Google fonts (network), and the rerun passed.
+- `npx eslint` on every changed frontend file: exit 0.
+- `grep -rn "synthetic_replay\|ReplayCliAgent" backend forge frontend/app`: no matches.
+- The replay takeover was proven before the fix: `test_a_leftover_synthetic_replay_file_never_replaces_the_requested_agent` failed with `ReplayCliAgent` in place of the requested agent.
+
+Change from the plan: `permission_errors` is not offered. CLI tasks run as root, and the other families have no permission model the factory can rely on. `missing_deps` is not offered for browser environments.
+
+Core flows against the running stack (API on port 8100, since vidQ holds 8000 and 3000):
+- `/api/health`: database, Redis, Docker, worker, and LLM all ok.
+- Create a CLI environment (`m1-shell`): queued, then running.
+- Agent run (random agent, 1 episode): completed, 1 episode, no error.
+- Export (`trajectories`, `sft_pairs`): completed, and the manifest was written. Download returned 200. It had 0 rows, because export reads the rollout `episodes` table and agent runs write `agent_episodes`. That behavior predates M1, and M1 does not touch export.
+- Task factory batch `tb_a9b84a86232a` (30 tasks, `conflicting_state` and `recovery`, k=3): **failed on the first writer call**. Anthropic returned "credit balance is too low". The job recorded the error and saved nothing.
+
+Open: the 30-task "Done when" batch, which needs a working writer model from a family other than the validator's. M1 does not merge until it passes.
+
 ### M2
 
 ### M3
