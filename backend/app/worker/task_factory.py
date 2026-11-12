@@ -57,6 +57,7 @@ def execute_batch(
         return
     env_name, requested, k = batch.env_name, batch.requested, batch.pass_k
     data_type = getattr(batch, "data_type", "rl_tasks")
+    edge_cases = task_registry.edge_cases_of(batch)
     try:
         writer, validator = resolve_models(environ if environ is not None else environ_with_saved(VALIDATOR_VARS))
         require_sdks(writer, validator)
@@ -76,7 +77,7 @@ def execute_batch(
                 exclusive=lambda: exclusive(env_name),
                 progress=publish,
             )
-            result = pipeline.run(requested, k, data_type=data_type)
+            result = pipeline.run(requested, k, data_type=data_type, edge_cases=edge_cases)
         version = task_registry.save_result(db, batch_id, result)
     except Exception as exc:  # noqa: BLE001 — every failure is recorded on the batch
         logger.exception("[taskfactory] batch %s failed", batch_id)

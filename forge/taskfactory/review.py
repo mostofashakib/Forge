@@ -24,6 +24,11 @@ For each task, answer three questions with a verdict and a one-sentence reason:
     and checks that agree with each other? For difficulty 4 and 5, does each
     reflection point force the agent to stop and rethink, or could it skip it?
 
+A task whose header names an edge case also gets edge_case_ok and
+edge_case_reason: does its seed truly set up that condition (edge_case_seed
+lists where), and does the golden solution handle it? Leave edge_case_ok
+empty for tasks without an edge case.
+
 Be strict. Return one verdict per task with `slot` set to its slot number.
 """
 
@@ -41,13 +46,26 @@ class TaskReviewer:
             chunk = tasks[start:start + CHUNK_SIZE]
             user = "\n\n".join([profile.prompt_view(), *[_task_view(slot, draft) for slot, draft in chunk]])
             batch: ReviewVerdictBatch = self._client.extract(system=_SYSTEM, user=user, schema=ReviewVerdictBatch)
-            wanted = {slot.index for slot, _ in chunk}
+            wanted = {slot.index: slot for slot, _ in chunk}
             for verdict in batch.verdicts:
                 if verdict.slot in wanted and verdict.slot not in verdicts:
-                    verdicts[verdict.slot] = verdict
+                    verdicts[verdict.slot] = _settle_edge_case(verdict, wanted[verdict.slot])
         return verdicts
+
+
+def _settle_edge_case(verdict: ReviewVerdict, slot: Slot) -> ReviewVerdict:
+    """An edge-case task needs an explicit yes. A plain task's edge-case answer means nothing."""
+    if slot.edge_case is None:
+        return verdict.model_copy(update={"edge_case_ok": None, "edge_case_reason": ""})
+    if verdict.edge_case_ok is None:
+        return verdict.model_copy(update={
+            "edge_case_ok": False,
+            "edge_case_reason": f"the validator gave no verdict on edge case {slot.edge_case}",
+        })
+    return verdict
 
 
 def _task_view(slot: Slot, draft: TaskDraft) -> str:
     body = draft.model_dump_json(exclude={"slot"}, indent=1)
-    return f"TASK slot {slot.index} | category {slot.category} | difficulty {slot.difficulty}\n{body}"
+    edge = f" | edge case {slot.edge_case}" if slot.edge_case else ""
+    return f"TASK slot {slot.index} | category {slot.category} | difficulty {slot.difficulty}{edge}\n{body}"

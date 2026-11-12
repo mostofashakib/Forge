@@ -200,6 +200,8 @@ class TaskBatch(Base):
     delivered: Mapped[int] = mapped_column(Integer, default=0)
     pass_k: Mapped[int] = mapped_column(Integer)
     data_type: Mapped[str] = mapped_column(String, default="rl_tasks")
+    # JSON list of the edge cases the batch asked for. Empty means none.
+    edge_cases_json: Mapped[str] = mapped_column(Text, default="[]")
     writer_model: Mapped[str] = mapped_column(String)
     validator_model: Mapped[str] = mapped_column(String)
     taxonomy_json: Mapped[str | None] = mapped_column(Text, nullable=True)

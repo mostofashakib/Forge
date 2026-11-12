@@ -20,7 +20,8 @@ from forge.safety.config import SafetyConfigError
 from forge.settings import redis_url
 from forge.taskfactory.model_settings import VALIDATOR_VARS, TaskFactoryConfigError, require_sdks, resolve_models
 from forge.taskfactory.pipeline import MAX_COUNT, MAX_K, MIN_COUNT, MIN_K, preference_pairs
-from forge.taskfactory.schemas import SyntheticTask, TaskRejection
+from forge.taskfactory.schemas import FAMILY_EDGE_CASES, SyntheticTask, TaskRejection
+from forge.taskfactory.slots import edge_case_problems
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/task-factory")
@@ -34,11 +35,15 @@ class CreateBatchRequest(BaseModel):
     count: int = Field(ge=MIN_COUNT, le=MAX_COUNT)
     k: int = Field(default=3, ge=MIN_K, le=MAX_K)
     data_type: str = Field(default="rl_tasks")
+    edge_cases: list[str] = Field(default_factory=list)
 
 
 @router.get("/environments")
 def environments(db: Session = Depends(get_db)) -> list[dict]:
-    return [target.__dict__ for target in list_targets(db)]
+    return [
+        {**target.__dict__, "edge_cases": sorted(FAMILY_EDGE_CASES[target.family])}
+        for target in list_targets(db)
+    ]
 
 
 @router.post("/batches", status_code=202)
@@ -51,6 +56,9 @@ def create_batch(body: CreateBatchRequest, db: Session = Depends(get_db)) -> dic
         raise HTTPException(status_code=404, detail=f"no environment named {env!r}")
     if not target.ready:
         raise HTTPException(status_code=409, detail=target.reason)
+    edge_problems = edge_case_problems(body.edge_cases, target.family)
+    if edge_problems:
+        raise HTTPException(status_code=422, detail="; ".join(edge_problems))
     try:
         writer, validator = resolve_models(environ_with_saved(VALIDATOR_VARS))
         require_sdks(writer, validator)
@@ -64,6 +72,7 @@ def create_batch(body: CreateBatchRequest, db: Session = Depends(get_db)) -> dic
         writer=writer,
         validator=validator,
         data_type=body.data_type,
+        edge_cases=body.edge_cases,
     )
     create_task_batch_task.delay(batch_id=batch_id)
     logger.info(

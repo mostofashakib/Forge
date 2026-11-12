@@ -305,3 +305,67 @@ def test_the_writer_sees_a_bounded_list_of_titles_from_the_same_category():
 def test_a_k_outside_one_to_ten_is_rejected():
     with pytest.raises(ValueError):
         _pipeline().run(count=1, k=0)
+
+
+class _EdgeWriter(_Writer):
+    """Writes drafts that plant each slot's edge case in a seeded email."""
+
+    def write(self, profile, taxonomy, slots, *, avoid_titles=(), feedback=None):
+        self.calls.append({"slots": [s.index for s in slots], "edges": [s.edge_case for s in slots]})
+        return {slot.index: _edge_draft(slot.index, slot.edge_case) for slot in slots}
+
+
+def _edge_draft(slot: int, edge_case: str | None) -> TaskDraft:
+    from forge.taskfactory.schemas import TaskSeed
+
+    return _draft(slot).model_copy(update={
+        "seed": TaskSeed(records={"emails": [{"id": "e1", "folder": "inbox"}]}),
+        "edge_case": edge_case,
+        "edge_case_seed": ["emails:e1"] if edge_case else [],
+    })
+
+
+def test_requested_edge_cases_reach_the_writer_and_the_accepted_tasks():
+    writer = _EdgeWriter()
+
+    result = _pipeline(writer=writer).run(count=6, k=1, edge_cases=("recovery",))
+
+    assert result.status == "complete"
+    edges = [task.edge_case for task in result.tasks]
+    assert edges.count("recovery") == 3 and edges.count(None) == 3
+    assert writer.calls[0]["edges"].count("recovery") == 3
+    assert all(task.edge_case_seed == ["emails:e1"] for task in result.tasks if task.edge_case)
+    assert all(task.edge_case_seed == [] for task in result.tasks if task.edge_case is None)
+
+
+class _CountingBuilder(_Builder):
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def build(self, profile, count):
+        self.calls += 1
+        return TAXONOMY
+
+
+def _browser_pipeline(builder) -> TaskFactoryPipeline:
+    return TaskFactoryPipeline(
+        profile=EnvironmentProfile(env_name="web", env_type="browser", family="browser"),
+        taxonomy_builder=builder, writer=_Writer(), reviewer=_Reviewer(), runner=_Runner(),
+        pass_k=lambda runner, draft, k: PassKResult(True, fingerprint="fp"),
+    )
+
+
+def test_an_edge_case_the_family_does_not_offer_fails_before_any_llm_call():
+    builder = _CountingBuilder()
+
+    with pytest.raises(ValueError, match="missing_deps"):
+        _browser_pipeline(builder).run(count=3, k=1, edge_cases=("missing_deps",))
+    assert builder.calls == 0
+
+
+def test_an_unknown_edge_case_fails_before_any_llm_call():
+    builder = _CountingBuilder()
+
+    with pytest.raises(ValueError, match="permission_errors"):
+        _browser_pipeline(builder).run(count=3, k=1, edge_cases=("permission_errors",))
+    assert builder.calls == 0

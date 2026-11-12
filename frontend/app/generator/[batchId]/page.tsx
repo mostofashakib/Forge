@@ -3,6 +3,7 @@ import { use, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { API_BASE } from "@/lib/api";
+import { EDGE_CASE_LABELS } from "@/lib/edgeCases";
 import {
   apiJson,
   formatDate,
@@ -57,7 +58,10 @@ function TaskCard({ task }: { task: SyntheticTask }) {
         <span className={`tasks-difficulty tasks-difficulty--${task.difficulty}`}>D{task.difficulty}</span>
         <span className="tasks-card__title">
           <strong>{task.title}</strong>
-          <small>{task.category} · {task.golden.length} golden steps · budget {task.step_budget}</small>
+          <small>
+            {task.category} · {task.golden.length} golden steps · budget {task.step_budget}
+            {task.edge_case && ` · ${EDGE_CASE_LABELS[task.edge_case]?.label ?? task.edge_case} (${(task.edge_case_seed ?? []).join(", ")})`}
+          </small>
         </span>
         <span aria-hidden="true">{open ? "−" : "+"}</span>
       </button>

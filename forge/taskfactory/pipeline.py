@@ -5,7 +5,7 @@ and never touches storage, so a failure midway leaves nothing half-saved.
 """
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
 from typing import Any, Protocol
@@ -23,7 +23,7 @@ from forge.taskfactory.schemas import (
     TaskRejection,
     Taxonomy,
 )
-from forge.taskfactory.slots import Slot, plan_slots
+from forge.taskfactory.slots import Slot, edge_case_problems, plan_slots
 from forge.taskfactory.static_check import length_problems, static_problems
 
 MAX_ROUNDS = 3
@@ -142,16 +142,21 @@ class TaskFactoryPipeline:
         self._progress = progress or (lambda _event: None)
         self._contamination_verifier = contamination_verifier or TaskContaminationVerifier()
 
-    def run(self, count: int, k: int, data_type: str = "rl_tasks") -> PipelineResult:
+    def run(
+        self, count: int, k: int, data_type: str = "rl_tasks", edge_cases: Sequence[str] = ()
+    ) -> PipelineResult:
         if not MIN_COUNT <= count <= MAX_COUNT:
             raise ValueError(f"count must be {MIN_COUNT} to {MAX_COUNT}, got {count}")
         if not MIN_K <= k <= MAX_K:
             raise ValueError(f"k must be {MIN_K} to {MAX_K}, got {k}")
+        problems = edge_case_problems(edge_cases, self._profile.family)
+        if problems:
+            raise ValueError("; ".join(problems))
         self._emit("taxonomy", f"Building a taxonomy for {count} tasks")
         taxonomy = self._taxonomy_builder.build(self._profile, count)
         self._emit("taxonomy", f"Taxonomy has {len(taxonomy.categories)} categories")
         result = PipelineResult(requested=count, taxonomy=taxonomy, data_type=data_type)
-        pending = plan_slots(taxonomy, count)
+        pending = plan_slots(taxonomy, count, edge_cases)
         feedback: dict[int, str] = {}
         for round_number in range(1, MAX_ROUNDS + 1):
             if not pending:
@@ -308,6 +313,8 @@ def _accepted(
         golden=draft.golden,
         checks=draft.checks,
         reflection_points=draft.reflection_points,
+        edge_case=slot.edge_case,
+        edge_case_seed=draft.edge_case_seed,
         step_budget=2 * len(draft.golden),
         round=round_number,
         review=verdict,

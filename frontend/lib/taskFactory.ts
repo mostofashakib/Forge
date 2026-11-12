@@ -6,6 +6,7 @@ export type TargetEnvironment = {
   family: "state" | "cli" | "browser";
   ready: boolean;
   reason: string | null;
+  edge_cases: string[];
 };
 
 export type ModelView = { provider: string | null; model: string | null; family: string | null };
@@ -100,6 +101,8 @@ export type SyntheticTask = {
   golden: GoldenStep[];
   checks: Check[];
   reflection_points: { step: number; kind: string; note: string }[];
+  edge_case?: string | null;
+  edge_case_seed?: string[];
   step_budget: number;
   round: number;
   review: ReviewVerdict;

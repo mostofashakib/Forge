@@ -30,6 +30,18 @@ LONG_HORIZON_DIFFICULTY = 4
 MIN_REFLECTION_POINTS = 3
 MAX_GOLDEN_STEPS = 200
 
+# A condition the seed plants that the agent has to notice and handle. CLI
+# tasks run as root, and the other families have no permission model the
+# factory can rely on, so permission errors are not offered.
+EdgeCase = Literal["boundary_conditions", "missing_deps", "conflicting_state", "recovery"]
+EDGE_CASES: tuple[str, ...] = ("boundary_conditions", "missing_deps", "conflicting_state", "recovery")
+FAMILY_EDGE_CASES: dict[str, frozenset[str]] = {
+    "state": frozenset(EDGE_CASES),
+    "cli": frozenset(EDGE_CASES),
+    # Static pages have nothing for a task to depend on that could be missing.
+    "browser": frozenset({"boundary_conditions", "conflicting_state", "recovery"}),
+}
+
 CheckKind = Literal[
     "record_exists",
     "record_absent",
@@ -136,6 +148,10 @@ class TaskDraft(BaseModel):
     golden: list[GoldenStep]
     checks: list[Check]
     reflection_points: list[ReflectionPoint] = Field(default_factory=list)
+    # The slot's edge case, and the seed elements that plant it: "collection:id"
+    # for state, "setup:N" (1-based) for CLI, a page path for browser.
+    edge_case: EdgeCase | None = None
+    edge_case_seed: list[str] = Field(default_factory=list)
 
 
 class TaskDraftBatch(BaseModel):
@@ -152,10 +168,14 @@ class ReviewVerdict(BaseModel):
     fair_reason: str
     sensible: bool
     sensible_reason: str
+    # Only for a task with an edge case: does the seed plant it, and does the
+    # golden solution handle it? None means no verdict was given.
+    edge_case_ok: bool | None = None
+    edge_case_reason: str = ""
 
     @property
     def accepted(self) -> bool:
-        return self.realistic and self.fair and self.sensible
+        return self.realistic and self.fair and self.sensible and self.edge_case_ok is not False
 
     def rejection_reason(self) -> str:
         reasons = [
@@ -164,6 +184,7 @@ class ReviewVerdict(BaseModel):
                 ("not realistic", self.realistic, self.realistic_reason),
                 ("not fair", self.fair, self.fair_reason),
                 ("does not make sense", self.sensible, self.sensible_reason),
+                ("edge case not handled", self.edge_case_ok is not False, self.edge_case_reason),
             )
             if not ok
         ]
@@ -186,6 +207,8 @@ class SyntheticTask(BaseModel):
     golden: list[GoldenStep]
     checks: list[Check]
     reflection_points: list[ReflectionPoint]
+    edge_case: EdgeCase | None = None
+    edge_case_seed: list[str] = Field(default_factory=list)
     # Twice the golden length: room to explore without an open-ended budget.
     step_budget: int
     round: int

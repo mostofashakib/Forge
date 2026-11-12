@@ -6,6 +6,7 @@ from forge.taskfactory.profile import EnvironmentProfile
 from forge.taskfactory.schemas import (
     DIFFICULTY_STEP_BOUNDS,
     FAMILY_CHECK_KINDS,
+    FAMILY_EDGE_CASES,
     LONG_HORIZON_DIFFICULTY,
     MAX_GOLDEN_STEPS,
     MIN_REFLECTION_POINTS,
@@ -34,6 +35,7 @@ def static_problems(draft: TaskDraft, slot: Slot, profile: EnvironmentProfile) -
     problems = length_problems(draft, slot)
     problems += _reflection_problems(draft, slot)
     problems += _check_problems(draft, profile)
+    problems += _edge_case_problems(draft, slot, profile)
     family_rules = {"state": _state_problems, "cli": _cli_problems, "browser": _browser_problems}
     problems += family_rules[profile.family](draft, profile)
     # Several checks often share one problem. Each reason is listed once.
@@ -63,6 +65,38 @@ def _reflection_problems(draft: TaskDraft, slot: Slot) -> list[str]:
             f"got {len(draft.reflection_points)}"
         )
     return problems
+
+
+def _edge_case_problems(draft: TaskDraft, slot: Slot, profile: EnvironmentProfile) -> list[str]:
+    if slot.edge_case is None:
+        return ["the slot asks for no edge case, but the draft names one"] if draft.edge_case else []
+    if slot.edge_case not in FAMILY_EDGE_CASES[profile.family]:
+        return [f"edge case {slot.edge_case!r} does not apply to {profile.family} environments"]
+    if draft.edge_case != slot.edge_case:
+        return [f"the slot asks for edge case {slot.edge_case!r}, the draft has {draft.edge_case!r}"]
+    if not draft.edge_case_seed:
+        return ["edge_case_seed must name the seed elements that plant the edge case"]
+    planted = _seed_elements(draft, profile.family)
+    return [
+        f"edge_case_seed names {ref!r}, which is not an element of this task's seed"
+        for ref in draft.edge_case_seed
+        if ref not in planted
+    ]
+
+
+def _seed_elements(draft: TaskDraft, family: str) -> set[str]:
+    """How edge_case_seed may refer to each element of the draft's own seed."""
+    seed = draft.seed
+    if family == "state":
+        return {
+            f"{collection}:{row['id']}"
+            for collection, rows in seed.records.items()
+            for row in rows
+            if isinstance(row, dict) and "id" in row
+        }
+    if family == "cli":
+        return {f"setup:{number}" for number in range(1, len(seed.setup) + 1)}
+    return {page.path for page in seed.pages}
 
 
 def _check_problems(draft: TaskDraft, profile: EnvironmentProfile) -> list[str]:

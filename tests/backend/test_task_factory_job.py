@@ -209,3 +209,40 @@ def test_the_batch_records_the_models_that_actually_ran(db):
     batch_id, _ = _job(db, env=env)
 
     assert db.get(TaskBatch, batch_id).validator_model == "gemini:gemini-3-pro"
+
+
+class _RecordingClient(_Client):
+    def __init__(self, label: str, prompts: list[str]) -> None:
+        super().__init__(label)
+        self._prompts = prompts
+
+    def extract(self, system, user, schema):
+        if schema is TaskDraftBatch:
+            self._prompts.append(user)
+        return super().extract(system, user, schema)
+
+
+def test_the_batchs_edge_cases_reach_the_writer(db):
+    prompts: list[str] = []
+
+    @contextmanager
+    def open_target(_db, env_name, batch_id):
+        yield Target(runner=_Runner(), profile=lambda: PROFILE)
+
+    @contextmanager
+    def exclusive(env_name):
+        yield
+
+    batch_id = task_registry.create_batch(
+        db, env_name="mail", requested=3, pass_k=1,
+        writer=ModelSpec("anthropic", "claude-sonnet-5"), validator=ModelSpec("openai", "gpt-5"),
+        edge_cases=["recovery"],
+    )
+    task_factory.execute_batch(
+        db, batch_id, environ=ENV, publish=lambda _event: None,
+        make_client=lambda spec, max_tokens: _RecordingClient(spec.model, prompts),
+        open_target=open_target, exclusive=exclusive,
+    )
+
+    assert db.get(TaskBatch, batch_id).status != "failed", db.get(TaskBatch, batch_id).error
+    assert any("edge case recovery" in prompt for prompt in prompts)
