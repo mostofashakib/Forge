@@ -319,3 +319,13 @@ def test_the_reaper_runs_on_a_schedule_and_when_the_worker_boots(monkeypatch):
     with patch("backend.app.worker.task_factory.reap_abandoned_batches_task") as reap:
         celery_app._reap_abandoned_batches_on_boot()
     reap.delay.assert_called_once_with()
+
+
+def test_the_boot_reaper_retries_while_the_api_has_not_migrated_the_schema_yet():
+    # The worker can boot before the API's init_db adds a new column.
+    from sqlalchemy.exc import OperationalError
+
+    reaper = task_factory.reap_abandoned_batches_task
+
+    assert OperationalError in reaper.autoretry_for
+    assert reaper.max_retries * reaper.default_retry_delay >= 5 * 60

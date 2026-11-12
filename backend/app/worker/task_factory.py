@@ -14,6 +14,7 @@ from contextlib import AbstractContextManager
 from datetime import timedelta
 
 from celery.exceptions import SoftTimeLimitExceeded
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from backend.app.models import TaskBatch
@@ -118,7 +119,12 @@ def reap_abandoned_batches(db: Session) -> list[str]:
     return reaped
 
 
-@celery.task(name="backend.app.worker.task_factory.reap_abandoned_batches_task", ignore_result=True)
+# The worker can boot before the API's init_db adds a new column, so the
+# boot-time reap retries for about five minutes.
+@celery.task(
+    name="backend.app.worker.task_factory.reap_abandoned_batches_task", ignore_result=True,
+    autoretry_for=(OperationalError,), default_retry_delay=30, max_retries=10,
+)
 def reap_abandoned_batches_task() -> None:
     from backend.app.database import get_session_factory
 
