@@ -261,7 +261,7 @@ class TaskRejection(BaseModel):
     category: str
     difficulty: int
     round: int
-    stage: Literal["writer", "static", "pass_k", "review", "contamination"]
+    stage: Literal["writer", "static", "pass_k", "review", "contamination", "stopped"]
     reason: str
-    # None when the writer returned nothing for the slot.
+    # None when the writer returned nothing for the slot, or the batch stopped first.
     draft: TaskDraft | None = None

@@ -56,3 +56,32 @@ def test_a_second_init_db_does_not_overwrite_saved_edge_cases(tmp_path, monkeypa
 
     with database.get_session_factory()() as db:
         assert edge_cases_of(db.get(TaskBatch, "tb_new")) == ["recovery"]
+
+
+def test_init_db_adds_started_at_to_an_older_task_batches_table(tmp_path, monkeypatch):
+    path = tmp_path / "old.db"
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "CREATE TABLE task_batches (id TEXT PRIMARY KEY, env_name TEXT, version INTEGER, status TEXT, "
+            "requested INTEGER, delivered INTEGER, pass_k INTEGER, data_type TEXT, edge_cases_json TEXT, "
+            "writer_model TEXT, validator_model TEXT, taxonomy_json TEXT, error TEXT, created_at DATETIME, "
+            "completed_at DATETIME, deleted_at DATETIME)"
+        )
+        conn.execute(
+            "INSERT INTO task_batches (id, env_name, status, requested, delivered, pass_k, writer_model, "
+            "validator_model) VALUES ('tb_old', 'mail', 'running', 3, 0, 1, 'a:b', 'c:d')"
+        )
+    monkeypatch.setenv("FORGE_DB_URL", f"sqlite:///{path}")
+    from backend.app import database
+
+    database._engine = None
+    database._SessionLocal = None
+    database.init_db()
+
+    assert "started_at" in {c["name"] for c in inspect(database.get_engine()).get_columns("task_batches")}
+    from backend.app.models import TaskBatch
+
+    with database.get_session_factory()() as db:
+        old = db.get(TaskBatch, "tb_old")
+        assert old.status == "running"
+        assert old.started_at is None

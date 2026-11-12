@@ -95,6 +95,7 @@ def init_db() -> None:
             batch_migrations = {
                 "data_type": "ALTER TABLE task_batches ADD COLUMN data_type TEXT DEFAULT 'rl_tasks'",
                 "edge_cases_json": "ALTER TABLE task_batches ADD COLUMN edge_cases_json TEXT DEFAULT '[]'",
+                "started_at": "ALTER TABLE task_batches ADD COLUMN started_at DATETIME",
             }
             for col_name, stmt in batch_migrations.items():
                 if col_name not in batch_columns:

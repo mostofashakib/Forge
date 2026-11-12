@@ -369,3 +369,91 @@ def test_an_unknown_edge_case_fails_before_any_llm_call():
     with pytest.raises(ValueError, match="permission_errors"):
         _browser_pipeline(builder).run(count=3, k=1, edge_cases=("permission_errors",))
     assert builder.calls == 0
+
+
+# ---------------------------------------------------------------------------
+# Circuit breakers: a batch that stops producing tasks, or runs out of time,
+# stops itself and keeps what it accepted.
+# ---------------------------------------------------------------------------
+
+def _all_bad(rounds: range, slots: range) -> dict[int, dict[int, TaskDraft]]:
+    return {r: {s: _draft(s, tool="/nuke_inbox") for s in slots} for r in rounds}
+
+
+def _stopped(result) -> list:
+    return [r for r in result.rejections if r.stage == "stopped"]
+
+
+def test_a_batch_that_accepts_nothing_for_three_chunks_in_a_row_stops():
+    writer = _Writer(_all_bad(range(1, 10), range(40)))
+    events: list[dict] = []
+
+    result = _pipeline(writer=writer, progress=events.append).run(count=40, k=1)
+
+    assert len(writer.calls) == 3
+    assert result.status == "short"
+    assert result.tasks == []
+    assert sorted(r.slot for r in _stopped(result)) == list(range(30, 40))
+    assert all("3 chunks in a row" in r.reason for r in _stopped(result))
+    assert any(e["stage"] == "stopped" for e in events)
+
+
+def test_a_chunk_that_accepts_a_task_resets_the_stall_count():
+    script = _all_bad(range(1, 6), range(50))
+    del script[3][20]  # the third chunk accepts slot 20
+
+    writer = _Writer(script)
+    result = _pipeline(writer=writer).run(count=50, k=1)
+
+    assert _stopped(result) == []
+    assert result.status == "complete"
+
+
+def test_a_small_batch_still_gets_all_three_rounds():
+    writer = _Writer(_all_bad(range(1, 3), range(5)))
+
+    result = _pipeline(writer=writer).run(count=5, k=1)
+
+    assert len(writer.calls) == 3
+    assert result.status == "complete"
+    assert _stopped(result) == []
+
+
+class _Clock:
+    def __init__(self, *times: float) -> None:
+        self.times = list(times)
+
+    def __call__(self) -> float:
+        return self.times.pop(0) if len(self.times) > 1 else self.times[0]
+
+
+def _timed_pipeline(writer, clock, time_limit_s):
+    return TaskFactoryPipeline(
+        profile=PROFILE, taxonomy_builder=_Builder(), writer=writer, reviewer=_Reviewer(), runner=_Runner(),
+        pass_k=lambda runner, draft, k: PassKResult(True, fingerprint="fp"),
+        time_limit_s=time_limit_s, clock=clock,
+    )
+
+
+def test_a_batch_past_its_time_limit_stops_before_the_next_chunk_and_keeps_its_tasks():
+    writer = _Writer()
+    # start, before chunk 1, before chunk 2
+    result = _timed_pipeline(writer, _Clock(0, 50, 150), time_limit_s=100).run(count=25, k=1)
+
+    assert len(writer.calls) == 1
+    assert len(result.tasks) == 10
+    assert result.status == "short"
+    assert sorted(r.slot for r in _stopped(result)) == list(range(10, 25))
+    assert all("time limit" in r.reason for r in _stopped(result))
+
+
+def test_a_batch_inside_its_time_limit_is_never_stopped():
+    result = _timed_pipeline(_Writer(), _Clock(0, 99), time_limit_s=100).run(count=25, k=1)
+
+    assert result.status == "complete"
+    assert _stopped(result) == []
+
+
+def test_a_time_limit_that_is_not_positive_is_rejected():
+    with pytest.raises(ValueError, match="time limit"):
+        _timed_pipeline(_Writer(), _Clock(0), time_limit_s=0)

@@ -114,7 +114,7 @@ export type TaskRejection = {
   category: string;
   difficulty: number;
   round: number;
-  stage: "writer" | "static" | "pass_k" | "review";
+  stage: "writer" | "static" | "pass_k" | "review" | "stopped";
   reason: string;
   draft: { title: string } | null;
 };
@@ -161,4 +161,5 @@ export const STAGE_LABELS: Record<TaskRejection["stage"], string> = {
   static: "Static check",
   pass_k: "Golden pass^k",
   review: "LLM review",
+  stopped: "Batch stopped",
 };
