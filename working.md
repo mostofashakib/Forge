@@ -489,6 +489,8 @@ Done-when batch `tb_d21734791301` (30 tasks, `conflicting_state` and `recovery`,
 
 Every accepted edge-case task passed the static check, pass^k (k=3), and review, and names its planting setup commands. Rejections by stage: pass^k 30, static 19, writer 6, review 1. The static check caught 3 edge-case seed references that don't exist and 6 drafts whose edge case didn't match the slot. Most pass^k rejections are seeds that write into directories they never create, and checks that depend on the host (hostname, `uname -m`). The 50% yield is a writer-quality problem with a local 27B model and belongs to M2's calibration work. The stall breaker did not fire, since every round accepted tasks.
 
+Merged into `main` as `e937f78`. `uv run pytest -q` on main after the merge: 2839 passed, 2 skipped.
+
 ### M2
 
 ### M3
