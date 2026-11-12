@@ -470,7 +470,24 @@ Core flows against the running stack (API on port 8100, since vidQ holds 8000 an
 - Export (`trajectories`, `sft_pairs`): completed, and the manifest was written. Download returned 200. It had 0 rows, because export reads the rollout `episodes` table and agent runs write `agent_episodes`. That behavior predates M1, and M1 does not touch export.
 - Task factory batch `tb_a9b84a86232a` (30 tasks, `conflicting_state` and `recovery`, k=3): **failed on the first writer call**. Anthropic returned "credit balance is too low". The job recorded the error and saved nothing.
 
-Open: the 30-task "Done when" batch, which needs a working writer model from a family other than the validator's. M1 does not merge until it passes.
+Writer switched through the provider adapter to Ollama `qwen3.8:27b` (Qwen family), validator Ollama `gemma4:26b` (Gemma family), so no family judges its own work.
+
+First run `tb_9e019205d4b5` ran 2 hours with no task past the writer, and nothing could stop it short of killing the worker. That led to circuit breakers (`e6ab992`, `9f0b4d4`):
+- Ollama requests time out after 20 minutes. The library waited forever.
+- A batch stops after 3 chunks in a row accept no task, or at 12 hours (checked before each chunk). It keeps what it accepted, and each unfilled slot gets a `stopped` rejection.
+- Celery soft limit 14h fails the batch with a clear error. Hard limit 14h10m kills it.
+- Batches record `started_at`. A reaper fails batches still running past the hard limit, every 15 minutes on beat and on worker boot, and retries until the API has migrated the schema.
+- `uv run pytest -q`: 2839 passed, 2 skipped. Frontend 16 passed, build compiled, ESLint 0 errors.
+
+Done-when batch `tb_d21734791301` (30 tasks, `conflicting_state` and `recovery`, k=3): **short, version 1, 15 of 30 delivered** in 2h15m.
+
+| Edge case | Accepted | Validator `edge_case_ok` |
+|---|---|---|
+| `conflicting_state` | 6 | all true |
+| `recovery` | 4 | all true |
+| none | 5 | n/a |
+
+Every accepted edge-case task passed the static check, pass^k (k=3), and review, and names its planting setup commands. Rejections by stage: pass^k 30, static 19, writer 6, review 1. The static check caught 3 edge-case seed references that don't exist and 6 drafts whose edge case didn't match the slot. Most pass^k rejections are seeds that write into directories they never create, and checks that depend on the host (hostname, `uname -m`). The 50% yield is a writer-quality problem with a local 27B model and belongs to M2's calibration work. The stall breaker did not fire, since every round accepted tasks.
 
 ### M2
 
