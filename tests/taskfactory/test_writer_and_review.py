@@ -161,3 +161,92 @@ def test_a_revision_shows_the_draft_its_problem_and_the_target():
     assert "got 12" in prompt
     assert "aim for about 45" in prompt
     assert "SLOT 3" in prompt
+
+
+def test_an_edge_case_slot_tells_the_writer_what_to_plant():
+    client = _EchoWriterClient()
+
+    TaskWriter(client).write(
+        PROFILE, TAXONOMY,
+        [Slot(index=0, category="triage", difficulty=1, edge_case="conflicting_state"),
+         Slot(index=1, category="triage", difficulty=1)],
+    )
+
+    slot_lines = [line for line in client.prompts[0].splitlines() if line.startswith("SLOT ")]
+    assert "edge case conflicting_state" in slot_lines[0]
+    assert "edge case" not in slot_lines[1]
+    assert "partly done" in client.prompts[0]
+
+
+def test_a_plain_batch_prompt_carries_no_edge_case_descriptions():
+    client = _EchoWriterClient()
+
+    TaskWriter(client).write(PROFILE, TAXONOMY, _slots(2))
+
+    assert "partly done" not in client.prompts[0]
+
+
+def test_a_revision_keeps_the_slots_edge_case():
+    client = _EchoWriterClient()
+
+    TaskWriter(client).revise(
+        PROFILE, TAXONOMY,
+        [(Slot(index=3, category="triage", difficulty=5, edge_case="recovery"), _draft(3), "too short")],
+    )
+
+    assert "edge case recovery" in client.prompts[0]
+
+
+def _edge_verdict(slot: int, edge_case_ok: bool | None) -> ReviewVerdict:
+    return _verdict(slot).model_copy(update={
+        "edge_case_ok": edge_case_ok,
+        "edge_case_reason": "the seed never plants the stale record" if edge_case_ok is False else "",
+    })
+
+
+def _edge_slot(index: int, edge_case: str | None = "conflicting_state") -> Slot:
+    return Slot(index=index, category="triage", difficulty=1, edge_case=edge_case)
+
+
+def test_a_failed_edge_case_verdict_rejects_the_task():
+    client = _ScriptedReviewClient([_edge_verdict(0, False)])
+
+    verdicts = TaskReviewer(client).review(PROFILE, [(_edge_slot(0), _draft(0))])
+
+    assert not verdicts[0].accepted
+    assert "never plants the stale record" in verdicts[0].rejection_reason()
+
+
+def test_an_edge_case_task_without_an_edge_case_verdict_is_rejected():
+    client = _ScriptedReviewClient([_edge_verdict(0, None)])
+
+    verdicts = TaskReviewer(client).review(PROFILE, [(_edge_slot(0), _draft(0))])
+
+    assert not verdicts[0].accepted
+    assert "edge case" in verdicts[0].rejection_reason()
+
+
+def test_a_confirmed_edge_case_is_accepted():
+    client = _ScriptedReviewClient([_edge_verdict(0, True)])
+
+    verdicts = TaskReviewer(client).review(PROFILE, [(_edge_slot(0), _draft(0))])
+
+    assert verdicts[0].accepted
+
+
+def test_an_edge_case_verdict_on_a_plain_task_is_ignored():
+    client = _ScriptedReviewClient([_edge_verdict(0, False)])
+
+    verdicts = TaskReviewer(client).review(PROFILE, [(_edge_slot(0, None), _draft(0))])
+
+    assert verdicts[0].accepted
+
+
+def test_the_review_prompt_names_the_edge_case_and_its_seed():
+    draft = _draft(0).model_copy(update={"edge_case": "conflicting_state", "edge_case_seed": ["emails:e1"]})
+    client = _ScriptedReviewClient([_edge_verdict(0, True)])
+
+    TaskReviewer(client).review(PROFILE, [(_edge_slot(0), draft)])
+
+    assert "edge case conflicting_state" in client.prompts[0]
+    assert "emails:e1" in client.prompts[0]

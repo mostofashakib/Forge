@@ -9,13 +9,11 @@ export function NewRunModal({
   onClose,
   onCreated,
   defaultObjective,
-  replayMode,
 }: {
   envName: string;
   onClose: () => void;
   onCreated: () => void;
   defaultObjective?: string;
-  replayMode?: boolean;
 }) {
   const [objective, setObjective] = useState(defaultObjective ?? "");
   const [agentId, setAgentId] = useState("llm");
@@ -66,12 +64,6 @@ export function NewRunModal({
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          {replayMode && (
-            <div className="flex items-start gap-2 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2.5 text-sm text-blue-800">
-              <span className="shrink-0">●</span>
-              <span>Replay mode — the agent will follow the imported synthetic trajectory instead of using the LLM to pick actions.</span>
-            </div>
-          )}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Objective</label>
             <textarea

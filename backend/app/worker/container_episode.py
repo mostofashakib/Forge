@@ -10,7 +10,6 @@ their source modules and the worker starts without loading Playwright.
 """
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -75,19 +74,8 @@ def _episode_snapshot(runtime, env_name: str, seed: int) -> str | None:
 
 
 def _cli_agent(episode: ContainerEpisode, attempt_seed: int):
-    """Replay a recorded synthetic trajectory when the env has one, else build the agent."""
-    from forge.envgen.agents.cli_agent import ReplayCliAgent, make_cli_agent
+    from forge.envgen.agents.cli_agent import make_cli_agent
 
-    replay_path = episode.env_dir / "synthetic_replay.json"
-    if replay_path.exists():
-        trajectories = json.loads(replay_path.read_text(encoding="utf-8")).get("episodes", [])
-        if trajectories:
-            index = attempt_seed % len(trajectories)
-            logger.info(
-                "[container-ep] using replay agent seed=%d → trajectory %d (%d commands)",
-                attempt_seed, index, len(trajectories[index]),
-            )
-            return ReplayCliAgent(trajectories[index])
     return make_cli_agent(episode.agent_id, seed=experiment_seed(attempt_seed))
 
 

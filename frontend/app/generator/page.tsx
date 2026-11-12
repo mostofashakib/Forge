@@ -9,6 +9,7 @@ import {
   type Settings,
   type TargetEnvironment,
 } from "@/lib/taskFactory";
+import { EDGE_CASE_LABELS, keepOffered, toggleEdgeCase } from "@/lib/edgeCases";
 
 type Phase = "idle" | "running" | "done" | "error";
 
@@ -47,6 +48,7 @@ export default function TaskFactoryPage() {
   const { count, error: countError } = parseCount(countText);
   const [k, setK] = useState(3);
   const [dataType, setDataType] = useState<"rl_tasks" | "preference_pairs" | "sft">("rl_tasks");
+  const [edgeCases, setEdgeCases] = useState<string[]>([]);
   const [phase, setPhase] = useState<Phase>("idle");
   const [stage, setStage] = useState<string | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
@@ -111,7 +113,10 @@ export default function TaskFactoryPage() {
     try {
       ({ batch_id: batchId } = await apiJson<{ batch_id: string }>("/api/task-factory/batches", {
         method: "POST",
-        body: JSON.stringify({ env_name: envName, target_env: envName, count, k, data_type: dataType }),
+        body: JSON.stringify({
+          env_name: envName, target_env: envName, count, k, data_type: dataType,
+          edge_cases: keepOffered(edgeCases, selected?.edge_cases),
+        }),
       }));
     } catch (err) {
       setPhase("error");
@@ -186,7 +191,10 @@ export default function TaskFactoryPage() {
                       name="environment"
                       checked={envName === env.name}
                       disabled={phase === "running"}
-                      onChange={() => setEnvName(env.name)}
+                      onChange={() => {
+                        setEnvName(env.name);
+                        setEdgeCases((picked) => keepOffered(picked, env.edge_cases));
+                      }}
                     />
                     <span className="benchmark-domain__check" aria-hidden="true">✓</span>
                     <span>
@@ -228,6 +236,38 @@ export default function TaskFactoryPage() {
               ))}
             </div>
           </div>
+
+          {selected && selected.edge_cases.length > 0 && (
+            <div className="benchmark-field">
+              <div className="benchmark-field__label">
+                <span>Edge cases</span>
+                <small>Optional, planted in the seed and verified</small>
+              </div>
+              <div className="benchmark-domain-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))" }}>
+                {selected.edge_cases.map((name) => (
+                  <label key={name} className="benchmark-domain">
+                    <input
+                      type="checkbox"
+                      checked={edgeCases.includes(name)}
+                      disabled={phase === "running"}
+                      onChange={() => setEdgeCases((picked) => toggleEdgeCase(picked, name))}
+                    />
+                    <span className="benchmark-domain__check" aria-hidden="true">✓</span>
+                    <span>
+                      <strong>{EDGE_CASE_LABELS[name]?.label ?? name}</strong>
+                      <small>{EDGE_CASE_LABELS[name]?.desc ?? ""}</small>
+                    </span>
+                  </label>
+                ))}
+              </div>
+              {edgeCases.length > 0 && (
+                <p className="tasks-hint">
+                  Slots rotate through the {edgeCases.length} picked edge case{edgeCases.length > 1 ? "s" : ""} and
+                  plain tasks, so each gets about 1 in {edgeCases.length + 1} slots.
+                </p>
+              )}
+            </div>
+          )}
 
           <label className="benchmark-field">
             <span className="benchmark-field__label">

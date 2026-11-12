@@ -200,6 +200,8 @@ class TaskBatch(Base):
     delivered: Mapped[int] = mapped_column(Integer, default=0)
     pass_k: Mapped[int] = mapped_column(Integer)
     data_type: Mapped[str] = mapped_column(String, default="rl_tasks")
+    # JSON list of the edge cases the batch asked for. Empty means none.
+    edge_cases_json: Mapped[str] = mapped_column(Text, default="[]")
     writer_model: Mapped[str] = mapped_column(String)
     validator_model: Mapped[str] = mapped_column(String)
     taxonomy_json: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -207,6 +209,9 @@ class TaskBatch(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc)
     )
+    # When a worker picked the batch up. Batches running from before this
+    # column existed have none.
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 

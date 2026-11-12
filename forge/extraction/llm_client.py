@@ -185,6 +185,12 @@ class AnthropicClient:
 # Ollama
 # ---------------------------------------------------------------------------
 
+# The ollama library waits forever by default, so a stalled model would hang
+# its caller. A local 27B writer takes up to about 11 minutes for a full
+# 16k-token answer.
+OLLAMA_REQUEST_TIMEOUT_S = 20 * 60
+
+
 class OllamaClient:
     """LLM client backed by a local Ollama instance.
 
@@ -214,7 +220,7 @@ class OllamaClient:
         json_schema = _flat_schema(schema)
         system = LLMPromptFormatter.structured(system, schema)
         last_error: Exception | None = None
-        client = ollama.Client(host=self._base_url)
+        client = ollama.Client(host=self._base_url, timeout=OLLAMA_REQUEST_TIMEOUT_S)
 
         for _ in range(self._max_retries):
             try:

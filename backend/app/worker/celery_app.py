@@ -49,7 +49,19 @@ celery.conf.beat_schedule = {
         "task": "backend.app.worker.tasks.cleanup_expired_sandboxes",
         "schedule": crontab(hour=2, minute=0),
     },
+    "reap-abandoned-task-batches": {
+        "task": "backend.app.worker.task_factory.reap_abandoned_batches_task",
+        "schedule": crontab(minute="*/15"),
+    },
 }
+
+
+@worker_ready.connect
+def _reap_abandoned_batches_on_boot(**_kwargs) -> None:
+    """Fail task batches a previous worker left running. Local runs have no beat."""
+    from backend.app.worker.task_factory import reap_abandoned_batches_task
+
+    reap_abandoned_batches_task.delay()
 
 
 @worker_ready.connect

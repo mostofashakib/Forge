@@ -209,3 +209,123 @@ def test_the_batch_records_the_models_that_actually_ran(db):
     batch_id, _ = _job(db, env=env)
 
     assert db.get(TaskBatch, batch_id).validator_model == "gemini:gemini-3-pro"
+
+
+class _RecordingClient(_Client):
+    def __init__(self, label: str, prompts: list[str]) -> None:
+        super().__init__(label)
+        self._prompts = prompts
+
+    def extract(self, system, user, schema):
+        if schema is TaskDraftBatch:
+            self._prompts.append(user)
+        return super().extract(system, user, schema)
+
+
+def test_the_batchs_edge_cases_reach_the_writer(db):
+    prompts: list[str] = []
+
+    @contextmanager
+    def open_target(_db, env_name, batch_id):
+        yield Target(runner=_Runner(), profile=lambda: PROFILE)
+
+    @contextmanager
+    def exclusive(env_name):
+        yield
+
+    batch_id = task_registry.create_batch(
+        db, env_name="mail", requested=3, pass_k=1,
+        writer=ModelSpec("anthropic", "claude-sonnet-5"), validator=ModelSpec("openai", "gpt-5"),
+        edge_cases=["recovery"],
+    )
+    task_factory.execute_batch(
+        db, batch_id, environ=ENV, publish=lambda _event: None,
+        make_client=lambda spec, max_tokens: _RecordingClient(spec.model, prompts),
+        open_target=open_target, exclusive=exclusive,
+    )
+
+    assert db.get(TaskBatch, batch_id).status != "failed", db.get(TaskBatch, batch_id).error
+    assert any("edge case recovery" in prompt for prompt in prompts)
+
+
+# ---------------------------------------------------------------------------
+# Time limits: the pipeline stops itself first, Celery's limits back it up,
+# and a batch whose worker died is failed by the reaper.
+# ---------------------------------------------------------------------------
+
+def test_the_pipeline_runs_under_the_batch_time_limit(db, monkeypatch):
+    seen: dict = {}
+    real = task_factory.TaskFactoryPipeline
+
+    def recording(**kwargs):
+        seen.update(kwargs)
+        return real(**kwargs)
+
+    monkeypatch.setattr(task_factory, "TaskFactoryPipeline", recording)
+
+    _job(db)
+
+    assert seen["time_limit_s"] == task_factory.BATCH_TIME_LIMIT_S
+
+
+def test_celerys_limits_fire_only_after_the_pipelines_own_time_limit():
+    job = task_factory.create_task_batch_task
+
+    assert task_factory.BATCH_TIME_LIMIT_S < job.soft_time_limit < job.time_limit
+    assert job.time_limit == task_factory.BATCH_HARD_LIMIT_S
+
+
+def test_a_batch_cut_off_by_the_soft_time_limit_is_failed_with_a_clear_reason(db):
+    from celery.exceptions import SoftTimeLimitExceeded
+
+    events: list[dict] = []
+    batch_id, _ = _job(db, target_error=SoftTimeLimitExceeded(), events=events)
+
+    batch = db.get(TaskBatch, batch_id)
+    assert batch.status == "failed"
+    assert "time limit" in batch.error
+    assert "time limit" in events[-1]["error"]
+
+
+def test_the_reaper_fails_only_batches_past_the_hard_limit(db):
+    from datetime import datetime, timedelta, timezone
+
+    def running(started):
+        batch_id = task_registry.create_batch(
+            db, env_name="mail", requested=1, pass_k=1,
+            writer=ModelSpec("anthropic", "claude-sonnet-5"), validator=ModelSpec("openai", "gpt-5"),
+        )
+        db.get(TaskBatch, batch_id).status = "running"
+        db.get(TaskBatch, batch_id).started_at = started
+        db.commit()
+        return batch_id
+
+    now = datetime.now(timezone.utc)
+    dead = running(now - timedelta(seconds=task_factory.BATCH_HARD_LIMIT_S + 60))
+    alive = running(now - timedelta(seconds=task_factory.BATCH_HARD_LIMIT_S - 60))
+
+    assert task_factory.reap_abandoned_batches(db) == [dead]
+    assert db.get(TaskBatch, alive).status == "running"
+
+
+def test_the_reaper_runs_on_a_schedule_and_when_the_worker_boots(monkeypatch):
+    from unittest.mock import patch
+
+    from backend.app.worker import celery_app
+
+    schedule = {entry["task"] for entry in celery_app.celery.conf.beat_schedule.values()}
+    assert "backend.app.worker.task_factory.reap_abandoned_batches_task" in schedule
+
+    with patch("backend.app.worker.task_factory.reap_abandoned_batches_task") as reap:
+        celery_app._reap_abandoned_batches_on_boot()
+    reap.delay.assert_called_once_with()
+
+
+def test_the_boot_reaper_retries_while_the_api_has_not_migrated_the_schema_yet():
+    # The worker can boot before the API's init_db adds a new column.
+    from sqlalchemy.exc import OperationalError
+
+    reaper = task_factory.reap_abandoned_batches_task
+
+    assert OperationalError in reaper.autoretry_for
+    assert reaper.max_retries * reaper.default_retry_delay >= 5 * 60

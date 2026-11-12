@@ -137,7 +137,7 @@ function ExportIcon() {
 // Section + action config
 // ---------------------------------------------------------------------------
 
-type ActionId = "agent" | "dashboard" | "policy" | "reward" | "personas" | "evaluate" | "violations" | "synthetic" | "export";
+type ActionId = "agent" | "dashboard" | "policy" | "reward" | "personas" | "evaluate" | "violations" | "tasks" | "export";
 
 const ACTION_ICONS: Record<ActionId, React.ReactNode> = {
   agent:      <AgentIcon />,
@@ -147,7 +147,7 @@ const ACTION_ICONS: Record<ActionId, React.ReactNode> = {
   personas:   <PeopleIcon />,
   evaluate:   <CheckIcon />,
   violations: <AlertIcon />,
-  synthetic:  <SparkleIcon />,
+  tasks:      <SparkleIcon />,
   export:     <ExportIcon />,
 };
 
@@ -159,7 +159,7 @@ const ICON_THEME: Record<ActionId, { bg: string; color: string }> = {
   personas:   { bg: "bg-violet-50",  color: "text-violet-600" },
   evaluate:   { bg: "bg-amber-50",   color: "text-amber-600"  },
   violations: { bg: "bg-amber-50",   color: "text-amber-600"  },
-  synthetic:  { bg: "bg-emerald-50", color: "text-emerald-600" },
+  tasks:      { bg: "bg-emerald-50", color: "text-emerald-600" },
   export:     { bg: "bg-emerald-50", color: "text-emerald-600" },
 };
 
@@ -180,7 +180,7 @@ const SECTIONS: Section[] = [
   { id: "training",      label: "Training",      description: "Run, observe, and measure agent behavior.", actions: ["agent", "dashboard"] },
   { id: "configuration", label: "Configuration", description: "Shape the rules and definition of success.", actions: ["policy", "reward", "personas"] },
   { id: "analysis",      label: "Analysis",      description: "Interrogate trajectories and surface risk.", actions: ["evaluate", "violations"] },
-  { id: "data",          label: "Data",          description: "Create and package learning-ready datasets.", actions: ["synthetic", "export"] },
+  { id: "data",          label: "Data",          description: "Create and package learning-ready datasets.", actions: ["tasks", "export"] },
 ];
 
 interface ActionDef {
@@ -255,10 +255,10 @@ const ACTIONS: ActionDef[] = [
     requiresSandbox: false,
   },
   {
-    id: "synthetic",
-    label: "Synthetic Data",
-    description: "Generate synthetic episodes from a research goal for agent replay.",
-    href: (e) => `/environments/${e}/synthetic`,
+    id: "tasks",
+    label: "Task Factory",
+    description: "Generate verified tasks, with optional edge cases, as versioned batches.",
+    href: () => "/generator",
     requiresSandbox: false,
   },
   {

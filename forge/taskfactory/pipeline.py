@@ -5,7 +5,8 @@ and never touches storage, so a failure midway leaves nothing half-saved.
 """
 from __future__ import annotations
 
-from collections.abc import Callable
+import time
+from collections.abc import Callable, Sequence
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
 from typing import Any, Protocol
@@ -23,7 +24,7 @@ from forge.taskfactory.schemas import (
     TaskRejection,
     Taxonomy,
 )
-from forge.taskfactory.slots import Slot, plan_slots
+from forge.taskfactory.slots import Slot, edge_case_problems, plan_slots
 from forge.taskfactory.static_check import length_problems, static_problems
 
 MAX_ROUNDS = 3
@@ -35,6 +36,10 @@ PROCESS_CHUNK = 10
 # a prompt that grows with the batch.
 TITLE_CONTEXT = 50
 MIN_K, MAX_K = 1, 10
+# Chunks in a row that accept no task before the batch stops. A writer and
+# environment that produce nothing for 30 slots will not recover with more
+# rounds, and each chunk costs LLM calls and golden runs.
+MAX_IDLE_CHUNKS = 3
 
 Progress = Callable[[dict], None]
 PassK = Callable[[TaskRunner, TaskDraft, int], PassKResult]
@@ -118,6 +123,26 @@ def preference_pairs(
     ]
 
 
+@dataclass
+class _Breaker:
+    """Says when a batch must stop: out of time, or no longer producing tasks."""
+
+    deadline: float | None
+    clock: Callable[[], float]
+    idle_chunks: int = 0
+    reason: str | None = None
+
+    def record(self, accepted: int) -> None:
+        self.idle_chunks = 0 if accepted else self.idle_chunks + 1
+
+    def trip(self) -> str | None:
+        if self.reason is None and self.idle_chunks >= MAX_IDLE_CHUNKS:
+            self.reason = f"stopped: {self.idle_chunks} chunks in a row accepted no task"
+        if self.reason is None and self.deadline is not None and self.clock() >= self.deadline:
+            self.reason = "stopped: the batch reached its time limit"
+        return self.reason
+
+
 class TaskFactoryPipeline:
     def __init__(
         self,
@@ -131,7 +156,11 @@ class TaskFactoryPipeline:
         exclusive: Callable[[], AbstractContextManager[None]] | None = None,
         progress: Progress | None = None,
         contamination_verifier: TaskContaminationVerifier | None = None,
+        time_limit_s: float | None = None,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
+        if time_limit_s is not None and time_limit_s <= 0:
+            raise ValueError(f"time limit must be positive, got {time_limit_s}")
         self._profile = profile
         self._taxonomy_builder = taxonomy_builder
         self._writer = writer
@@ -141,22 +170,33 @@ class TaskFactoryPipeline:
         self._exclusive = exclusive or nullcontext
         self._progress = progress or (lambda _event: None)
         self._contamination_verifier = contamination_verifier or TaskContaminationVerifier()
+        self._time_limit_s = time_limit_s
+        self._clock = clock
 
-    def run(self, count: int, k: int, data_type: str = "rl_tasks") -> PipelineResult:
+    def run(
+        self, count: int, k: int, data_type: str = "rl_tasks", edge_cases: Sequence[str] = ()
+    ) -> PipelineResult:
         if not MIN_COUNT <= count <= MAX_COUNT:
             raise ValueError(f"count must be {MIN_COUNT} to {MAX_COUNT}, got {count}")
         if not MIN_K <= k <= MAX_K:
             raise ValueError(f"k must be {MIN_K} to {MAX_K}, got {k}")
+        problems = edge_case_problems(edge_cases, self._profile.family)
+        if problems:
+            raise ValueError("; ".join(problems))
+        start = self._clock()
+        breaker = _Breaker(
+            deadline=None if self._time_limit_s is None else start + self._time_limit_s, clock=self._clock,
+        )
         self._emit("taxonomy", f"Building a taxonomy for {count} tasks")
         taxonomy = self._taxonomy_builder.build(self._profile, count)
         self._emit("taxonomy", f"Taxonomy has {len(taxonomy.categories)} categories")
         result = PipelineResult(requested=count, taxonomy=taxonomy, data_type=data_type)
-        pending = plan_slots(taxonomy, count)
+        pending = plan_slots(taxonomy, count, edge_cases)
         feedback: dict[int, str] = {}
         for round_number in range(1, MAX_ROUNDS + 1):
-            if not pending:
+            if not pending or breaker.reason:
                 break
-            pending, feedback = self._round(round_number, pending, feedback, k, result)
+            pending, feedback = self._round(round_number, pending, feedback, k, result, breaker)
         result.tasks.sort(key=lambda task: task.id)
         if data_type in ("preference", "preference_pairs"):
             result.preference_pairs = result.to_preference_pairs()
@@ -165,14 +205,20 @@ class TaskFactoryPipeline:
         return result
 
     def _round(
-        self, round_number: int, slots: list[Slot], feedback: dict[int, str], k: int, result: PipelineResult
+        self, round_number: int, slots: list[Slot], feedback: dict[int, str], k: int, result: PipelineResult,
+        breaker: _Breaker,
     ) -> tuple[list[Slot], dict[int, str]]:
         """Run one round in chunks, so results land steadily and the lock is held briefly."""
         self._emit("writing", f"Round {round_number}: {len(slots)} slots to fill", round_number)
         rejected: dict[int, str] = {}
         for start in range(0, len(slots), PROCESS_CHUNK):
+            if breaker.trip():
+                self._stop(round_number, slots[start:], breaker.reason, result)
+                break
             chunk = slots[start:start + PROCESS_CHUNK]
+            accepted_before = len(result.tasks)
             self._chunk(round_number, chunk, feedback, k, result, rejected)
+            breaker.record(len(result.tasks) - accepted_before)
             self._emit(
                 "review", f"Round {round_number}: {len(result.tasks)} of {result.requested} tasks accepted",
                 round_number, accepted=len(result.tasks),
@@ -275,6 +321,17 @@ class TaskFactoryPipeline:
                         _accepted(slot, draft, verdict, round_number, fingerprints[slot.index], contamination_report=report)
                     )
 
+    def _stop(self, round_number: int, unfilled: list[Slot], reason: str, result: PipelineResult) -> None:
+        """Record why the slots this round never reached stay empty."""
+        result.rejections.extend(
+            TaskRejection(
+                slot=slot.index, category=slot.category, difficulty=slot.difficulty,
+                round=round_number, stage="stopped", reason=reason,
+            )
+            for slot in unfilled
+        )
+        self._emit("stopped", f"Round {round_number}: {reason}, {len(unfilled)} slots left unfilled", round_number)
+
     def _emit(self, stage: str, log: str, round_number: int | None = None, **extra) -> None:
         event = {"stage": stage, "log": log, **extra}
         if round_number is not None:
@@ -308,6 +365,8 @@ def _accepted(
         golden=draft.golden,
         checks=draft.checks,
         reflection_points=draft.reflection_points,
+        edge_case=slot.edge_case,
+        edge_case_seed=draft.edge_case_seed,
         step_budget=2 * len(draft.golden),
         round=round_number,
         review=verdict,

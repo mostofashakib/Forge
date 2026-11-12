@@ -319,7 +319,7 @@ def test_ollama_extraction_turns_thinking_off(monkeypatch):
     calls = []
 
     class _Client:
-        def __init__(self, host):
+        def __init__(self, host, **kwargs):
             pass
 
         def chat(self, **kwargs):
@@ -332,6 +332,47 @@ def test_ollama_extraction_turns_thinking_off(monkeypatch):
 
     assert result.value == "ok"
     assert calls[0]["think"] is False
+
+
+def _ollama_recording_client(monkeypatch, *, fail_with: Exception | None = None) -> list[dict]:
+    import sys
+    import types
+
+    built: list[dict] = []
+
+    class _Client:
+        def __init__(self, host, **kwargs):
+            built.append(kwargs)
+
+        def chat(self, **kwargs):
+            if fail_with is not None:
+                raise fail_with
+            return types.SimpleNamespace(message=types.SimpleNamespace(content='{"value": "ok"}'))
+
+    monkeypatch.setitem(sys.modules, "ollama", types.SimpleNamespace(Client=_Client))
+    return built
+
+
+def test_ollama_requests_carry_a_timeout_so_a_stalled_model_cannot_hang_the_caller(monkeypatch):
+    from forge.extraction.llm_client import OLLAMA_REQUEST_TIMEOUT_S, OllamaClient
+
+    built = _ollama_recording_client(monkeypatch)
+
+    OllamaClient(model="gemma4:26b").extract("system", "user", _SimpleSchema)
+
+    assert built == [{"timeout": OLLAMA_REQUEST_TIMEOUT_S}]
+    assert 0 < OLLAMA_REQUEST_TIMEOUT_S < float("inf")
+
+
+def test_an_ollama_request_that_keeps_timing_out_fails_after_the_retries(monkeypatch):
+    import httpx
+
+    from forge.extraction.llm_client import OllamaClient
+
+    _ollama_recording_client(monkeypatch, fail_with=httpx.ReadTimeout("model stalled"))
+
+    with pytest.raises(RuntimeError, match="after 2 attempts"):
+        OllamaClient(model="gemma4:26b", max_retries=2).extract("system", "user", _SimpleSchema)
 
 
 def test_flat_schema_keeps_a_field_named_title():

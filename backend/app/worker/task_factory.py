@@ -11,7 +11,10 @@ import json
 import logging
 from collections.abc import Callable
 from contextlib import AbstractContextManager
+from datetime import timedelta
 
+from celery.exceptions import SoftTimeLimitExceeded
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from backend.app.models import TaskBatch
@@ -30,6 +33,14 @@ from forge.taskfactory.writer import WRITER_MAX_TOKENS, TaskWriter
 logger = logging.getLogger(__name__)
 
 VALIDATOR_MAX_TOKENS = 8192
+# The pipeline stops itself between chunks at this limit and saves what it
+# has. Celery's soft limit fails a batch whose current chunk overruns it by
+# more than the grace, and the hard limit kills the process. The reaper then
+# fails any batch still "running" past the hard limit.
+BATCH_TIME_LIMIT_S = 12 * 60 * 60
+CHUNK_OVERRUN_GRACE_S = 2 * 60 * 60
+BATCH_SOFT_LIMIT_S = BATCH_TIME_LIMIT_S + CHUNK_OVERRUN_GRACE_S
+BATCH_HARD_LIMIT_S = BATCH_SOFT_LIMIT_S + 10 * 60
 
 
 def channel_for(batch_id: str) -> str:
@@ -57,6 +68,7 @@ def execute_batch(
         return
     env_name, requested, k = batch.env_name, batch.requested, batch.pass_k
     data_type = getattr(batch, "data_type", "rl_tasks")
+    edge_cases = task_registry.edge_cases_of(batch)
     try:
         writer, validator = resolve_models(environ if environ is not None else environ_with_saved(VALIDATOR_VARS))
         require_sdks(writer, validator)
@@ -75,9 +87,17 @@ def execute_batch(
                 runner=target.runner,
                 exclusive=lambda: exclusive(env_name),
                 progress=publish,
+                time_limit_s=BATCH_TIME_LIMIT_S,
             )
-            result = pipeline.run(requested, k, data_type=data_type)
+            result = pipeline.run(requested, k, data_type=data_type, edge_cases=edge_cases)
         version = task_registry.save_result(db, batch_id, result)
+    except SoftTimeLimitExceeded:
+        error = f"stopped by the {BATCH_SOFT_LIMIT_S // 3600}-hour time limit while a chunk was still running"
+        logger.error("[taskfactory] batch %s %s", batch_id, error)
+        db.rollback()
+        task_registry.mark_failed(db, batch_id, error)
+        publish({"error": error})
+        return
     except Exception as exc:  # noqa: BLE001 — every failure is recorded on the batch
         logger.exception("[taskfactory] batch %s failed", batch_id)
         db.rollback()
@@ -91,7 +111,31 @@ def execute_batch(
     })
 
 
-@celery.task(name="backend.app.worker.task_factory.create_task_batch_task", ignore_result=True)
+def reap_abandoned_batches(db: Session) -> list[str]:
+    """Fail batches whose worker died, judged by the hard limit no live worker passes."""
+    reaped = task_registry.fail_abandoned_batches(db, older_than=timedelta(seconds=BATCH_HARD_LIMIT_S))
+    if reaped:
+        logger.warning("[taskfactory] failed abandoned batches %s", reaped)
+    return reaped
+
+
+# The worker can boot before the API's init_db adds a new column, so the
+# boot-time reap retries for about five minutes.
+@celery.task(
+    name="backend.app.worker.task_factory.reap_abandoned_batches_task", ignore_result=True,
+    autoretry_for=(OperationalError,), default_retry_delay=30, max_retries=10,
+)
+def reap_abandoned_batches_task() -> None:
+    from backend.app.database import get_session_factory
+
+    with get_session_factory()() as db:
+        reap_abandoned_batches(db)
+
+
+@celery.task(
+    name="backend.app.worker.task_factory.create_task_batch_task", ignore_result=True,
+    soft_time_limit=BATCH_SOFT_LIMIT_S, time_limit=BATCH_HARD_LIMIT_S,
+)
 def create_task_batch_task(batch_id: str) -> None:
     import redis
 

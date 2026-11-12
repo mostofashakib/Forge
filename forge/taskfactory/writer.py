@@ -40,6 +40,11 @@ Every task has:
     on) or "backtrack" (a dead end to back out of). Seed the data that makes
     each one real.
 
+  edge_case, edge_case_seed: only for a slot that names an edge case. Set
+    edge_case to that name, plant the condition in the seed, and list in
+    edge_case_seed the seed elements that plant it (format below). The golden
+    solution must handle it. Leave both empty for every other slot.
+
 The golden solution's length must fit the slot's difficulty exactly.
 """
 
@@ -56,6 +61,7 @@ check kinds:
   record_count  {collection, match, op, value}  op is ==, !=, >, >=, <, <=
   value         {path, op, value}   dotted path like inbox_unread or a.0.b, op adds contains
   actions_called {tools, ordered}   actions_not_called {tools}
+edge_case_seed: "collection:id" for each seed row that plants the edge case.
   Collections and paths refer to the reset state shown above, the same shape
   the seed rows merge into. Use only field names you see there. A collection
   that is empty at reset (often a log or history) has fields you cannot see,
@@ -71,6 +77,8 @@ checks: kind "shell" with a `command` that exits 0 when the condition holds.
   and test. GNU-only flags fail there: find has no -printf, so use
   `stat -c '%s %n'` or `wc -c` for sizes. Golden steps run in bash with GNU
   coreutils.
+edge_case_seed: "setup:N" for each setup command that plants the edge case,
+  counting from 1.
 """,
     "browser": """\
 seed.pages: 1 to 3 static HTML pages, each {path, html}, served at
@@ -83,7 +91,32 @@ check kinds:
     equals, contains, exists or absent
   url {op, value}   op is equals or contains, compared with the page path
     and query, like /thanks?order=7
+edge_case_seed: the path of each page that plants the edge case.
 """,
+}
+
+
+_EDGE_CASES = {
+    "boundary_conditions": (
+        "the seed holds a boundary value the task must handle correctly: an empty "
+        "file or list, a zero or maximum value, or a value exactly at a limit the "
+        "objective names."
+    ),
+    "missing_deps": (
+        "something the main work depends on is missing at the start (a directory, "
+        "a config file, a referenced record), so the agent has to notice it and "
+        "create it first."
+    ),
+    "conflicting_state": (
+        "the seed leaves the work partly done or in the way: a file or record "
+        "already exists, a stale value contradicts the request, or an earlier "
+        "attempt stopped halfway. The agent has to detect it and resolve it."
+    ),
+    "recovery": (
+        "the seed sets a trap, so the most obvious approach fails in a visible way "
+        "and the agent has to read the failure and take another path. Every golden "
+        "step must still succeed, so the golden solution takes the working path."
+    ),
 }
 
 
@@ -106,6 +139,18 @@ def _span(difficulty: int) -> str:
     low, high = DIFFICULTY_STEP_BOUNDS[difficulty]
     span = f"{low} or more" if high is None else f"{low} to {high}"
     return f"{span} (aim for about {_STEP_TARGETS[difficulty]})"
+
+
+def _edge_label(slot: Slot) -> str:
+    return f" | edge case {slot.edge_case}" if slot.edge_case else ""
+
+
+def _edge_case_lines(slots: Sequence[Slot]) -> list[str]:
+    """Describe each edge case the slots name, once."""
+    named = sorted({slot.edge_case for slot in slots if slot.edge_case})
+    if not named:
+        return []
+    return ["", "Edge cases to plant:", *[f"  {name}: {_EDGE_CASES[name]}" for name in named]]
 
 
 class TaskWriter:
@@ -153,10 +198,11 @@ class TaskWriter:
             for slot, draft, problem in chunk:
                 lines += [
                     f"SLOT {slot.index} | category {slot.category} | difficulty {slot.difficulty} | "
-                    f"golden solution of {_span(slot.difficulty)} steps",
+                    f"golden solution of {_span(slot.difficulty)} steps{_edge_label(slot)}",
                     f"  Problem: {problem}",
                     f"  Draft: {draft.model_dump_json(exclude={'slot'})}",
                 ]
+            lines += _edge_case_lines([slot for slot, _draft, _problem in chunk])
             batch: TaskDraftBatch = self._client.extract(system=system, user="\n".join(lines), schema=TaskDraftBatch)
             wanted = {slot.index for slot, _draft, _problem in chunk}
             for draft in batch.tasks:
@@ -186,9 +232,11 @@ class TaskWriter:
             lines.append(
                 f"SLOT {slot.index} | category {slot.category}: {description} | difficulty "
                 f"{slot.difficulty} | golden solution of {_span(slot.difficulty)} steps{long_horizon}"
+                f"{_edge_label(slot)}"
             )
             if slot.index in feedback:
                 lines.append(f"  A previous task for this slot was rejected: {feedback[slot.index]}")
+        lines += _edge_case_lines(chunk)
         if titles:
             lines += ["", "Titles already in this batch (write different tasks):", *[f"  - {t}" for t in titles]]
         return "\n".join(lines)

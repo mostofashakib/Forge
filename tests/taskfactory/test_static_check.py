@@ -201,3 +201,110 @@ def test_a_browser_action_missing_its_selector_is_rejected():
     draft = _browser_draft(golden=[GoldenStep(tool="click", args={})])
 
     assert any("selector" in p for p in static_problems(draft, _slot(1), BROWSER_PROFILE))
+
+
+def _edge_slot(edge_case: str | None) -> Slot:
+    return Slot(index=0, category="triage", difficulty=1, edge_case=edge_case)
+
+
+def _cli_draft(**overrides) -> TaskDraft:
+    fields = dict(
+        slot=0, title="Write the report", objective="Write the line count of /data/a.txt to /out/count.txt.",
+        seed=TaskSeed(setup=["mkdir -p /data", "printf 'a\\nb\\n' > /data/a.txt", "touch /out"]),
+        golden=[
+            GoldenStep(tool="shell", args={"command": "rm /out && mkdir /out"}),
+            GoldenStep(tool="shell", args={"command": "wc -l < /data/a.txt > /out/count.txt"}),
+        ],
+        checks=[Check(kind="shell", command="test \"$(cat /out/count.txt)\" = 2")],
+    )
+    fields.update(overrides)
+    return TaskDraft(**fields)
+
+
+def test_a_state_edge_case_naming_a_seed_record_has_no_problems():
+    draft = _state_draft(edge_case="conflicting_state", edge_case_seed=["emails:e010"])
+
+    assert static_problems(draft, _edge_slot("conflicting_state"), STATE_PROFILE) == []
+
+
+def test_a_cli_edge_case_naming_a_setup_command_has_no_problems():
+    draft = _cli_draft(edge_case="conflicting_state", edge_case_seed=["setup:3"])
+
+    assert static_problems(draft, _edge_slot("conflicting_state"), CLI_PROFILE) == []
+
+
+def test_a_browser_edge_case_naming_a_page_has_no_problems():
+    draft = _browser_draft(edge_case="boundary_conditions", edge_case_seed=["/form"])
+
+    assert static_problems(draft, _edge_slot("boundary_conditions"), BROWSER_PROFILE) == []
+
+
+def test_a_draft_that_drops_the_slots_edge_case_is_rejected():
+    problems = static_problems(_state_draft(), _edge_slot("recovery"), STATE_PROFILE)
+
+    assert any("recovery" in p for p in problems)
+
+
+def test_a_draft_with_a_different_edge_case_is_rejected():
+    draft = _state_draft(edge_case="boundary_conditions", edge_case_seed=["emails:e010"])
+
+    problems = static_problems(draft, _edge_slot("recovery"), STATE_PROFILE)
+    assert any("recovery" in p for p in problems)
+
+
+def test_an_edge_case_on_a_plain_slot_is_rejected():
+    draft = _state_draft(edge_case="recovery", edge_case_seed=["emails:e010"])
+
+    problems = static_problems(draft, _edge_slot(None), STATE_PROFILE)
+    assert any("no edge case" in p for p in problems)
+
+
+def test_an_edge_case_without_seed_references_is_rejected():
+    draft = _state_draft(edge_case="recovery", edge_case_seed=[])
+
+    problems = static_problems(draft, _edge_slot("recovery"), STATE_PROFILE)
+    assert any("edge_case_seed" in p for p in problems)
+
+
+def test_a_state_reference_to_a_record_the_seed_lacks_is_rejected():
+    draft = _state_draft(edge_case="recovery", edge_case_seed=["emails:e999"])
+
+    problems = static_problems(draft, _edge_slot("recovery"), STATE_PROFILE)
+    assert any("emails:e999" in p for p in problems)
+
+
+def test_a_state_reference_to_a_record_already_in_the_reset_state_is_rejected():
+    # e001 exists at reset, but the edge case must be planted by this task's seed.
+    draft = _state_draft(edge_case="recovery", edge_case_seed=["emails:e001"])
+
+    problems = static_problems(draft, _edge_slot("recovery"), STATE_PROFILE)
+    assert any("emails:e001" in p for p in problems)
+
+
+def test_a_cli_reference_past_the_last_setup_command_is_rejected():
+    draft = _cli_draft(edge_case="recovery", edge_case_seed=["setup:4"])
+
+    problems = static_problems(draft, _edge_slot("recovery"), CLI_PROFILE)
+    assert any("setup:4" in p for p in problems)
+
+
+def test_a_cli_reference_that_is_not_a_setup_index_is_rejected():
+    draft = _cli_draft(edge_case="recovery", edge_case_seed=["setup:0", "/data/a.txt"])
+
+    problems = static_problems(draft, _edge_slot("recovery"), CLI_PROFILE)
+    assert any("setup:0" in p for p in problems)
+    assert any("/data/a.txt" in p for p in problems)
+
+
+def test_a_browser_reference_to_a_missing_page_is_rejected():
+    draft = _browser_draft(edge_case="recovery", edge_case_seed=["/thanks"])
+
+    problems = static_problems(draft, _edge_slot("recovery"), BROWSER_PROFILE)
+    assert any("/thanks" in p for p in problems)
+
+
+def test_an_edge_case_the_family_does_not_offer_is_rejected():
+    draft = _browser_draft(edge_case="missing_deps", edge_case_seed=["/form"])
+
+    problems = static_problems(draft, _edge_slot("missing_deps"), BROWSER_PROFILE)
+    assert any("missing_deps" in p and "browser" in p for p in problems)

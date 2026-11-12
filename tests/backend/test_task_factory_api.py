@@ -330,3 +330,57 @@ def test_a_batch_export_without_a_working_gate_is_refused(client, monkeypatch):
 
     assert response.status_code == 503
     assert "FORGE_ADULT_THRESHOLD" in response.json()["detail"]
+
+
+def test_a_batch_records_its_requested_edge_cases(client, queued):
+    resp = client.post(
+        "/api/task-factory/batches",
+        json={"env_name": "mail", "count": 6, "k": 1, "edge_cases": ["recovery", "conflicting_state"]},
+    )
+
+    assert resp.status_code == 202
+    batch = client.get(f"/api/task-factory/batches/{resp.json()['batch_id']}").json()
+    assert batch["edge_cases"] == ["recovery", "conflicting_state"]
+
+
+def test_a_batch_without_edge_cases_records_none(client, queued):
+    resp = client.post("/api/task-factory/batches", json={"env_name": "mail", "count": 6, "k": 1})
+
+    batch = client.get(f"/api/task-factory/batches/{resp.json()['batch_id']}").json()
+    assert batch["edge_cases"] == []
+
+
+def test_an_unknown_edge_case_is_refused_by_name(client, queued):
+    resp = client.post(
+        "/api/task-factory/batches",
+        json={"env_name": "mail", "count": 6, "k": 1, "edge_cases": ["permission_errors"]},
+    )
+
+    assert resp.status_code == 422
+    assert "permission_errors" in resp.json()["detail"]
+    queued.delay.assert_not_called()
+
+
+def test_an_edge_case_the_environment_family_lacks_is_refused(client, queued):
+    with client.session_factory() as db:
+        db.add(SandboxEnvironment(
+            id="site", status="running", env_type="browser", container_id="c2",
+            expires_at=datetime.now(timezone.utc) + timedelta(days=30),
+        ))
+        db.commit()
+
+    resp = client.post(
+        "/api/task-factory/batches",
+        json={"env_name": "site", "count": 6, "k": 1, "edge_cases": ["missing_deps"]},
+    )
+
+    assert resp.status_code == 422
+    assert "missing_deps" in resp.json()["detail"] and "browser" in resp.json()["detail"]
+    queued.delay.assert_not_called()
+
+
+def test_environments_list_the_edge_cases_their_family_offers(client):
+    body = {e["name"]: e for e in client.get("/api/task-factory/environments").json()}
+
+    assert body["mail"]["edge_cases"] == ["boundary_conditions", "conflicting_state", "missing_deps", "recovery"]
+    assert body["web"]["edge_cases"] == ["boundary_conditions", "conflicting_state", "recovery"]

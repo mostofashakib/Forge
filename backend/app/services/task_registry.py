@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from backend.app.models import GeneratedTask, TaskBatch, TaskRejectionRecord
@@ -31,6 +31,7 @@ def create_batch(
     writer: ModelSpec,
     validator: ModelSpec,
     data_type: str = "rl_tasks",
+    edge_cases: list[str] | None = None,
 ) -> str:
     batch = TaskBatch(
         id=f"tb_{uuid.uuid4().hex[:12]}",
@@ -39,6 +40,7 @@ def create_batch(
         requested=requested,
         pass_k=pass_k,
         data_type=data_type,
+        edge_cases_json=json.dumps(edge_cases or []),
         writer_model=_label(writer),
         validator_model=_label(validator),
     )
@@ -47,14 +49,44 @@ def create_batch(
     return batch.id
 
 
+def edge_cases_of(batch: TaskBatch) -> list[str]:
+    return json.loads(batch.edge_cases_json or "[]")
+
+
 def mark_running(db: Session, batch_id: str, *, writer: ModelSpec, validator: ModelSpec) -> None:
     """Start the batch, recording the models that run it (settings may have changed since it was queued)."""
     batch = db.get(TaskBatch, batch_id)
     if batch is not None:
         batch.status = "running"
+        batch.started_at = datetime.now(timezone.utc)
         batch.writer_model = _label(writer)
         batch.validator_model = _label(validator)
         db.commit()
+
+
+def fail_abandoned_batches(db: Session, *, older_than: timedelta, now: datetime | None = None) -> list[str]:
+    """Fail running batches started longer ago than `older_than`, and return their ids.
+
+    Pass the worker's hard time limit: no live worker runs a batch past it,
+    so a batch still "running" after that lost its worker. A batch from
+    before `started_at` existed is judged by when it was created.
+    """
+    cutoff = (now or datetime.now(timezone.utc)) - older_than
+    abandoned = (
+        db.query(TaskBatch)
+        .filter(TaskBatch.status == "running")
+        .filter(or_(
+            TaskBatch.started_at < cutoff,
+            (TaskBatch.started_at.is_(None)) & (TaskBatch.created_at < cutoff),
+        ))
+        .all()
+    )
+    for batch in abandoned:
+        batch.status = "failed"
+        batch.error = f"the worker running this batch stopped: still running {older_than} after it started"
+        batch.completed_at = datetime.now(timezone.utc)
+    db.commit()
+    return [batch.id for batch in abandoned]
 
 
 def mark_failed(db: Session, batch_id: str, error: str) -> None:
@@ -112,6 +144,7 @@ def _summary(batch: TaskBatch) -> dict:
         "version": batch.version,
         "status": batch.status,
         "data_type": getattr(batch, "data_type", "rl_tasks"),
+        "edge_cases": edge_cases_of(batch),
         "requested": batch.requested,
         "delivered": batch.delivered,
         "shortfall": batch.requested - batch.delivered if batch.version is not None else None,
