@@ -266,7 +266,7 @@
   .hub-action-card[data-action="reward"]::before,
   .hub-action-card[data-action="evaluate"]::before { @apply bg-amber-500; }
   .hub-action-card[data-action="violations"]::before { @apply bg-red-500; }
-  .hub-action-card[data-action="synthetic"]::before,
+  .hub-action-card[data-action="tasks"]::before,
   .hub-action-card[data-action="export"]::before { @apply bg-emerald-500; }
 
   .environment-hero {

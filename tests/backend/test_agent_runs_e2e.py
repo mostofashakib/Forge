@@ -1138,3 +1138,35 @@ def test_trajectory_export_without_a_working_gate_is_refused(client, tmp_path, m
 
     assert response.status_code == 503
     assert "FORGE_ADULT_THRESHOLD" in response.json()["detail"]
+
+
+def test_a_leftover_synthetic_replay_file_never_replaces_the_requested_agent(client):
+    # A replay manifest from the removed Synthetic Data Engine used to take over
+    # every CLI run on its environment without telling anyone.
+    from contextlib import contextmanager
+    from backend.app.worker import tasks
+    from forge.settings import generated_envs_root
+
+    _add_running_cli_sandbox(client, "shell_env")
+    _add_run("run_replay", "shell_env", num_episodes=1)
+    env_dir = generated_envs_root() / "shell_env"
+    env_dir.mkdir(parents=True, exist_ok=True)
+    (env_dir / "synthetic_replay.json").write_text(json.dumps({"episodes": [["rm -rf /data"]]}))
+
+    @contextmanager
+    def fake_episode(*_a, **_k):
+        yield "fork-container"
+
+    runtime = MagicMock()
+    runtime.cli_episode.side_effect = fake_episode
+    runner_cls = MagicMock()
+    runner_cls.return_value.run_episode.return_value = MagicMock(steps=[], total_reward=0.0)
+    with patch("forge.envgen.container.ContainerRuntime", return_value=runtime), \
+         patch("redis.from_url"), \
+         patch("forge.envgen.cli_runner.CliEpisodeRunner", runner_cls), \
+         patch("forge.envgen.agents.cli_agent.make_cli_agent") as make_agent, \
+         patch("forge.envgen.tiered_reward.TieredRewardEngine"):
+        tasks.run_container_episode_task("run_replay", 0, 0)
+
+    agent = runner_cls.return_value.run_episode.call_args.args[0]
+    assert agent is make_agent.return_value

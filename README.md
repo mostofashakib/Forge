@@ -18,7 +18,7 @@ Forge generates training data for autonomous agents and reasoning models. It bui
 | Stage | What you get | Where |
 |---|---|---|
 | **Environment generation** | Docker sandboxes for apps, shells, and browsers, with state snapshots and a Gymnasium API | [Environment Types](#environment-types), [Custom Generation Pipeline](#custom-generation-pipeline) |
-| **Synthetic task synthesis** | Task batches with solutions tested over fresh runs, reviewed by a separate model; exported as RL tasks, SFT data, or preference pairs | [Task Factory](#task-factory), [Synthetic Data Engine](#synthetic-data-engine) |
+| **Synthetic task synthesis** | Task batches with solutions tested over fresh runs, reviewed by a separate model; exported as RL tasks, SFT data, or preference pairs | [Task Factory](#task-factory) |
 | **Dynamic personas** | Simulated colleagues and users with distinct traits, communication habits, and response times | [Personas](#personas) |
 | **Agent execution** | Agent rollouts through application APIs, logging steps, state hashes, and tool calls | [Agent Runs & Data Collection](#agent-runs--data-collection) |
 | **Grading & Verifiers** | Verifier scores with checks for reward hacking and grader independence | [Reward Engine](#reward-engine), [Verifiers](#verifiers) |
@@ -491,25 +491,18 @@ determinism probe with the scripted driver swapped in: the cast is still present
 and still acts on the same steps, so the probe proves what it exists to prove,
 that the environment's own machinery is reproducible.
 
-### Synthetic Data Engine
-
-Generate training data without running live agents:
-
-- **Goal suggestion**: LLM proposes research goals tailored to the env's policy and reward; de-duplicates against existing goals
-- **Difficulty scaling**: five tiers (Trivial → Expert) with concrete step-count ranges
-- **Edge case injection**: inject `boundary_conditions`, `permission_errors`, `missing_deps`, `conflicting_state`, or `recovery` scenarios into generated trajectories
-- **Replay manifest**: saved to `generated_envs/<env>/synthetic_replay.json`; active epochs replace live LLM inference in agent runs
-
 ### Task Factory
 
 Create versioned batches of realistic, executable tasks for any environment, apart from environment building. Open **Generator** (`/generator`, the synthetic data generator), pick an environment, choose how many tasks you want (1 to 20,000) and how many times each golden solution must pass (k, 1 to 10), and start a batch. Each batch runs four steps in a Celery job and streams progress to the page.
 
 1. **Taxonomy.** The writer model maps 4 to 12 categories of real work in this environment (up to 40 for large batches), across at least 3 difficulty levels. Code checks the spread (level coverage, duplicate names, overlapping descriptions, tools the environment lacks) and asks for one retry before failing the batch. Every batch builds a fresh taxonomy.
 2. **Writer.** Code turns the taxonomy into an exact slot plan, so 30 requested tasks means 30 slots spread evenly across levels and categories. Each round runs 10 slots at a time: write, check, run, review. Results land steadily, and the environment lock is held for one chunk's golden runs at a time. The writer fills five slots per call and sees the last 50 titles from the same categories, and a draft repeating an accepted title is rejected. Each task carries an objective, seed data, a golden solution, machine-checkable checks, and for difficulty 4 and 5, at least 3 reflection points where the agent has to stop and rethink.
+
+   **Edge cases.** A batch can ask for edge cases: boundary values, missing pieces, conflicting state, and recovery traps (browser environments skip missing pieces). Slots rotate through the requested edge cases and plain tasks, per category and level, so with two edge cases about a third of the slots get each. The writer plants the edge case in the task's seed and lists where in `edge_case_seed`: `collection:id` for seeded rows, `setup:N` for CLI setup commands, a page path for browser pages. Permission errors are not offered, because CLI tasks run as root.
 3. **Validation**, in three layers:
-   - A static check in code: the task fits its schema, names only real tools and state, and its golden solution fits the difficulty (1: 1 to 5 steps, 2: 5 to 12, 3: 12 to 30, 4 and 5: 30 or more).
+   - A static check in code: the task fits its schema, names only real tools and state, and its golden solution fits the difficulty (1: 1 to 5 steps, 2: 5 to 12, 3: 12 to 30, 4 and 5: 30 or more). An edge-case task must name its slot's edge case, and every `edge_case_seed` entry must point at an element of its own seed.
    - Golden pass^k: the golden solution runs k times, each from a fresh seeded start. Before it runs, at least one outcome check must fail, so no task starts solved. After it runs, every check must pass, and every run must end in the same final state.
-   - LLM review by a model from a different family than the writer, judging each task realistic, fair, and sensible. The job refuses to start, before any LLM call, if the two models share a family or a provider's Python package is missing (`openai` and `google-genai` are not installed by default).
+   - LLM review by a model from a different family than the writer, judging each task realistic, fair, and sensible. For an edge-case task, the reviewer must also confirm that the seed sets up the condition and the golden solution handles it. A missing answer counts as a rejection. The job refuses to start, before any LLM call, if the two models share a family or a provider's Python package is missing (`openai` and `google-genai` are not installed by default).
 
    A draft whose only problem is its golden solution's length goes back to the writer in the same round, with the draft and a target length, to widen or narrow its scope without padding. Other rejected slots go back to the writer with the reason, for up to 3 rounds. A batch that still falls short is saved as `short` with every rejection reason, never padded.
 4. **Registry.** One transaction saves the batch as the next version for its environment, with its creation date, the models that ran it, the accepted tasks, every rejection, and its own copy of the taxonomy. A saved batch never changes. Deleting one keeps its version number retired.
@@ -768,7 +761,7 @@ forge/
 backend/
   app/
     api/               # FastAPI routers: sandbox, envs, personas, episodes, agent_runs,
-    │                  #   synthetic, evaluate, exports, audit, rollouts, detect, compile,
+    │                  #   evaluate, exports, audit, rollouts, detect, compile,
     │                  #   task_factory, settings
     services/
       task_registry.py # Versioned task batches; task_factory_targets.py opens runners
@@ -804,7 +797,6 @@ frontend/
         policy/        # Policy requirements editor
         reward/        # Reward requirements + scoring method selector
         evaluate/      # Policy and reward evaluation viewer
-        synthetic/     # Synthetic data: goal suggestion, difficulty, edge cases
         export/        # Dataset export
         violations/    # Per-environment policy audit log
         replay/        # Episode step-through viewer
