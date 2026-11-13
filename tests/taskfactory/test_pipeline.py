@@ -10,6 +10,7 @@ from contextlib import contextmanager
 
 import pytest
 
+from forge.extraction.llm_client import LLMRetriesExhausted
 from forge.taskfactory.pass_k import PassKResult
 from forge.taskfactory.pipeline import TaskFactoryPipeline
 from forge.taskfactory.profile import EnvironmentProfile, ToolInfo
@@ -457,3 +458,71 @@ def test_a_batch_inside_its_time_limit_is_never_stopped():
 def test_a_time_limit_that_is_not_positive_is_rejected():
     with pytest.raises(ValueError, match="time limit"):
         _timed_pipeline(_Writer(), _Clock(0), time_limit_s=0)
+
+
+# ---------------------------------------------------------------------------
+# One model call that keeps returning a bad answer costs its slots, not the
+# batch. A permanent failure (bad key) still stops the batch.
+# ---------------------------------------------------------------------------
+
+class _FlakyWriter(_Writer):
+    """Fails the listed write calls (1-based) as if every retry returned broken JSON."""
+
+    def __init__(self, failing_calls=(), fail_revise=False, error=None, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.failing_calls = set(failing_calls)
+        self.fail_revise = fail_revise
+        self.error = error or LLMRetriesExhausted("failed after 3 attempts: Expecting ':' delimiter")
+
+    def write(self, profile, taxonomy, slots, *, avoid_titles=(), feedback=None):
+        if len(self.calls) + 1 in self.failing_calls:
+            self.calls.append({"slots": [s.index for s in slots], "feedback": {}, "titles": []})
+            raise self.error
+        return super().write(profile, taxonomy, slots, avoid_titles=avoid_titles, feedback=feedback)
+
+    def revise(self, profile, taxonomy, items):
+        if self.fail_revise:
+            raise self.error
+        return super().revise(profile, taxonomy, items)
+
+
+def test_a_writer_call_that_keeps_failing_rejects_its_chunk_and_the_batch_goes_on():
+    writer = _FlakyWriter(failing_calls={1})
+
+    result = _pipeline(writer=writer).run(count=15, k=1)
+
+    writer_rejections = [r for r in result.rejections if r.stage == "writer"]
+    assert sorted(r.slot for r in writer_rejections) == list(range(10))
+    assert all("Expecting ':' delimiter" in r.reason for r in writer_rejections)
+    assert result.status == "complete"  # round 2 rewrote the lost chunk
+
+
+def test_a_revision_that_keeps_failing_rejects_the_off_length_drafts():
+    writer = _FlakyWriter(script={1: {0: _short(0, 6)}}, fail_revise=True)
+    result = _pipeline(writer=writer).run(count=1, k=1)
+
+    static = [r for r in result.rejections if r.stage == "static"]
+    assert static and "Expecting ':' delimiter" in static[0].reason
+
+
+def test_a_review_that_keeps_failing_rejects_the_reviewed_tasks():
+    class _BrokenReviewer(_Reviewer):
+        def review(self, profile, tasks):
+            if not self.seen:
+                self.seen.append([slot.index for slot, _ in tasks])
+                raise LLMRetriesExhausted("failed after 3 attempts: truncated")
+            return super().review(profile, tasks)
+
+    result = _pipeline(reviewer=_BrokenReviewer()).run(count=3, k=1)
+
+    review = [r for r in result.rejections if r.stage == "review"]
+    assert sorted(r.slot for r in review) == [0, 1, 2]
+    assert all("truncated" in r.reason for r in review)
+    assert result.status == "complete"
+
+
+def test_a_permanent_writer_failure_still_stops_the_batch():
+    writer = _FlakyWriter(failing_calls={1}, error=RuntimeError("non-retryable error: HTTP 401"))
+
+    with pytest.raises(RuntimeError, match="401"):
+        _pipeline(writer=writer).run(count=3, k=1)

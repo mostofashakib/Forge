@@ -7,6 +7,13 @@ from pydantic import BaseModel
 from forge.credentials import ANTHROPIC_API_KEY, GEMINI_API_KEY, OPENAI_API_KEY, require_credential
 
 
+class LLMRetriesExhausted(RuntimeError):
+    """Every attempt failed with an error a retry could have fixed, such as broken JSON or a timeout.
+
+    A permanent failure (a bad key, a bad request) raises a plain RuntimeError instead.
+    """
+
+
 @runtime_checkable
 class LLMClient(Protocol):
     def extract(self, system: str, user: str, schema: type[BaseModel]) -> BaseModel: ...
@@ -148,7 +155,7 @@ class AnthropicClient:
                 last_error = e
                 attempts_remaining -= 1
                 if attempts_remaining == 0:
-                    raise RuntimeError(
+                    raise LLMRetriesExhausted(
                         f"LLM extraction failed after {self._max_retries} attempts: {e}"
                     ) from e
         raise RuntimeError("unreachable")
@@ -247,7 +254,7 @@ class OllamaClient:
                     ) from e
                 last_error = e
 
-        raise RuntimeError(
+        raise LLMRetriesExhausted(
             f"Ollama extraction failed after {self._max_retries} attempts "
             f"(model={self._model}): {last_error}"
         ) from last_error
@@ -311,7 +318,7 @@ class OpenAIClient:
                     ) from e
                 last_error = e
 
-        raise RuntimeError(
+        raise LLMRetriesExhausted(
             f"OpenAI extraction failed after {self._max_retries} attempts "
             f"(model={self._model}): {last_error}"
         ) from last_error
@@ -368,7 +375,7 @@ class GeminiClient:
                     ) from e
                 last_error = e
 
-        raise RuntimeError(
+        raise LLMRetriesExhausted(
             f"Gemini extraction failed after {self._max_retries} attempts "
             f"(model={self._model}): {last_error}"
         ) from last_error

@@ -392,3 +392,54 @@ def test_flat_schema_keeps_a_field_named_title():
     assert set(source["required"]) <= set(source["properties"])
     assert source["properties"]["title"] == {"type": "string"}
     assert "title" not in schema
+
+
+# ---------------------------------------------------------------------------
+# Retries running out is its own error, so callers can treat one bad answer
+# as a lost item while a permanent failure (bad key) still stops them.
+# ---------------------------------------------------------------------------
+
+def test_anthropic_retries_running_out_raises_llm_retries_exhausted():
+    from pydantic import BaseModel
+
+    from forge.extraction.llm_client import LLMRetriesExhausted
+
+    class _Out(BaseModel):
+        value: str
+
+    client, _messages = _anthropic_failing_with(ValueError("bad tool input"))
+    with pytest.raises(LLMRetriesExhausted, match="after 3 attempts"):
+        client.extract(system="s", user="u", schema=_Out)
+
+
+def test_a_permanent_failure_is_not_reported_as_retries_running_out():
+    from pydantic import BaseModel
+
+    from forge.extraction.llm_client import LLMRetriesExhausted
+
+    class _Out(BaseModel):
+        value: str
+
+    client, _messages = _anthropic_failing_with(_StatusError(401))
+    with pytest.raises(RuntimeError) as raised:
+        client.extract(system="s", user="u", schema=_Out)
+    assert not isinstance(raised.value, LLMRetriesExhausted)
+
+
+def test_ollama_returning_broken_json_every_time_raises_llm_retries_exhausted(monkeypatch):
+    import sys
+    import types
+
+    from forge.extraction.llm_client import LLMRetriesExhausted, OllamaClient
+
+    class _Client:
+        def __init__(self, host, **kwargs):
+            pass
+
+        def chat(self, **kwargs):
+            return types.SimpleNamespace(message=types.SimpleNamespace(content='{"value" "ok"}'))
+
+    monkeypatch.setitem(sys.modules, "ollama", types.SimpleNamespace(Client=_Client))
+
+    with pytest.raises(LLMRetriesExhausted, match="Expecting ':' delimiter"):
+        OllamaClient(model="qwen3.8:27b", max_retries=2).extract("system", "user", _SimpleSchema)
