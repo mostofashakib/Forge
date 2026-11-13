@@ -81,64 +81,65 @@ jobs:
           cache-from: type=gha,scope=frontend
           cache-to: type=gha,mode=max,scope=frontend
 
-  deploy:
-    needs: images
-    runs-on: ubuntu-24.04
-    env:
-      SHA: ${{ github.sha }}
-      VM: ${{ vars.FORGE_VM_USER || 'ubuntu' }}@forge
-      BASE: https://${{ vars.FORGE_PUBLIC_HOST }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: tailscale/github-action@v3
-        with:
-          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
-          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
-          tags: tag:ci
-
-      - name: Record the running release and back up the database
-        id: before
-        run: |
-          previous=$(ssh -o StrictHostKeyChecking=accept-new "$VM" \
-            "grep '^FORGE_IMAGE_TAG=' /opt/forge/deploy/.env.production | cut -d= -f2")
-          echo "previous=$previous" >> "$GITHUB_OUTPUT"
-          # Schema changes apply on startup, so keep a copy to roll back to.
-          ssh "$VM" "cd /opt/forge && docker compose -f deploy/docker-compose.yml --env-file deploy/.env.production \
-            exec -T api sqlite3 /data/forge.db \".backup /data/pre-deploy.db\""
-
-      - name: Deploy this commit
-        run: |
-          # The deploy files come from this commit. The VM's env file stays where it is.
-          scp -r deploy/docker-compose.yml deploy/Caddyfile deploy/litestream.yml deploy/backup.sh \
-            deploy/heartbeat.sh deploy/wiring-check.sh deploy/smoke.sh "$VM:/opt/forge/deploy/"
-          # $SHA expands here on the runner on purpose, before the command goes over SSH.
-          # shellcheck disable=SC2029
-          ssh "$VM" "cd /opt/forge && sed -i 's/^FORGE_IMAGE_TAG=.*/FORGE_IMAGE_TAG=$SHA/' deploy/.env.production \
-            && docker compose -f deploy/docker-compose.yml --env-file deploy/.env.production pull \
-            && docker compose -f deploy/docker-compose.yml --env-file deploy/.env.production up -d --wait --wait-timeout 300"
-
-      - name: Prove the system works
-        id: verify
-        run: |
-          ssh "$VM" "/opt/forge/deploy/wiring-check.sh /opt/forge/deploy/.env.production"
-          deploy/smoke.sh "$BASE"
-
-      - name: Roll back
-        if: failure() && steps.before.outputs.previous != ''
-        env:
-          PREVIOUS: ${{ steps.before.outputs.previous }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          # $PREVIOUS, $SHA, and $RUN_URL expand here on the runner on purpose.
-          # shellcheck disable=SC2029
-          ssh "$VM" "cd /opt/forge && C='docker compose -f deploy/docker-compose.yml --env-file deploy/.env.production' \
-            && sed -i 's/^FORGE_IMAGE_TAG=.*/FORGE_IMAGE_TAG=$PREVIOUS/' deploy/.env.production \
-            && \$C stop api worker litestream \
-            && \$C run --rm --no-deps -T --entrypoint sh api -c 'cp /data/pre-deploy.db /data/forge.db && rm -f /data/forge.db-wal /data/forge.db-shm && rm -rf /data/.forge.db-litestream' \
-            && \$C up -d --wait --wait-timeout 300"
-          # shellcheck disable=SC2029
-          ssh "$VM" "url=\$(grep '^FORGE_HC_HEALTH_URL=' /opt/forge/deploy/.env.production | cut -d= -f2) \
-            && curl -fsS -m 10 --data-raw 'deploy of $SHA failed, rolled back to $PREVIOUS: $RUN_URL' \"\$url/fail\""
-          ssh "$VM" "/opt/forge/deploy/wiring-check.sh /opt/forge/deploy/.env.production"
-          deploy/smoke.sh "$BASE"
-          exit 1
+  # VM deployment is paused. Uncomment this job to deploy to the VM again.
+  # deploy:
+  #   needs: images
+  #   runs-on: ubuntu-24.04
+  #   env:
+  #     SHA: ${{ github.sha }}
+  #     VM: ${{ vars.FORGE_VM_USER || 'ubuntu' }}@forge
+  #     BASE: https://${{ vars.FORGE_PUBLIC_HOST }}
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: tailscale/github-action@v3
+  #       with:
+  #         oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+  #         oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+  #         tags: tag:ci
+#
+  #     - name: Record the running release and back up the database
+  #       id: before
+  #       run: |
+  #         previous=$(ssh -o StrictHostKeyChecking=accept-new "$VM" \
+  #           "grep '^FORGE_IMAGE_TAG=' /opt/forge/deploy/.env.production | cut -d= -f2")
+  #         echo "previous=$previous" >> "$GITHUB_OUTPUT"
+  #         # Schema changes apply on startup, so keep a copy to roll back to.
+  #         ssh "$VM" "cd /opt/forge && docker compose -f deploy/docker-compose.yml --env-file deploy/.env.production \
+  #           exec -T api sqlite3 /data/forge.db \".backup /data/pre-deploy.db\""
+#
+  #     - name: Deploy this commit
+  #       run: |
+  #         # The deploy files come from this commit. The VM's env file stays where it is.
+  #         scp -r deploy/docker-compose.yml deploy/Caddyfile deploy/litestream.yml deploy/backup.sh \
+  #           deploy/heartbeat.sh deploy/wiring-check.sh deploy/smoke.sh "$VM:/opt/forge/deploy/"
+  #         # $SHA expands here on the runner on purpose, before the command goes over SSH.
+  #         # shellcheck disable=SC2029
+  #         ssh "$VM" "cd /opt/forge && sed -i 's/^FORGE_IMAGE_TAG=.*/FORGE_IMAGE_TAG=$SHA/' deploy/.env.production \
+  #           && docker compose -f deploy/docker-compose.yml --env-file deploy/.env.production pull \
+  #           && docker compose -f deploy/docker-compose.yml --env-file deploy/.env.production up -d --wait --wait-timeout 300"
+#
+  #     - name: Prove the system works
+  #       id: verify
+  #       run: |
+  #         ssh "$VM" "/opt/forge/deploy/wiring-check.sh /opt/forge/deploy/.env.production"
+  #         deploy/smoke.sh "$BASE"
+#
+  #     - name: Roll back
+  #       if: failure() && steps.before.outputs.previous != ''
+  #       env:
+  #         PREVIOUS: ${{ steps.before.outputs.previous }}
+  #         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+  #       run: |
+  #         # $PREVIOUS, $SHA, and $RUN_URL expand here on the runner on purpose.
+  #         # shellcheck disable=SC2029
+  #         ssh "$VM" "cd /opt/forge && C='docker compose -f deploy/docker-compose.yml --env-file deploy/.env.production' \
+  #           && sed -i 's/^FORGE_IMAGE_TAG=.*/FORGE_IMAGE_TAG=$PREVIOUS/' deploy/.env.production \
+  #           && \$C stop api worker litestream \
+  #           && \$C run --rm --no-deps -T --entrypoint sh api -c 'cp /data/pre-deploy.db /data/forge.db && rm -f /data/forge.db-wal /data/forge.db-shm && rm -rf /data/.forge.db-litestream' \
+  #           && \$C up -d --wait --wait-timeout 300"
+  #         # shellcheck disable=SC2029
+  #         ssh "$VM" "url=\$(grep '^FORGE_HC_HEALTH_URL=' /opt/forge/deploy/.env.production | cut -d= -f2) \
+  #           && curl -fsS -m 10 --data-raw 'deploy of $SHA failed, rolled back to $PREVIOUS: $RUN_URL' \"\$url/fail\""
+  #         ssh "$VM" "/opt/forge/deploy/wiring-check.sh /opt/forge/deploy/.env.production"
+  #         deploy/smoke.sh "$BASE"
+  #         exit 1
