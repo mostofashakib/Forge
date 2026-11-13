@@ -17,8 +17,6 @@ from forge.taskfactory.profile import EnvironmentProfile, ToolInfo
 from forge.taskfactory.schemas import (
     Check,
     GoldenStep,
-    ReviewVerdict,
-    ReviewVerdictBatch,
     TaskDraft,
     TaskDraftBatch,
     Taxonomy,
@@ -84,11 +82,12 @@ class _Client:
                 for s in slots
             ])
         tasks = [int(line.split()[2]) for line in user.splitlines() if line.startswith("TASK slot ")]
-        return ReviewVerdictBatch(verdicts=[
-            ReviewVerdict(slot=s, realistic=True, realistic_reason="r", fair=True, fair_reason="f",
-                          sensible=True, sensible_reason="s")
+        return schema.model_validate({"verdicts": [
+            {"slot": s, "realistic": True, "realistic_reason": "r", "fair": True, "fair_reason": "f",
+             "sensible": True, "sensible_reason": "s", "edge_case_ok": True, "edge_case_reason": "planted",
+             "check_traces": [{"check": 0, "requires": "e1 archived", "asked_by": "archive"}]}
             for s in tasks
-        ])
+        ]})
 
 
 def _level(slot: int) -> int:
