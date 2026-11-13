@@ -87,7 +87,7 @@ def get_run(db: Session, run_id: str) -> dict | None:
     results = [_task_result(tasks[task_id], attempts) for task_id, attempts in by_task.items() if task_id in tasks]
     rates = [
         TaskRate(task_id=r["task_id"], category=r["category"], difficulty=r["difficulty"],
-                 passed=r["passed"], attempts=r["attempts"])
+                 passed=r["passed"], attempts=r["attempts"], suspect=_suspect(r["failure_summary"]))
         for r in results
     ]
     return {**_run_summary(run), "tasks": results, "summary": calibration_summary(rates)}
@@ -112,15 +112,20 @@ def _rows(db: Session, run_id: str) -> list[CalibrationAttempt]:
     )
 
 
+def _suspect(failure_summary: dict | None) -> bool:
+    return bool(failure_summary and failure_summary["suspect_checks"])
+
+
 def _task_result(task: SyntheticTask, rows: list[CalibrationAttempt]) -> dict:
     passed = sum(row.passed for row in rows)
+    failure_summary = summarize_failures([json.loads(row.labels_json) for row in rows])
     rate = TaskRate(task_id=task.id, category=task.category, difficulty=task.difficulty,
-                    passed=passed, attempts=len(rows))
+                    passed=passed, attempts=len(rows), suspect=_suspect(failure_summary))
     return {
         "task_id": task.id, "title": task.title, "category": task.category, "difficulty": task.difficulty,
         "edge_case": task.edge_case, "passed": passed, "attempts": len(rows),
         "solve_rate": rate.solve_rate, "band": rate.band,
-        "failure_summary": summarize_failures([json.loads(row.labels_json) for row in rows]),
+        "failure_summary": failure_summary,
     }
 
 

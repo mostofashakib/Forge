@@ -1,7 +1,9 @@
 """How often a target model solves each task, and what that says about the batch.
 
 A task the model solved on every attempt is too easy, one it never solved
-is unsolved, and the rest are the frontier.
+is unsolved, and the rest are the frontier. A task it never solved, where
+every attempt finished and missed the same checks, is suspect: those checks
+may test something the objective never asks for.
 """
 from __future__ import annotations
 
@@ -9,8 +11,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal
 
-Band = Literal["too_easy", "frontier", "unsolved"]
-BANDS: tuple[Band, ...] = ("too_easy", "frontier", "unsolved")
+Band = Literal["too_easy", "frontier", "unsolved", "suspect"]
+BANDS: tuple[Band, ...] = ("too_easy", "frontier", "unsolved", "suspect")
 # At most five attempts per task.
 MIN_ATTEMPTS, MAX_ATTEMPTS = 1, 5
 
@@ -22,6 +24,11 @@ class TaskRate:
     difficulty: int
     passed: int
     attempts: int
+    suspect: bool = False
+
+    def __post_init__(self) -> None:
+        if self.suspect and self.passed:
+            raise ValueError(f"{self.task_id} passed {self.passed} attempts, so its checks are not suspect")
 
     @property
     def solve_rate(self) -> float:
@@ -29,7 +36,7 @@ class TaskRate:
 
     @property
     def band(self) -> Band:
-        return band(self.passed, self.attempts)
+        return "suspect" if self.suspect else band(self.passed, self.attempts)
 
 
 def attempt_count_problem(attempts: int) -> str | None:

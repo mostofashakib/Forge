@@ -3,12 +3,16 @@
 export const MAX_ATTEMPTS = 5;
 const PROVIDERS = ["ollama", "vllm", "openai", "anthropic"];
 
-export type Band = "too_easy" | "frontier" | "unsolved";
+export type Band = "too_easy" | "frontier" | "unsolved" | "suspect";
 
 export const BAND_LABELS: Record<Band, { label: string; desc: string }> = {
   too_easy: { label: "Too easy", desc: "Solved on every attempt" },
   frontier: { label: "Frontier", desc: "Solved sometimes" },
   unsolved: { label: "Unsolved", desc: "Never solved" },
+  suspect: {
+    label: "Suspect",
+    desc: "Never solved, and every attempt finished missing the same checks. They may test what the objective never asks for",
+  },
 };
 
 export type CalibrationRun = {
@@ -27,6 +31,9 @@ export type FailureSummary = {
   failed: number;
   terminations: Record<string, number>;
   failed_checks: Record<string, number>;
+  // Checks every attempt missed after submitting, when none passed. They may
+  // test something the objective never asks for.
+  suspect_checks: string[];
   text: string;
 };
 

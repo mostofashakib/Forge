@@ -91,16 +91,37 @@ def summarize_failures(labels: Sequence[dict]) -> dict | None:
     })
     cause, count = causes.most_common(1)[0]
     endings = ", ".join(f"{name} {n}" for name, n in terminations.most_common())
+    suspect = _suspect_checks(labels)
+    text = (
+        f"{len(failed)} of {len(labels)} attempts failed. "
+        f"Most common cause: {cause} ({count}). Ended by: {endings}."
+    )
+    if suspect:
+        text += (
+            f" Every attempt finished and missed only: {', '.join(suspect)}. "
+            "Check that the objective asks for it."
+        )
     return {
         "attempts": len(labels),
         "failed": len(failed),
         "terminations": dict(terminations),
         "failed_checks": dict(failed_checks),
-        "text": (
-            f"{len(failed)} of {len(labels)} attempts failed. "
-            f"Most common cause: {cause} ({count}). Ended by: {endings}."
-        ),
+        "suspect_checks": suspect,
+        "text": text,
     }
+
+
+def _suspect_checks(labels: Sequence[dict]) -> list[str]:
+    """Checks every attempt missed after submitting, when no attempt passed.
+
+    A model that believes it is done every time, and misses the same checks
+    every time, is the mark of a check the objective never asks for. Hard
+    tasks fail in different ways from attempt to attempt.
+    """
+    if len(labels) < 2 or any(label["passed"] or label["termination"] != "submitted" for label in labels):
+        return []
+    missed = {frozenset(label["failed_checks"]) for label in labels}
+    return sorted(missed.pop()) if len(missed) == 1 else []
 
 
 _ENDINGS = {

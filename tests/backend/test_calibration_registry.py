@@ -113,8 +113,21 @@ def test_the_detail_rebuilds_rates_bands_and_failure_summaries_from_the_rows(db)
     assert by_id["t-00002"]["band"] == "frontier"
     assert by_id["t-00003"]["band"] == "unsolved"
     assert "2 of 2 attempts failed" in by_id["t-00003"]["failure_summary"]["text"]
-    assert detail["summary"]["bands"] == {"too_easy": 1, "frontier": 1, "unsolved": 1}
-    assert detail["summary"]["by_difficulty"]["2"] == {"too_easy": 0, "frontier": 1, "unsolved": 1}
+    assert detail["summary"]["bands"] == {"too_easy": 1, "frontier": 1, "unsolved": 1, "suspect": 0}
+    assert detail["summary"]["by_difficulty"]["2"] == {"too_easy": 0, "frontier": 1, "unsolved": 1, "suspect": 0}
+
+
+def test_a_task_every_attempt_finished_while_missing_the_same_check_is_suspect(db):
+    task = _task(1)
+    run_id = calibration_registry.create_run(db, batch_id=_saved_batch(db, [task]), target_model="ollama:m", attempts=3)
+    calibration_registry.record_attempts(db, run_id, task, [_attempt(False)] * 3)
+
+    detail = calibration_registry.get_run(db, run_id)
+
+    assert detail["tasks"][0]["band"] == "suspect"
+    assert detail["tasks"][0]["failure_summary"]["suspect_checks"] == ["x is 1"]
+    assert detail["summary"]["bands"]["suspect"] == 1
+    assert detail["summary"]["bands"]["unsolved"] == 0
 
 
 def test_a_tasks_attempts_come_back_in_order_with_their_steps(db):

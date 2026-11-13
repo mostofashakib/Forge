@@ -275,3 +275,47 @@ def test_a_long_check_command_is_cut_in_its_name():
 
     assert len(name) < 140
     assert name.endswith("…")
+
+
+# ---------------------------------------------------------------------------
+# A task no attempt solved, where every attempt submitted and missed the same
+# checks, points at a check the objective may never ask for.
+# ---------------------------------------------------------------------------
+
+def _label(failed_checks: list[str], termination: str = "submitted", passed: bool = False) -> dict:
+    return {
+        "passed": passed, "termination": termination, "failed_checks": failed_checks,
+        "step_errors": 0, "off_golden_tools": [],
+    }
+
+
+def test_every_attempt_missing_the_same_check_flags_it_as_suspect():
+    summary = summarize_failures([_label(["pid file removed"])] * 3)
+
+    assert summary["suspect_checks"] == ["pid file removed"]
+    assert "pid file removed" in summary["text"]
+    assert "objective" in summary["text"]
+
+
+def test_attempts_that_miss_different_checks_flag_nothing():
+    summary = summarize_failures([_label(["manifest lists archives"]), _label(["manifest lists archives", "no stale line"])])
+
+    assert summary["suspect_checks"] == []
+
+
+def test_a_task_some_attempt_solved_flags_nothing():
+    summary = summarize_failures([_label(["manifest lists archives"])] * 2 + [_label([], passed=True)])
+
+    assert summary["suspect_checks"] == []
+
+
+def test_attempts_that_ran_out_of_steps_flag_nothing():
+    summary = summarize_failures([_label(["codes written"], termination="budget")] * 3)
+
+    assert summary["suspect_checks"] == []
+
+
+def test_a_single_attempt_flags_nothing():
+    summary = summarize_failures([_label(["pid file removed"])])
+
+    assert summary["suspect_checks"] == []

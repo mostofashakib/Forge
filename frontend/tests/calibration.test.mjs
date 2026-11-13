@@ -45,5 +45,5 @@ test("only queued and running runs are polled", () => {
 });
 
 test("every band has a label", () => {
-  assert.deepEqual(Object.keys(BAND_LABELS).sort(), ["frontier", "too_easy", "unsolved"]);
+  assert.deepEqual(Object.keys(BAND_LABELS).sort(), ["frontier", "suspect", "too_easy", "unsolved"]);
 });

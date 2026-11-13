@@ -15,7 +15,7 @@ import {
 import { apiJson, formatDate } from "@/lib/taskFactory";
 
 const POLL_MS = 5000;
-const BANDS: Band[] = ["too_easy", "frontier", "unsolved"];
+const BANDS: Band[] = ["too_easy", "frontier", "unsolved", "suspect"];
 
 function Attempts({ base, task }: { base: string; task: TaskResult }) {
   const [attempts, setAttempts] = useState<AttemptView[] | null>(null);
