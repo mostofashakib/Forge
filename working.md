@@ -503,6 +503,24 @@ Merged into `main` as `e937f78`. `uv run pytest -q` on main after the merge: 283
 
 ### M2
 
+Branch `factory/m2-calibration`, cut from `main` at `8c20f9e` after M1 was pushed. Commits: `cb186c4` (D1 to D3), `1785333` (agents and runners), `9990fc9` (policy and attempts), `cdca8ed` (bands and summaries), `e89a8d9` (storage, job, API), `1dfe76b` (frontend panel).
+
+Built:
+- Calibration drives the existing agents through `AgentPolicy`. `ollama:<model>` is an `OpenAIAgent` on Ollama's `/v1` endpoint. A direct probe got a native `shell` tool call from `qwen3.8:27b` in 15.8 seconds.
+- The Anthropic and OpenAI agents no longer invent an action when the model answers with text. They log the call and raise. Agent runs end `failed` with that error, and persona turns are skipped with it.
+- In-process and browser steps now return what the environment showed. Before, a model attempting those tasks acted blind.
+- `step_budget()` is shared, and the in-process runner has room for a whole attempt.
+- Calibration runs get the same breakers as batches: a 24-hour limit checked between tasks, Celery soft and hard limits, and the reaper.
+
+Changes from the plan:
+- A failed step does not end an attempt. The model sees the error and goes on, the way an agent explores a shell. Only a move the environment cannot run (no tool call, an unknown tool, bad JSON) ends it, as `policy_error`, which never passes. A provider outage is not graded as the model's failure. It fails the run.
+- Each task's attempts run under the environment lock one task at a time, not in chunks of 10, so agent runs wait at most one task.
+- Pre-state check results are not recorded. pass^k already proves an outcome check fails before the golden solution.
+- `LossAnalyzer` does not fit. It reads an `AgentRunLogger` trace and a tiered `VerificationResult`, and an attempt has turns and per-check outcomes. Attempts get code labels instead: termination, failed checks, step errors, and tools off the golden path.
+- Failure summaries (D3) are built from those stored labels, by code. No LLM writes them.
+
+Checks on the branch: `uv run pytest -q` 2931 passed, 2 skipped. Frontend tests 23 passed, build compiled, ESLint 0 errors.
+
 ### M3
 
 ### M4
