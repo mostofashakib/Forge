@@ -7,11 +7,13 @@ provider code as agent runs and the trajectories match how agents call tools.
 """
 from __future__ import annotations
 
-from collections.abc import Sequence
+import os
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
 from forge.contracts import AgentAdapter, Task, ToolParam, ToolSpec
+from forge.credentials import ANTHROPIC_API_KEY, OPENAI_API_KEY, is_configured
 from forge.runtime.agents.factory import make_agent
 from forge.runtime.prompting import ForgeAgentPromptTemplate
 from forge.taskfactory.profile import EnvironmentProfile
@@ -108,6 +110,21 @@ class AgentPolicy:
         if name not in self._names:
             raise PolicyError(f"the model called {name!r}, which this environment does not have")
         return GoldenStep(tool=name, args=action)
+
+
+# Providers a calibration target can use, and the key each one needs.
+_TARGET_KEYS = {"ollama": None, "vllm": None, "openai": OPENAI_API_KEY, "anthropic": ANTHROPIC_API_KEY}
+
+
+def target_problem(agent_id: str, env: Mapping[str, str] | None = None) -> str | None:
+    """Why a run cannot reach this target model, or None when it can."""
+    provider, _, model = agent_id.partition(":")
+    if provider not in _TARGET_KEYS or not model:
+        return f"target model must be <provider>:<model> with provider one of {sorted(_TARGET_KEYS)}, got {agent_id!r}"
+    key = _TARGET_KEYS[provider]
+    if key is not None and not is_configured(key, os.environ if env is None else env):
+        return f"{' or '.join(key.env_vars)} is not configured. Set it in backend/.env to calibrate against {agent_id}."
+    return None
 
 
 def agent_policy(agent_id: str, task: SyntheticTask, profile: EnvironmentProfile) -> AgentPolicy:

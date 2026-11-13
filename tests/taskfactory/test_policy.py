@@ -13,6 +13,7 @@ from forge.taskfactory.policy import (
     Turn,
     action_tools,
     agent_policy,
+    target_problem,
 )
 from forge.taskfactory.profile import EnvironmentProfile, ToolInfo
 from forge.taskfactory.runner import StepResult
@@ -153,3 +154,29 @@ def test_the_agent_is_built_for_the_task_with_its_objective_and_native_tool_sche
     assert {spec.name for spec in built["tool_specs"]} == _names(STATE)
     tools = {t["name"]: t for t in built["prompt_template"].tool_descriptions(built["tool_specs"])}
     assert tools["/archive_email"]["input_schema"]["properties"]["email_id"]["type"] == "string"
+
+
+# ---------------------------------------------------------------------------
+# A target model the run cannot reach is refused before anything starts.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("agent_id", ["ollama:qwen3.8:27b", "vllm:my-model"])
+def test_local_targets_need_no_key(agent_id):
+    assert target_problem(agent_id, env={}) is None
+
+
+def test_a_hosted_target_with_its_key_is_accepted():
+    assert target_problem("openai:gpt-5", env={"OPENAI_API_KEY": "configured"}) is None
+
+
+@pytest.mark.parametrize("agent_id, missing", [
+    ("openai:gpt-5", "OPENAI_API_KEY"),
+    ("anthropic:claude-sonnet-5", "ANTHROPIC_API_KEY"),
+])
+def test_a_hosted_target_without_its_key_names_the_missing_setting(agent_id, missing):
+    assert missing in target_problem(agent_id, env={})
+
+
+@pytest.mark.parametrize("agent_id", ["gemini:x", "random", "scripted:/tmp/x.yaml", "ollama:", "qwen3.8:27b"])
+def test_an_unusable_target_is_refused(agent_id):
+    assert target_problem(agent_id, env={})

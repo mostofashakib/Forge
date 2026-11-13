@@ -18,7 +18,7 @@ celery = Celery(
     "forge",
     broker=os.environ.get("CELERY_BROKER_URL", default_redis_url),
     backend=os.environ.get("CELERY_RESULT_BACKEND", default_redis_url),
-    include=["backend.app.worker.tasks", "backend.app.worker.task_factory"],
+    include=["backend.app.worker.tasks", "backend.app.worker.task_factory", "backend.app.worker.calibration"],
 )
 
 celery.conf.update(
@@ -53,6 +53,10 @@ celery.conf.beat_schedule = {
         "task": "backend.app.worker.task_factory.reap_abandoned_batches_task",
         "schedule": crontab(minute="*/15"),
     },
+    "reap-abandoned-calibrations": {
+        "task": "backend.app.worker.calibration.reap_abandoned_calibrations_task",
+        "schedule": crontab(minute="*/15"),
+    },
 }
 
 
@@ -62,6 +66,14 @@ def _reap_abandoned_batches_on_boot(**_kwargs) -> None:
     from backend.app.worker.task_factory import reap_abandoned_batches_task
 
     reap_abandoned_batches_task.delay()
+
+
+@worker_ready.connect
+def _reap_abandoned_calibrations_on_boot(**_kwargs) -> None:
+    """Fail calibration runs a previous worker left running. Local runs have no beat."""
+    from backend.app.worker.calibration import reap_abandoned_calibrations_task
+
+    reap_abandoned_calibrations_task.delay()
 
 
 @worker_ready.connect
