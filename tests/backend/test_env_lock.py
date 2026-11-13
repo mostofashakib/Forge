@@ -68,3 +68,21 @@ def test_different_environments_use_different_locks():
 
     names = [c.args[0] for c in redis_client.lock.call_args_list]
     assert names == ["forge:env-lock:env_a", "forge:env-lock:env_b"]
+
+
+def test_a_real_redis_lock_can_be_renewed_from_the_renewal_thread(monkeypatch):
+    # redis-py keeps a lock's token in thread-local storage by default, so a
+    # renewal thread saw no token and crashed, and the lock lapsed mid-episode.
+    # The mocks above hid that. This uses redis-py's real Lock.
+    from redis.lock import Lock
+
+    redis_client = MagicMock()
+    redis_client.lock.side_effect = lambda name, **kwargs: Lock(redis_client, name, **kwargs)
+    crashes: list[BaseException] = []
+    monkeypatch.setattr(threading, "excepthook", lambda args: crashes.append(args.exc_value))
+
+    with exclusive_environment(redis_client, "gmail_env", ttl_s=0.3):
+        time.sleep(0.5)
+
+    assert crashes == []
+    assert redis_client.register_script.return_value.call_count >= 1
