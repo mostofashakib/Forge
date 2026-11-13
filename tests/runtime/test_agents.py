@@ -147,7 +147,8 @@ def test_openai_agent_uses_an_injected_prompt_template():
     assert request["tools"][0]["function"]["name"] == "close_ticket"
 
 
-def test_make_agent_anthropic():
+def test_make_agent_anthropic(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-configured")
     with patch("forge.runtime.agents.anthropic_agent.anthropic") as mock_anthropic:
         mock_anthropic.Anthropic.return_value = MagicMock()
         agent = make_agent("anthropic:claude-sonnet-4-6")
@@ -155,7 +156,8 @@ def test_make_agent_anthropic():
         assert isinstance(agent, AnthropicAgent)
 
 
-def test_make_agent_openai():
+def test_make_agent_openai(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-configured")
     with patch("forge.runtime.agents.openai_agent.openai") as mock_openai:
         mock_openai.OpenAI.return_value = MagicMock()
         agent = make_agent("openai:gpt-4o")
