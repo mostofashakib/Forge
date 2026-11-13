@@ -55,9 +55,15 @@ Answer these before M2 starts. Each one changes the code.
 - Option B: reuse the agents in `forge/runtime/agents/` (Anthropic, OpenAI, vLLM). They use native tool calling, which gives more realistic trajectories, but they speak the `ForgeEnv` interface, have no Ollama adapter, and don't fit CLI or browser sessions without new glue.
 - Trade-off: A is faster to build and runs locally. B gives trajectories closer to how production agents call tools. Starting with A keeps M2 small. The `Policy` protocol in M2 lets you add B later without touching calibration code.
 
+**Answer (2026-11-12): B, through the `Policy` protocol, with no duplicated tool-calling code.** Calibration drives the existing agents in `forge/runtime/agents/` through their `act(obs, action_types)` interface. Ollama gets an agent the same way vLLM has one: `OpenAIAgent` pointed at Ollama's OpenAI-compatible `/v1` endpoint, which supports native tool calls. Each family's tool surface becomes `ToolSpec`s, and `ForgeAgentPromptTemplate` turns them into native tool schemas. Both agents invent an action when the model answers with text and makes no tool call. That fallback goes, because calibration would grade a step the model never chose.
+
 **D2. The first target model.** Pick one local model you would train (for example a Qwen or Gemma size you plan to fine-tune in Autotune). Calibration results only mean something for the model they were measured on.
 
+**Answer (2026-11-12): configurable.** Each calibration run names its target as an agent id (`ollama:<model>`, `vllm:<model>`, `openai:<model>`, `anthropic:<model>`) and stores it on the run. Nothing is hard-coded.
+
 **D3. Attempts per task.** Start with 8. With 8 attempts, solve rate moves in steps of 12.5%, which is enough to sort tasks into too easy, frontier, and unsolved. Raise it only if M3 data shows too many tasks on the band edges.
+
+**Answer (2026-11-12): at most 5 attempts per task.** A request for more is refused. Solve rate moves in steps of 20%. After the attempts, every task with a failed attempt gets a summary of why it failed: termination reasons and failed checks, counted across its attempts. Code writes the summary from the recorded attempts. No LLM writes or grades it.
 
 **D4. The frontier band.** Start with "solved at least once and failed at least once" (0 < solve rate < 1). Tighten it after M2 shows the real distribution. Keep the bounds as named constants, not settings, until data justifies a knob.
 
@@ -168,9 +174,10 @@ Tests first:
 ### M2.1 The policy and the attempt loop
 
 Work:
-1. `forge/taskfactory/policy.py`: a `Policy` protocol with `next_step(objective, tools, history) -> GoldenStep | Submit`, and an `LLMPolicy` built per D1. The history is the list of past steps with their `StepResult.output`.
+1. `forge/taskfactory/policy.py`: a `Policy` protocol with `next_step(objective, tools, history) -> GoldenStep | Submit`, and an `AgentPolicy` that drives a `forge/runtime/agents` agent per D1. `action_tools(profile)` gives each family's tool surface: the profile's tools for state, `shell(command)` for CLI, and the browser actions for browser. The history is the list of past steps with their `StepResult.output`.
 2. `forge/taskfactory/attempt.py`: `run_attempt(runner, task, policy) -> Attempt`. It opens `runner.session(task)`, records the pre-state check results, calls `policy.next_step` until the policy submits, hits `task.step_budget`, or a step errors, then runs `session.evaluate(task.checks)`.
    - `Attempt` holds: the steps with outputs, each check's outcome, `passed` (every check passes), and the termination reason (`submitted`, `budget`, `step_error`, `policy_error`).
+   - `summarize_failures(attempts)`: per task, how many attempts failed, counts by termination reason and by failed check, and the most common cause in one line (D3).
 3. `runner.session()` takes a `TaskDraft` today. Widen the protocol to take the shared fields (seed, checks) so a stored `SyntheticTask` runs without being turned back into a draft.
 4. A failure label per attempt, in code: which checks failed, the termination reason, and whether the model touched a tool the golden solution never used. Check whether `LossAnalyzer` fits these inputs. If it does, call it. If its inputs don't match, record the simple labels now and note the gap in the log. Don't force-fit it.
 
@@ -179,7 +186,10 @@ Tests first (the two anchors matter most):
 - A policy that submits at once fails every attempt. pass^k guarantees at least one outcome check fails before the golden solution, so this must hold.
 - A policy that never submits stops at `step_budget` with termination `budget`.
 - A policy that raises ends the attempt with `policy_error`. It must never count as a pass.
-- `LLMPolicy` with the fake LLM from `tests/fake_llm.py` turns structured output into `GoldenStep`s and rejects a tool the environment lacks.
+- `AgentPolicy` with a fake agent turns tool calls into `GoldenStep`s, turns `submit` into `Submit`, and rejects a tool the environment lacks.
+- An agent whose model answers without a tool call raises. It never returns an invented action.
+- `make_agent("ollama:<model>")` builds an OpenAI-compatible agent on Ollama's `/v1` endpoint.
+- `summarize_failures` counts causes correctly, and a task whose attempts all passed has no summary.
 
 ### M2.2 Storage, job, and API
 
@@ -189,7 +199,7 @@ Work:
    - `calibration_attempts`: run_id, task_id, attempt_index, passed, termination, steps_json, checks_json, failure_labels_json.
    - `create_all` adds them. No column migration is needed.
 2. `backend/app/worker/calibration.py`: a Celery job that runs each task's attempts under the environment lock, in chunks like the factory's `PROCESS_CHUNK`, and reports progress over the existing progress channel.
-3. API under `/api/task-factory/batches/{batch_id}/calibrations`: `POST` (target model, attempts), `GET` list, `GET /{id}` with per-task solve rates and a summary (counts of too easy, frontier, unsolved, by category and by difficulty).
+3. API under `/api/task-factory/batches/{batch_id}/calibrations`: `POST` (target model, attempts from 1 to 5), `GET` list, `GET /{id}` with per-task solve rates and a summary (counts of too easy, frontier, unsolved, by category and by difficulty).
 4. The job refuses to start if the target model's provider isn't configured, and names the missing setting.
 5. `frontend/app/generator/[batchId]/page.tsx`: a calibration panel. Start a run, watch progress, see the solve-rate histogram and each task's rate. Open a task to see its attempts.
 
@@ -200,7 +210,7 @@ Tests first:
 - Two calibrations of the same batch with different models are stored separately, and the batch rows are unchanged.
 
 **Done when.**
-- One real batch (at least 50 tasks, one environment) is calibrated against the D2 model with 8 attempts each.
+- One real batch (at least 50 tasks, one environment) is calibrated against a configured target model with 5 attempts each.
 - The log records the solve-rate histogram, the band counts, and the share of tasks per difficulty level in each band.
 - A spot check of 5 passing and 5 failing attempts by a person agrees with the grade in every case.
 
