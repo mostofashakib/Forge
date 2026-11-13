@@ -5,6 +5,7 @@ from forge.contracts.prompting import PromptTemplate
 from forge.contracts.types import Observation, Task, ToolSpec
 from forge.credentials import OPENAI_API_KEY, require_credential
 from forge.runtime.agents.prompts import FORGE_AGENT_PROMPT
+from forge.runtime.errors import AgentError
 
 try:
     import openai
@@ -51,11 +52,10 @@ class OpenAIAgent:
             messages=messages,
         )
         choice = response.choices[0]
+        action = None
         if choice.message.tool_calls:
             tc = choice.message.tool_calls[0]
             action = {"type": tc.function.name, **json.loads(tc.function.arguments)}
-        else:
-            action = {"type": sorted(action_types)[0]}
         if self.logger is not None:
             self.logger.log_llm_call(
                 prompt={"messages": messages,
@@ -63,6 +63,8 @@ class OpenAIAgent:
                 tool_call=action,
                 response=_serialize_choice(choice),
             )
+        if action is None:
+            raise AgentError(f"{self._model} answered with no tool call: {str(choice.message.content)[:300]!r}")
         return action
 
     def _tools(self, action_types: frozenset[str]) -> list[dict]:

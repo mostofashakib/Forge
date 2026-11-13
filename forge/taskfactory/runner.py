@@ -13,7 +13,7 @@ from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from forge.taskfactory.schemas import Check, GoldenStep, TaskDraft
+from forge.taskfactory.schemas import Check, GoldenStep, TaskSeed
 from forge.taskfactory.state_checks import CheckOutcome
 
 
@@ -36,11 +36,24 @@ class TaskSession(Protocol):
     def fingerprint(self) -> str: ...
 
 
+class RunnableTask(Protocol):
+    """What a session needs from a task. A writer's draft and a stored task both have it."""
+
+    @property
+    def seed(self) -> TaskSeed: ...
+
+    @property
+    def golden(self) -> list[GoldenStep]: ...
+
+    @property
+    def checks(self) -> list[Check]: ...
+
+
 class TaskRunner(Protocol):
     def batch(self) -> AbstractContextManager[None]: ...
 
-    def session(self, draft: TaskDraft) -> AbstractContextManager[TaskSession]:
-        """A fresh environment with the draft's seed applied. Raises SeedError."""
+    def session(self, task: RunnableTask) -> AbstractContextManager[TaskSession]:
+        """A fresh environment with the task's seed applied. Raises SeedError."""
         ...
 
 

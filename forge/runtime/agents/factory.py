@@ -24,6 +24,12 @@ def make_agent(agent_id: str, *, environment=None, task=None, task_id=None, **kw
         from forge.runtime.agents.openai_agent import OpenAIAgent
         model = agent_id[len("openai:"):]
         return OpenAIAgent(model=model, **_bound_kwargs(environment, task, task_id, kwargs))
+    if agent_id.startswith("ollama:"):
+        from forge.runtime.agents.ollama_agent import OllamaAgent
+        model = agent_id[len("ollama:"):]
+        if not model:
+            raise AgentError("ollama: agent id needs a model, for example ollama:qwen3.8:27b")
+        return OllamaAgent(model=model, **_bound_kwargs(environment, task, task_id, kwargs))
     if agent_id.startswith("vllm:"):
         from forge.runtime.agents.vllm_agent import vLLMAgent
         model = agent_id[len("vllm:"):]

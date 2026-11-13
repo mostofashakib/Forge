@@ -23,6 +23,7 @@ from forge.taskfactory.schemas import (
     TaskDraft,
     TaskRejection,
     Taxonomy,
+    step_budget,
 )
 from forge.taskfactory.slots import Slot, edge_case_problems, plan_slots
 from forge.taskfactory.static_check import length_problems, static_problems
@@ -367,7 +368,7 @@ def _accepted(
         reflection_points=draft.reflection_points,
         edge_case=slot.edge_case,
         edge_case_seed=draft.edge_case_seed,
-        step_budget=2 * len(draft.golden),
+        step_budget=step_budget(draft.golden),
         round=round_number,
         review=verdict,
         fingerprint=fingerprint,

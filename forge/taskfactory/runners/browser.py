@@ -13,8 +13,8 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from forge.envgen.browser_runner import BROWSER_FIXED_TIME
-from forge.taskfactory.runner import StepResult, fingerprint_of
-from forge.taskfactory.schemas import Check, GoldenStep, TaskDraft
+from forge.taskfactory.runner import RunnableTask, StepResult, fingerprint_of
+from forge.taskfactory.schemas import Check, GoldenStep
 from forge.taskfactory.state_checks import CheckOutcome
 
 TASK_ORIGIN = "http://task.local"
@@ -37,7 +37,7 @@ class BrowserRunner:
                 self._browser = None
 
     @contextmanager
-    def session(self, draft: TaskDraft) -> Iterator["_BrowserSession"]:
+    def session(self, draft: RunnableTask) -> Iterator["_BrowserSession"]:
         if self._browser is None:
             raise RuntimeError("a browser session needs an open batch, which holds the connection")
         pages = {page.path: page.html for page in draft.seed.pages}
@@ -87,7 +87,7 @@ def perform_step(page: Any, step: GoldenStep) -> StepResult:
         page.wait_for_load_state("domcontentloaded", timeout=timeout)
     except Exception as exc:  # noqa: BLE001 — Playwright raises its own error types
         return StepResult(ok=False, error=f"{type(exc).__name__}: {str(exc).splitlines()[0][:300]}")
-    return StepResult(ok=True)
+    return StepResult(ok=True, output=page.content())
 
 
 def _path(page: Any) -> str:

@@ -12,6 +12,7 @@ schema and the per-kind required fields are checked in code.
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -193,6 +194,11 @@ class ReviewVerdict(BaseModel):
 
 class ReviewVerdictBatch(BaseModel):
     verdicts: list[ReviewVerdict]
+
+
+def step_budget(golden: Sequence[GoldenStep]) -> int:
+    """How many steps a model gets for a task: twice the golden solution."""
+    return 2 * len(golden)
 
 
 class SyntheticTask(BaseModel):

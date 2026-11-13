@@ -7,6 +7,7 @@ from forge.runtime.agents.base import AgentAdapter
 from forge.runtime.agents.random_agent import RandomAgent
 from forge.runtime.agents.scripted_agent import ScriptedAgent
 from forge.runtime.agents.factory import make_agent
+from forge.runtime.errors import AgentError
 
 
 ACTION_TYPES = frozenset(["offer_refund", "close_ticket", "escalate"])
@@ -138,7 +139,8 @@ def test_openai_agent_uses_an_injected_prompt_template():
         prompt_template=ForgeAgentPromptTemplate(),
     )
 
-    agent.act({"b": 2, "a": 1}, frozenset(["close_ticket"]))
+    with pytest.raises(AgentError):
+        agent.act({"b": 2, "a": 1}, frozenset(["close_ticket"]))
 
     request = mock_client.chat.completions.create.call_args.kwargs
     assert request["messages"][1]["content"].find('"a": 1') < request["messages"][1]["content"].find('"b": 2')
@@ -181,9 +183,62 @@ def test_make_agent_binds_environment_prompt_task_and_tool_schema():
     client.chat.completions.create.return_value.choices = [choice]
     agent = make_agent("openai:gpt-4o", environment=_Environment(), client=client)
 
-    agent.act({"ticket": 42}, frozenset(["close_ticket"]))
+    with pytest.raises(AgentError):
+        agent.act({"ticket": 42}, frozenset(["close_ticket"]))
 
     request = client.chat.completions.create.call_args.kwargs
     assert "Close ticket 42" in request["messages"][1]["content"]
     parameters = request["tools"][0]["function"]["parameters"]
     assert parameters["required"] == ["ticket_id"]
+
+
+# ---------------------------------------------------------------------------
+# A model that answers without a tool call made no move. The agent must say
+# so instead of inventing one, or calibration grades a step nobody chose.
+# ---------------------------------------------------------------------------
+
+def test_an_anthropic_reply_without_a_tool_call_raises_instead_of_inventing_an_action():
+    from forge.runtime.agents.anthropic_agent import AnthropicAgent
+
+    client = MagicMock()
+    text = MagicMock()
+    text.type = "text"
+    text.text = "I think you should close the ticket."
+    client.messages.create.return_value.content = [text]
+    agent = AnthropicAgent(model="claude-sonnet-4-6", client=client)
+
+    with pytest.raises(AgentError, match="no tool call"):
+        agent.act({}, frozenset(["close_ticket", "escalate"]))
+
+
+def test_an_openai_reply_without_a_tool_call_raises_instead_of_inventing_an_action():
+    from forge.runtime.agents.openai_agent import OpenAIAgent
+
+    client = MagicMock()
+    choice = MagicMock()
+    choice.message.tool_calls = None
+    choice.message.content = "Done."
+    client.chat.completions.create.return_value.choices = [choice]
+    agent = OpenAIAgent(model="gpt-4o", client=client)
+
+    with pytest.raises(AgentError, match="no tool call"):
+        agent.act({}, frozenset(["close_ticket", "escalate"]))
+
+
+def test_make_agent_ollama_uses_the_openai_compatible_endpoint(monkeypatch):
+    from forge.runtime.agents.ollama_agent import OllamaAgent
+
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://gpu-box:11434")
+    with patch("forge.runtime.agents.openai_agent.openai") as mock_openai:
+        agent = make_agent("ollama:qwen3.8:27b")
+
+    assert isinstance(agent, OllamaAgent)
+    assert agent._model == "qwen3.8:27b"
+    kwargs = mock_openai.OpenAI.call_args.kwargs
+    assert kwargs["base_url"] == "http://gpu-box:11434/v1"
+    assert kwargs["api_key"] != ""
+
+
+def test_make_agent_ollama_without_a_model_is_rejected():
+    with pytest.raises(AgentError, match="model"):
+        make_agent("ollama:")

@@ -1,15 +1,16 @@
 """Run tasks in an in-process ForgeEnv, built fresh for every session."""
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager, nullcontext
 
 from forge.runtime.env import ForgeEnv
-from forge.taskfactory.runner import SeedError, StepResult, fingerprint_of
-from forge.taskfactory.schemas import Check, GoldenStep, TaskDraft
+from forge.taskfactory.runner import RunnableTask, SeedError, StepResult, fingerprint_of
+from forge.taskfactory.schemas import Check, GoldenStep, step_budget
 from forge.taskfactory.state_checks import CheckOutcome, apply_seed, evaluate_state_check
 
-# Headroom past the golden solution, so the step limit never ends a session early.
+# Headroom past a model's step budget, so the step limit never ends a session early.
 _STEP_HEADROOM = 10
 # Reset with a fixed seed so every session starts from the same universe.
 _RESET_SEED = 0
@@ -24,8 +25,8 @@ class InProcessRunner:
         return nullcontext()
 
     @contextmanager
-    def session(self, draft: TaskDraft) -> Iterator["_InProcessSession"]:
-        env = self._build_env(len(draft.golden) + _STEP_HEADROOM)
+    def session(self, draft: RunnableTask) -> Iterator["_InProcessSession"]:
+        env = self._build_env(step_budget(draft.golden) + _STEP_HEADROOM)
         env.reset(seed=_RESET_SEED)
         try:
             seeded = apply_seed(env.state.get(), draft.seed.records)
@@ -42,14 +43,14 @@ class _InProcessSession:
 
     def step(self, step: GoldenStep) -> StepResult:
         try:
-            _obs, _reward, _terminated, _truncated, info = self._env.step({**step.args, "type": step.tool})
+            obs, _reward, _terminated, _truncated, info = self._env.step({**step.args, "type": step.tool})
         except Exception as exc:  # noqa: BLE001 — any refusal is a failed golden step
             return StepResult(ok=False, error=str(exc))
         error = info.get("error") or info.get("policy_violations")
         if error:
             return StepResult(ok=False, error=str(error))
         self._called.append(step.tool)
-        return StepResult(ok=True)
+        return StepResult(ok=True, output=json.dumps(obs, sort_keys=True, default=str))
 
     def evaluate(self, checks: Sequence[Check]) -> list[CheckOutcome]:
         state = self._env.state.get()

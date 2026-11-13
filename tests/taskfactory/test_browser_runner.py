@@ -229,3 +229,25 @@ def test_a_session_outside_a_batch_is_refused():
     with pytest.raises(RuntimeError, match="batch"):
         with _runner(FakeBrowser()).session(DRAFT):
             pass
+
+
+def test_a_step_returns_the_page_it_left_behind():
+    # A model only sees the page through step output, so a step must return it.
+    runner = _runner(FakeBrowser())
+
+    with runner.batch(), runner.session(DRAFT) as session:
+        session.step(GoldenStep(tool="fill", args={"selector": "#name", "value": "Sam"}))
+        result = session.step(GoldenStep(tool="click", args={"selector": "#go"}))
+
+    assert result.ok
+    assert "Submitted for Sam" in result.output
+
+
+def test_a_failed_browser_step_returns_no_page():
+    runner = _runner(FakeBrowser())
+
+    with runner.batch(), runner.session(DRAFT) as session:
+        result = session.step(GoldenStep(tool="click", args={"selector": "#nope"}))
+
+    assert not result.ok
+    assert result.output == ""
