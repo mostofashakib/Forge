@@ -1,6 +1,6 @@
 from __future__ import annotations
 from datetime import datetime, timezone
-from sqlalchemy import String, Text, DateTime, Integer, Boolean, Float, ForeignKey
+from sqlalchemy import String, Text, DateTime, Integer, Boolean, Float, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 from backend.app.database import Base
 
@@ -263,6 +263,19 @@ class CalibrationAttempt(Base):
     steps_json: Mapped[str] = mapped_column(Text)
     checks_json: Mapped[str] = mapped_column(Text)
     labels_json: Mapped[str] = mapped_column(Text)
+
+
+class TaskJudgment(Base):
+    """A person's call on a saved task: hard (keep it) or unfair (its checks are wrong)."""
+
+    __tablename__ = "task_judgments"
+    __table_args__ = (UniqueConstraint("batch_id", "task_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    batch_id: Mapped[str] = mapped_column(String, ForeignKey("task_batches.id"), index=True)
+    task_id: Mapped[str] = mapped_column(String)
+    verdict: Mapped[str] = mapped_column(String)
+    judged_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 class QuarantinedTask(Base):

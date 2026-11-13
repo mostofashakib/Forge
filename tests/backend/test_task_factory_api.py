@@ -384,3 +384,73 @@ def test_environments_list_the_edge_cases_their_family_offers(client):
 
     assert body["mail"]["edge_cases"] == ["boundary_conditions", "conflicting_state", "missing_deps", "recovery"]
     assert body["web"]["edge_cases"] == ["boundary_conditions", "conflicting_state", "recovery"]
+
+
+def _judged_batch(client) -> str:
+    """Two SFT tasks: t-00001 calibrated suspect, t-00002 solved."""
+    from backend.app.services import calibration_registry
+    from tests.backend.test_calibration_registry import _attempt, _task
+
+    tasks = [_task(1), _task(2)]
+    taxonomy = Taxonomy(categories=[TaxonomyCategory(name="triage", description="sort", exercises=[], difficulties=[1])])
+    with client.session_factory() as db:
+        batch_id = task_registry.create_batch(
+            db, env_name="mail", requested=2, pass_k=3,
+            writer=ModelSpec("anthropic", "claude-sonnet-5"), validator=ModelSpec("openai", "gpt-5"), data_type="sft",
+        )
+        task_registry.save_result(db, batch_id, PipelineResult(requested=2, taxonomy=taxonomy, tasks=tasks, data_type="sft"))
+        run_id = calibration_registry.create_run(db, batch_id=batch_id, target_model="ollama:m", attempts=3)
+        calibration_registry.record_attempts(db, run_id, tasks[0], [_attempt(False)] * 3)
+        calibration_registry.record_attempts(db, run_id, tasks[1], [_attempt(True)] * 3)
+    return batch_id
+
+
+def test_a_person_judges_a_task_hard_or_unfair(client):
+    batch_id = _judged_batch(client)
+
+    resp = client.put(f"/api/task-factory/batches/{batch_id}/tasks/t-00001/judgment", json={"verdict": "unfair"})
+
+    assert resp.status_code == 200
+    assert resp.json() == {"task_id": "t-00001", "verdict": "unfair"}
+
+
+def test_a_judgment_with_another_verdict_or_an_unknown_task_is_refused(client):
+    batch_id = _judged_batch(client)
+
+    bad = client.put(f"/api/task-factory/batches/{batch_id}/tasks/t-00001/judgment", json={"verdict": "fine"})
+    missing = client.put(f"/api/task-factory/batches/{batch_id}/tasks/t-00099/judgment", json={"verdict": "hard"})
+    no_batch = client.put("/api/task-factory/batches/tb_missing/tasks/t-00001/judgment", json={"verdict": "hard"})
+
+    assert bad.status_code == 422
+    assert missing.status_code == 404 and no_batch.status_code == 404
+
+
+def test_an_export_holds_out_suspect_tasks_and_says_why(client):
+    batch_id = _judged_batch(client)
+
+    body = client.get(f"/api/task-factory/batches/{batch_id}/export").json()
+
+    assert [task["id"] for task in body["tasks"]] == ["t-00002"]
+    assert [item["metadata"]["task_id"] for item in body["sft_items"]] == ["t-00002"]
+    assert [held["task_id"] for held in body["held_out"]] == ["t-00001"]
+    assert "suspect" in body["held_out"][0]["reason"]
+
+
+def test_marking_a_suspect_task_hard_puts_it_back_in_the_export(client):
+    batch_id = _judged_batch(client)
+
+    client.put(f"/api/task-factory/batches/{batch_id}/tasks/t-00001/judgment", json={"verdict": "hard"})
+    body = client.get(f"/api/task-factory/batches/{batch_id}/export").json()
+
+    assert [task["id"] for task in body["tasks"]] == ["t-00001", "t-00002"]
+    assert body["held_out"] == []
+
+
+def test_a_task_marked_unfair_leaves_the_export(client):
+    batch_id = _judged_batch(client)
+
+    client.put(f"/api/task-factory/batches/{batch_id}/tasks/t-00002/judgment", json={"verdict": "unfair"})
+    body = client.get(f"/api/task-factory/batches/{batch_id}/export").json()
+
+    assert body["tasks"] == []
+    assert sorted(held["task_id"] for held in body["held_out"]) == ["t-00001", "t-00002"]

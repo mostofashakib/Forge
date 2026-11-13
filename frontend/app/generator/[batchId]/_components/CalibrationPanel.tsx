@@ -3,13 +3,16 @@ import { useCallback, useEffect, useState } from "react";
 import {
   BAND_LABELS,
   MAX_ATTEMPTS,
+  exportNote,
   histogramRows,
   isActive,
+  needsJudgment,
   targetModelProblem,
   type AttemptView,
   type Band,
   type CalibrationDetail,
   type CalibrationRun,
+  type Judgment,
   type TaskResult,
 } from "@/lib/calibration";
 import { apiJson, formatDate } from "@/lib/taskFactory";
@@ -54,7 +57,53 @@ function Attempts({ base, task }: { base: string; task: TaskResult }) {
   );
 }
 
-function RunDetail({ base, detail }: { base: string; detail: CalibrationDetail }) {
+function JudgmentButtons({ batchId, task, onJudged }: {
+  batchId: string;
+  task: TaskResult;
+  onJudged: (taskId: string, judgment: Judgment) => void;
+}) {
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function judge(verdict: Judgment) {
+    setSaving(true);
+    setError(null);
+    try {
+      await apiJson(`/api/task-factory/batches/${batchId}/tasks/${task.task_id}/judgment`, {
+        method: "PUT",
+        body: JSON.stringify({ verdict }),
+      });
+      onJudged(task.task_id, verdict);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="calib-judgment">
+      {(["hard", "unfair"] as const).map((verdict) => (
+        <button
+          key={verdict} disabled={saving} onClick={() => judge(verdict)}
+          className={`tasks-button ${task.judgment === verdict ? "" : "tasks-button--ghost"}`}
+          aria-pressed={task.judgment === verdict}
+        >
+          {verdict}
+        </button>
+      ))}
+      <small>{exportNote(task)}</small>
+      {error && <p className="tasks-hint tasks-hint--warn">{error}</p>}
+    </div>
+  );
+}
+
+function RunDetail({ base, batchId, detail, onJudged }: {
+  base: string;
+  batchId: string;
+  detail: CalibrationDetail;
+  onJudged: (taskId: string, judgment: Judgment) => void;
+}) {
   const [openTask, setOpenTask] = useState<string | null>(null);
   const rows = histogramRows(detail.summary.histogram);
   return (
@@ -99,7 +148,7 @@ function RunDetail({ base, detail }: { base: string; detail: CalibrationDetail }
 
       <div className="tasks-table-wrap">
         <table className="tasks-table">
-          <thead><tr><th>Task</th><th>Solved</th><th>Band</th><th>Why it failed</th></tr></thead>
+          <thead><tr><th>Task</th><th>Solved</th><th>Band</th><th>Why it failed</th><th>Your call</th></tr></thead>
           <tbody>
             {detail.tasks.map((task) => (
               <tr key={task.task_id}>
@@ -112,6 +161,7 @@ function RunDetail({ base, detail }: { base: string; detail: CalibrationDetail }
                 <td className="tasks-table__mono">{task.passed}/{task.attempts}</td>
                 <td>{BAND_LABELS[task.band].label}</td>
                 <td className="tasks-table__reason">{task.failure_summary?.text ?? "—"}</td>
+                <td>{needsJudgment(task) ? <JudgmentButtons batchId={batchId} task={task} onJudged={onJudged} /> : "—"}</td>
               </tr>
             ))}
           </tbody>
@@ -170,6 +220,13 @@ export default function CalibrationPanel({ batchId }: { batchId: string }) {
   }, [base, selected, loadRuns]);
 
   const targetError = target ? targetModelProblem(target) : null;
+
+  const onJudged = useCallback((taskId: string, judgment: Judgment) => {
+    setDetail((d) => d && {
+      ...d,
+      tasks: d.tasks.map((t) => (t.task_id === taskId ? { ...t, judgment } : t)),
+    });
+  }, []);
 
   async function start() {
     setStarting(true);
@@ -239,7 +296,7 @@ export default function CalibrationPanel({ batchId }: { batchId: string }) {
               <div><p>Calibration failed</p><span>{detail.error}</span></div>
             </div>
           )}
-          <RunDetail base={`${base}/${detail.id}`} detail={detail} />
+          <RunDetail base={`${base}/${detail.id}`} batchId={batchId} detail={detail} onJudged={onJudged} />
         </>
       )}
     </section>

@@ -163,3 +163,18 @@ def test_a_run_read_through_another_batch_is_not_found(client, queued):
 
     assert client.get(f"{_url(other)}/{run_id}").status_code == 404
     assert client.get(f"{_url(other)}/{run_id}/tasks/t-00001").status_code == 404
+
+
+def test_each_task_in_the_detail_carries_the_persons_judgment(client, queued):
+    from backend.app.services import task_judgments
+
+    batch_id = _batch(client)
+    run_id = client.post(_url(batch_id), json={"target_model": "ollama:m"}).json()["run_id"]
+    with client.session_factory() as db:
+        for n in (1, 2):
+            calibration_registry.record_attempts(db, run_id, _task(n), [Attempt(turns=(), checks=(CheckOutcome(False, "no"),), termination="submitted")] * 2)
+        task_judgments.judge(db, batch_id, "t-00001", "unfair")
+
+    detail = client.get(f"{_url(batch_id)}/{run_id}").json()
+
+    assert {t["task_id"]: t["judgment"] for t in detail["tasks"]} == {"t-00001": "unfair", "t-00002": None}

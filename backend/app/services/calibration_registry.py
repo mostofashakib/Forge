@@ -105,6 +105,21 @@ def task_attempts(db: Session, run_id: str, task_id: str) -> list[dict]:
     ]
 
 
+def suspect_tasks(db: Session, batch_id: str) -> dict[str, tuple[str, list[str]]]:
+    """Tasks any calibration of the batch flagged suspect, with the run and the checks every attempt missed."""
+    runs = db.query(CalibrationRun).filter(CalibrationRun.batch_id == batch_id).order_by(CalibrationRun.created_at)
+    flagged: dict[str, tuple[str, list[str]]] = {}
+    for run in runs:
+        by_task: dict[str, list[dict]] = {}
+        for row in _rows(db, run.id):
+            by_task.setdefault(row.task_id, []).append(json.loads(row.labels_json))
+        for task_id, labels in by_task.items():
+            summary = summarize_failures(labels)
+            if task_id not in flagged and summary and summary["suspect_checks"]:
+                flagged[task_id] = (run.id, summary["suspect_checks"])
+    return flagged
+
+
 def _rows(db: Session, run_id: str) -> list[CalibrationAttempt]:
     return (
         db.query(CalibrationAttempt).filter(CalibrationAttempt.run_id == run_id)
