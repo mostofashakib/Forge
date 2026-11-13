@@ -10,7 +10,12 @@ from forge.contracts import InitialStateProvider
 from forge.runtime.env_builder import EnvBuilder
 from forge.runtime.errors import AgentError, InvalidActionError
 from forge.runtime.transition import TransitionResult
-from forge.taskfactory.attempt import attempt_labels, run_attempt, summarize_failures
+from forge.taskfactory.attempt import (
+    Attempt,
+    attempt_labels,
+    run_attempt,
+    summarize_failures,
+)
 from forge.taskfactory.policy import PolicyError, Submit
 from forge.taskfactory.runners.in_process import InProcessRunner
 from forge.taskfactory.schemas import (
@@ -21,6 +26,7 @@ from forge.taskfactory.schemas import (
     TaskSeed,
     step_budget,
 )
+from forge.taskfactory.state_checks import CheckOutcome
 
 
 class _Inbox(InitialStateProvider):
@@ -213,14 +219,16 @@ def _stored(draft) -> SyntheticTask:
 
 
 def _cli():
-    from tests.taskfactory.test_cli_runner import DRAFT, _runner as cli_runner
+    from tests.taskfactory.test_cli_runner import DRAFT
+    from tests.taskfactory.test_cli_runner import _runner as cli_runner
 
     runner, _runtime, _shell = cli_runner()
     return runner, _stored(DRAFT)
 
 
 def _browser():
-    from tests.taskfactory.test_browser_runner import DRAFT, FakeBrowser, _runner as browser_runner
+    from tests.taskfactory.test_browser_runner import DRAFT, FakeBrowser
+    from tests.taskfactory.test_browser_runner import _runner as browser_runner
 
     return browser_runner(FakeBrowser()), _stored(DRAFT)
 
@@ -243,3 +251,27 @@ def test_submitting_at_once_fails_on_cli_and_browser(family):
         attempt = run_attempt(runner, task, _Scripted(Submit()))
 
     assert not attempt.passed
+
+
+def test_a_check_without_a_description_is_named_by_what_it_checks():
+    # CLI checks rarely carry a description. Naming them all "shell" made
+    # different checks count as one cause in the failure summary.
+    shell_a = Check(kind="shell", command="test -f /data/a.txt")
+    shell_b = Check(kind="shell", command="grep -q done /data/b.txt")
+    task = TASK.model_copy(update={"checks": [shell_a, shell_b]})
+    attempt = Attempt(turns=(), checks=(CheckOutcome(False), CheckOutcome(False)), termination="submitted")
+
+    names = attempt_labels(attempt, task)["failed_checks"]
+
+    assert names == ["shell: test -f /data/a.txt", "shell: grep -q done /data/b.txt"]
+
+
+def test_a_long_check_command_is_cut_in_its_name():
+    check = Check(kind="shell", command="x" * 300)
+    task = TASK.model_copy(update={"checks": [check]})
+    attempt = Attempt(turns=(), checks=(CheckOutcome(False),), termination="submitted")
+
+    (name,) = attempt_labels(attempt, task)["failed_checks"]
+
+    assert len(name) < 140
+    assert name.endswith("…")

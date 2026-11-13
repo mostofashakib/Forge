@@ -109,5 +109,17 @@ _ENDINGS = {
 }
 
 
+# Characters of a check's name in labels and summaries.
+_NAME_LIMIT = 120
+
+
 def _check_name(check) -> str:
-    return check.description or check.kind
+    """The check's description, or its kind and what it looks at, so different checks never share a name."""
+    if check.description:
+        return _cut(check.description)
+    subject = check.command or check.selector or check.path or check.collection or ", ".join(check.tools or [])
+    return _cut(f"{check.kind}: {subject}" if subject else check.kind)
+
+
+def _cut(text: str) -> str:
+    return text if len(text) <= _NAME_LIMIT else text[:_NAME_LIMIT - 1] + "…"
