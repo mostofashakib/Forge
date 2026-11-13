@@ -26,7 +26,8 @@ def exclusive_environment(
     redis_client: redis.Redis, env_name: str, *, ttl_s: float = DEFAULT_LOCK_TTL_S
 ) -> Iterator[None]:
     """Block until no other episode holds `env_name`, then hold it for the block."""
-    lock = redis_client.lock(f"forge:env-lock:{env_name}", timeout=ttl_s)
+    # Not thread-local: the renewal thread needs the token the holder acquired.
+    lock = redis_client.lock(f"forge:env-lock:{env_name}", timeout=ttl_s, thread_local=False)
     lock.acquire()
     stop = threading.Event()
 

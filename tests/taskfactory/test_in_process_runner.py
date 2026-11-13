@@ -104,3 +104,37 @@ def test_the_environment_is_built_with_room_for_the_whole_golden_solution():
         pass
 
     assert sizes[0] > 40
+
+
+def test_the_environment_has_room_for_a_whole_model_attempt():
+    # A model attempt may take up to step_budget steps, twice the golden length.
+    from forge.taskfactory.schemas import step_budget
+
+    sizes: list[int] = []
+
+    def build(max_steps):
+        sizes.append(max_steps)
+        return _build(max_steps)
+
+    golden = [GoldenStep(tool="archive", args={"email_id": "e2"})] * 30
+    with InProcessRunner(build).session(_draft(golden=golden)):
+        pass
+
+    assert sizes[0] >= step_budget(golden) == 60
+
+
+def test_a_step_returns_what_the_environment_observed():
+    with InProcessRunner(_build).session(_draft()) as session:
+        result = session.step(GoldenStep(tool="archive", args={"email_id": "e2"}))
+
+    assert result.ok
+    assert '"archive"' in result.output
+
+
+def test_a_refused_step_reports_the_error_and_no_observation():
+    with InProcessRunner(_build).session(_draft()) as session:
+        result = session.step(GoldenStep(tool="archive", args={"email_id": "missing"}))
+
+    assert not result.ok
+    assert "missing" in result.error
+    assert result.output == ""

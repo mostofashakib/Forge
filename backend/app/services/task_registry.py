@@ -10,12 +10,14 @@ import json
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, or_
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from backend.app.models import GeneratedTask, TaskBatch, TaskRejectionRecord
+from backend.app.services.abandoned import fail_abandoned
 from forge.taskfactory.model_settings import ModelSpec
 from forge.taskfactory.pipeline import PipelineResult
+from forge.taskfactory.schemas import SyntheticTask
 
 
 def _label(spec: ModelSpec) -> str:
@@ -65,28 +67,8 @@ def mark_running(db: Session, batch_id: str, *, writer: ModelSpec, validator: Mo
 
 
 def fail_abandoned_batches(db: Session, *, older_than: timedelta, now: datetime | None = None) -> list[str]:
-    """Fail running batches started longer ago than `older_than`, and return their ids.
-
-    Pass the worker's hard time limit: no live worker runs a batch past it,
-    so a batch still "running" after that lost its worker. A batch from
-    before `started_at` existed is judged by when it was created.
-    """
-    cutoff = (now or datetime.now(timezone.utc)) - older_than
-    abandoned = (
-        db.query(TaskBatch)
-        .filter(TaskBatch.status == "running")
-        .filter(or_(
-            TaskBatch.started_at < cutoff,
-            (TaskBatch.started_at.is_(None)) & (TaskBatch.created_at < cutoff),
-        ))
-        .all()
-    )
-    for batch in abandoned:
-        batch.status = "failed"
-        batch.error = f"the worker running this batch stopped: still running {older_than} after it started"
-        batch.completed_at = datetime.now(timezone.utc)
-    db.commit()
-    return [batch.id for batch in abandoned]
+    """Fail running batches whose worker died. See `fail_abandoned`."""
+    return fail_abandoned(db, TaskBatch, older_than=older_than, now=now, what="batch")
 
 
 def mark_failed(db: Session, batch_id: str, error: str) -> None:
@@ -162,6 +144,12 @@ def list_batches(db: Session, env_name: str | None = None) -> list[dict]:
     if env_name:
         query = query.filter(TaskBatch.env_name == env_name)
     return [_summary(b) for b in query.order_by(TaskBatch.created_at.desc(), TaskBatch.id.desc()).all()]
+
+
+def batch_tasks(db: Session, batch_id: str) -> list[SyntheticTask]:
+    """A batch's accepted tasks, in id order."""
+    rows = db.query(GeneratedTask).filter(GeneratedTask.batch_id == batch_id).order_by(GeneratedTask.task_id).all()
+    return [SyntheticTask.model_validate_json(row.task_json) for row in rows]
 
 
 def get_batch(db: Session, batch_id: str) -> dict | None:

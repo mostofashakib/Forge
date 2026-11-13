@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
+from forge.runtime.errors import AgentError
+
 from forge.runtime.agent_logger import AgentRunLogger
 from forge.runtime.agents.anthropic_agent import AnthropicAgent
 from forge.runtime.agents.openai_agent import OpenAIAgent
@@ -52,18 +56,20 @@ def test_anthropic_agent_logs_llm_call_with_response():
     assert llm[0].payload["prompt"] is not None
 
 
-def test_anthropic_agent_logs_fallback_action_when_no_tool_use():
+def test_anthropic_agent_logs_the_call_and_raises_when_no_tool_use():
+    # A reply with no tool call is no move. It is logged as it came back and
+    # never turned into an invented action.
     blocks = [SimpleNamespace(type="text", text="thinking...")]
     logger = AgentRunLogger(run_id="ep")
     logger.start_run()
     agent = AnthropicAgent(model="m", client=_FakeAnthropic(blocks), logger=logger)
 
-    action = agent.act({"x": 0}, frozenset({"inc", "dec"}))
+    with pytest.raises(AgentError, match="no tool call"):
+        agent.act({"x": 0}, frozenset({"inc", "dec"}))
 
-    assert action == {"type": "dec"}  # sorted()[0]
-    assert [e.payload["tool_call"] for e in logger.entries if e.kind == "llm_call"] == [
-        {"type": "dec"}
-    ]
+    calls = [e.payload for e in logger.entries if e.kind == "llm_call"]
+    assert [c["tool_call"] for c in calls] == [None]
+    assert calls[0]["response"] == [{"type": "text", "text": "thinking..."}]
 
 
 def test_anthropic_agent_without_logger_still_acts():

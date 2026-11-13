@@ -17,8 +17,8 @@ import httpx
 
 from forge.runtime.tools import OpenAPIToolProvider
 from forge.taskfactory.profile import EnvironmentProfile, ToolInfo, param_hint
-from forge.taskfactory.runner import SeedError, StepResult, fingerprint_of
-from forge.taskfactory.schemas import Check, GoldenStep, TaskDraft
+from forge.taskfactory.runner import RunnableTask, SeedError, StepResult, fingerprint_of
+from forge.taskfactory.schemas import Check, GoldenStep
 from forge.taskfactory.state_checks import CheckOutcome, apply_seed, evaluate_state_check
 from forge.taskfactory.static_check import is_control_plane
 
@@ -64,7 +64,7 @@ class ContainerAppRunner:
             self._control("POST", "/forge/restore-state", json=saved)
 
     @contextmanager
-    def session(self, draft: TaskDraft) -> Iterator["_AppSession"]:
+    def session(self, draft: RunnableTask) -> Iterator["_AppSession"]:
         self._control("POST", "/forge/reset", json={})
         if draft.seed.records:
             try:

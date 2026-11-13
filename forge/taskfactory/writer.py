@@ -33,6 +33,9 @@ Every task has:
     solves the task from the seeded start. It must pass every time it runs.
   checks: machine-checkable conditions on the final result. At least one must
     fail before the golden solution runs and every one must pass after it.
+    Every check tests only what the objective asks for. If a check wants a
+    file deleted, an exact phrase or number written, or any other result,
+    the objective says so in words.
   reflection_points: for difficulty 4 and 5, at least %(min_reflections)d places
     (0-based golden step index) where the agent has to stop and rethink: kind
     "discovery" (something found midway changes the plan), "reconcile" (stale

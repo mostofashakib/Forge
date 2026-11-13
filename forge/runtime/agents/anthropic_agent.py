@@ -4,6 +4,7 @@ from collections.abc import Sequence
 from forge.contracts import Observation, PromptTemplate, Task, ToolSpec
 from forge.credentials import ANTHROPIC_API_KEY, require_credential
 from forge.runtime.agents.prompts import FORGE_AGENT_PROMPT
+from forge.runtime.errors import AgentError
 
 try:
     import anthropic
@@ -59,8 +60,6 @@ class AnthropicAgent:
             if block.type == "tool_use":
                 action = {"type": block.name, **block.input}
                 break
-        if action is None:
-            action = {"type": sorted(action_types)[0]}
         if self.logger is not None:
             self.logger.log_llm_call(
                 prompt={"system": system, "messages": messages,
@@ -68,6 +67,8 @@ class AnthropicAgent:
                 tool_call=action,
                 response=_serialize_content(response),
             )
+        if action is None:
+            raise AgentError(f"{self._model} answered with no tool call: {_text_of(response)[:300]!r}")
         return action
 
     def _tools(self, action_types: frozenset[str]) -> list[dict]:
@@ -84,6 +85,12 @@ class AnthropicAgent:
             }
             for spec in specs
         ]
+
+
+def _text_of(response) -> str:
+    return " ".join(
+        block.text for block in getattr(response, "content", []) or [] if getattr(block, "type", None) == "text"
+    )
 
 
 def _serialize_content(response) -> list[dict]:

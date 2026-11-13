@@ -233,6 +233,38 @@ class TaskRejectionRecord(Base):
     rejection_json: Mapped[str] = mapped_column(Text)
 
 
+class CalibrationRun(Base):
+    """One target model's attempts at every task in a saved batch."""
+
+    __tablename__ = "calibration_runs"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    batch_id: Mapped[str] = mapped_column(String, ForeignKey("task_batches.id"), index=True)
+    # An agent id, such as ollama:qwen3.8:27b.
+    target_model: Mapped[str] = mapped_column(String)
+    attempts_per_task: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String, default="queued")
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class CalibrationAttempt(Base):
+    __tablename__ = "calibration_attempts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[str] = mapped_column(String, ForeignKey("calibration_runs.id"), index=True)
+    task_id: Mapped[str] = mapped_column(String)
+    attempt_index: Mapped[int] = mapped_column(Integer)
+    passed: Mapped[bool] = mapped_column(Boolean)
+    termination: Mapped[str] = mapped_column(String)
+    error: Mapped[str] = mapped_column(Text, default="")
+    steps_json: Mapped[str] = mapped_column(Text)
+    checks_json: Mapped[str] = mapped_column(Text)
+    labels_json: Mapped[str] = mapped_column(Text)
+
+
 class QuarantinedTask(Base):
     __tablename__ = "quarantined_tasks"
 

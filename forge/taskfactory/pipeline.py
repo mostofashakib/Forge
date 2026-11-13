@@ -11,6 +11,7 @@ from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from forge.extraction.llm_client import LLMRetriesExhausted
 from forge.taskfactory.contamination import TaskContaminationVerifier
 from forge.taskfactory.pass_k import PassKResult, run_pass_k
 from forge.taskfactory.profile import EnvironmentProfile
@@ -23,6 +24,7 @@ from forge.taskfactory.schemas import (
     TaskDraft,
     TaskRejection,
     Taxonomy,
+    step_budget,
 )
 from forge.taskfactory.slots import Slot, edge_case_problems, plan_slots
 from forge.taskfactory.static_check import length_problems, static_problems
@@ -241,11 +243,18 @@ class TaskFactoryPipeline:
             )
 
         self._emit("writing", f"Round {round_number}: writing {len(slots)} tasks", round_number)
-        drafts = self._writer.write(
-            self._profile, result.taxonomy, slots,
-            avoid_titles=_recent_titles(result.tasks, {slot.category for slot in slots}),
-            feedback={slot.index: feedback[slot.index] for slot in slots if slot.index in feedback},
-        )
+        try:
+            drafts = self._writer.write(
+                self._profile, result.taxonomy, slots,
+                avoid_titles=_recent_titles(result.tasks, {slot.category for slot in slots}),
+                feedback={slot.index: feedback[slot.index] for slot in slots if slot.index in feedback},
+            )
+        except LLMRetriesExhausted as exc:
+            # One bad answer costs this chunk. The next round rewrites it, and
+            # the stall breaker stops a writer that keeps failing.
+            for slot in slots:
+                reject(slot, "writer", f"the writer failed: {exc}", None)
+            return
         taken = {_title_key(task.title) for task in result.tasks}
         survivors: list[tuple[Slot, TaskDraft]] = []
 
@@ -275,10 +284,14 @@ class TaskFactoryPipeline:
                 reject(slot, "static", "; ".join(problems), draft)
         if off_length:
             self._emit("static", f"Round {round_number}: reworking {len(off_length)} tasks of the wrong length", round_number)
-            revised = self._writer.revise(self._profile, result.taxonomy, off_length)
+            try:
+                revised = self._writer.revise(self._profile, result.taxonomy, off_length)
+                failure = ""
+            except LLMRetriesExhausted as exc:
+                revised, failure = {}, f"; the writer could not rework it: {exc}"
             for slot, draft, problem in off_length:
                 rework = revised.get(slot.index)
-                problems = check(slot, rework) if rework is not None else [problem]
+                problems = check(slot, rework) if rework is not None else [problem + failure]
                 if problems:
                     reject(slot, "static", "; ".join(problems), rework or draft)
                 else:
@@ -299,7 +312,12 @@ class TaskFactoryPipeline:
         if not executable:
             return
         self._emit("review", f"Round {round_number}: reviewing {len(executable)} tasks", round_number)
-        verdicts = self._reviewer.review(self._profile, executable)
+        try:
+            verdicts = self._reviewer.review(self._profile, executable)
+        except LLMRetriesExhausted as exc:
+            for slot, draft in executable:
+                reject(slot, "review", f"the validator failed: {exc}", draft)
+            return
         accepted_candidates: list[tuple[Slot, TaskDraft, ReviewVerdict]] = []
         for slot, draft in executable:
             verdict = verdicts.get(slot.index)
@@ -367,7 +385,7 @@ def _accepted(
         reflection_points=draft.reflection_points,
         edge_case=slot.edge_case,
         edge_case_seed=draft.edge_case_seed,
-        step_budget=2 * len(draft.golden),
+        step_budget=step_budget(draft.golden),
         round=round_number,
         review=verdict,
         fingerprint=fingerprint,

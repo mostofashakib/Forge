@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { API_BASE } from "@/lib/api";
 import { EDGE_CASE_LABELS } from "@/lib/edgeCases";
+import CalibrationPanel from "./_components/CalibrationPanel";
 import {
   apiJson,
   formatDate,
@@ -266,6 +267,8 @@ export default function BatchPage({ params }: { params: Promise<{ batchId: strin
           </div>
         </section>
       )}
+
+      {batch.version && batch.tasks.length > 0 && <CalibrationPanel batchId={batch.id} />}
     </div>
   );
 }

@@ -12,7 +12,6 @@ from forge.taskfactory.schemas import (
     GoldenStep,
     ReflectionPoint,
     ReviewVerdict,
-    ReviewVerdictBatch,
     TaskDraft,
     TaskDraftBatch,
     Taxonomy,
@@ -100,21 +99,29 @@ def test_the_prompt_carries_feedback_titles_and_the_step_floor():
 
 
 class _ScriptedReviewClient:
-    def __init__(self, verdicts: list[ReviewVerdict]) -> None:
-        self._verdicts = verdicts
+    """Answers through the schema the reviewer asks for, so an answer it would not accept fails here too."""
+
+    def __init__(self, answers: list[dict]) -> None:
+        self._answers = answers
         self.prompts: list[str] = []
 
     def extract(self, system, user, schema):
         self.prompts.append(user)
-        return ReviewVerdictBatch(verdicts=self._verdicts)
+        self.schema = schema
+        return schema.model_validate({"verdicts": self._answers})
 
 
-def _verdict(slot: int, fair: bool = True) -> ReviewVerdict:
-    return ReviewVerdict(
-        slot=slot, realistic=True, realistic_reason="real users do this",
-        fair=fair, fair_reason="ok" if fair else "the objective hides a required fact",
-        sensible=True, sensible_reason="coherent",
-    )
+# _draft's one check archives e1, which its objective "archive it" asks for.
+TRACED = [{"check": 0, "requires": "e1 is in the archive folder", "asked_by": "archive it"}]
+
+
+def _verdict(slot: int, fair: bool = True, traces: list[dict] = TRACED) -> dict:
+    return {
+        "slot": slot, "realistic": True, "realistic_reason": "real users do this",
+        "fair": fair, "fair_reason": "ok" if fair else "the objective hides a required fact",
+        "sensible": True, "sensible_reason": "coherent",
+        "edge_case_ok": None, "edge_case_reason": "", "check_traces": traces,
+    }
 
 
 def test_the_reviewer_maps_verdicts_back_to_slots():
@@ -197,11 +204,11 @@ def test_a_revision_keeps_the_slots_edge_case():
     assert "edge case recovery" in client.prompts[0]
 
 
-def _edge_verdict(slot: int, edge_case_ok: bool | None) -> ReviewVerdict:
-    return _verdict(slot).model_copy(update={
+def _edge_verdict(slot: int, edge_case_ok: bool | None) -> dict:
+    return _verdict(slot) | {
         "edge_case_ok": edge_case_ok,
         "edge_case_reason": "the seed never plants the stale record" if edge_case_ok is False else "",
-    })
+    }
 
 
 def _edge_slot(index: int, edge_case: str | None = "conflicting_state") -> Slot:
@@ -250,3 +257,101 @@ def test_the_review_prompt_names_the_edge_case_and_its_seed():
 
     assert "edge case conflicting_state" in client.prompts[0]
     assert "emails:e1" in client.prompts[0]
+
+
+# ---------------------------------------------------------------------------
+# A check must test something the objective asks for. A task whose check
+# wants more than the objective says fails an agent that did what it was told.
+# ---------------------------------------------------------------------------
+
+def _traced_review(traces: list[dict], draft: TaskDraft | None = None):
+    client = _ScriptedReviewClient([_verdict(0, traces=traces)])
+    return TaskReviewer(client).review(PROFILE, [(_slots(1)[0], draft or _draft(0))])[0]
+
+
+def test_a_check_the_objective_never_asks_for_rejects_the_task():
+    verdict = _traced_review([{"check": 0, "requires": "the pid file is deleted", "asked_by": ""}])
+
+    assert not verdict.accepted
+    assert "check 0" in verdict.rejection_reason()
+    assert "the pid file is deleted" in verdict.rejection_reason()
+
+
+def test_a_check_traced_to_words_the_objective_does_not_contain_rejects_the_task():
+    verdict = _traced_review([{"check": 0, "requires": "e1 is archived", "asked_by": "delete the pid file"}])
+
+    assert not verdict.accepted
+    assert "e1 is archived" in verdict.rejection_reason()
+
+
+def test_a_check_the_validator_never_traced_rejects_the_task():
+    draft = _draft(0).model_copy(update={"checks": _draft(0).checks * 2})
+
+    verdict = _traced_review(TRACED, draft)
+
+    assert not verdict.accepted
+    assert "check 1" in verdict.rejection_reason()
+
+
+def test_a_task_whose_checks_all_trace_to_the_objective_is_accepted():
+    verdict = _traced_review(TRACED)
+
+    assert verdict.accepted
+    assert verdict.unstated_requirements == []
+
+
+def test_an_objective_quote_matches_regardless_of_case_spacing_and_quote_marks():
+    verdict = _traced_review([{"check": 0, "requires": "e1 is archived", "asked_by": "'Archive   It.'"}])
+
+    assert verdict.accepted
+
+
+def test_a_quote_cut_with_an_ellipsis_matches_when_each_piece_is_in_the_objective_in_order():
+    draft = _draft(0).model_copy(update={"objective": "Find the invoice from Acme, then archive it today."})
+
+    kept = _traced_review([{"check": 0, "requires": "archived", "asked_by": "Find the invoice... archive it"}], draft)
+    reordered = _traced_review([{"check": 0, "requires": "archived", "asked_by": "archive it… Find the invoice"}], draft)
+
+    assert kept.accepted
+    assert not reordered.accepted
+
+
+def test_a_quote_of_only_an_ellipsis_grounds_nothing():
+    verdict = _traced_review([{"check": 0, "requires": "e1 is archived", "asked_by": "..."}])
+
+    assert not verdict.accepted
+
+
+def test_a_stored_verdict_from_before_the_check_comparison_still_loads_as_accepted():
+    stored = ReviewVerdict.model_validate(_verdict(0) | {"check_traces": None}).model_dump(
+        exclude={"unstated_requirements"}
+    )
+
+    assert ReviewVerdict.model_validate(stored).accepted
+
+
+def test_the_validator_must_trace_checks_and_answer_the_edge_case():
+    client = _ScriptedReviewClient([_verdict(0)])
+
+    TaskReviewer(client).review(PROFILE, [(s, _draft(s.index)) for s in _slots(1)])
+
+    schema = client.schema.model_json_schema()
+    answer = schema["$defs"][schema["properties"]["verdicts"]["items"]["$ref"].split("/")[-1]]
+    assert {"check_traces", "edge_case_ok"} <= set(answer["required"])
+
+
+def test_the_review_prompt_numbers_the_checks():
+    draft = _draft(0).model_copy(update={"checks": _draft(0).checks * 2})
+    client = _ScriptedReviewClient([_verdict(0)])
+
+    TaskReviewer(client).review(PROFILE, [(_slots(1)[0], draft)])
+
+    assert "CHECK 0:" in client.prompts[0]
+    assert "CHECK 1:" in client.prompts[0]
+
+
+def test_the_validator_and_the_writer_are_told_checks_follow_the_objective():
+    from forge.taskfactory import review, writer
+
+    assert "asked_by" in review._SYSTEM
+    assert "objective asks for" in writer._COMMON

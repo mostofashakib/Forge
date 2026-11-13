@@ -497,6 +497,20 @@
   .tasks-golden { @apply max-h-96 list-decimal space-y-1.5 overflow-y-auto pl-6 font-mono text-[0.65rem] marker:text-muted-foreground; }
   .tasks-golden code { @apply font-semibold text-foreground; }
   .tasks-golden span { @apply ml-2 break-all text-muted-foreground; }
+  .calib-form { @apply grid items-end gap-4 border-b border-foreground/10 p-5 md:grid-cols-[2fr_1fr_auto]; }
+  .calib-runs { @apply flex flex-wrap gap-2 border-b border-foreground/10 p-5; }
+  .calib-run { @apply flex flex-col items-start gap-1 border border-foreground/20 px-3 py-2 text-left transition-colors hover:bg-muted/40; }
+  .calib-run strong { @apply font-mono text-xs; }
+  .calib-run small { @apply font-mono text-[0.5rem] uppercase tracking-wider text-muted-foreground; }
+  .calib-run--active { @apply border-primary bg-primary/10; }
+  .calib-readout { @apply grid grid-cols-2 border-b border-foreground/10 sm:grid-cols-5; }
+  .calib-histogram { @apply space-y-1.5 border-b border-foreground/10 p-5; }
+  .calib-histogram > div { @apply grid grid-cols-[3rem_1fr_2.5rem] items-center gap-3 font-mono text-[0.6rem]; }
+  .calib-histogram > div > div { @apply h-3 bg-muted; }
+  .calib-histogram i { @apply block h-full bg-primary; }
+  .calib-histogram strong { @apply text-right; }
+  .calib-task { @apply text-left hover:underline; }
+  .calib-attempts { @apply mt-3 space-y-3 text-[0.65rem]; }
   .tasks-golden em { @apply mt-1 block border-l-2 border-accent bg-accent/15 px-2 py-1 not-italic text-foreground; }
   .tasks-checks { @apply space-y-1.5 text-xs leading-5; }
   .tasks-checks code { @apply mr-1 bg-muted px-1 font-mono text-[0.6rem]; }

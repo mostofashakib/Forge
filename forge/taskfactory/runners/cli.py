@@ -11,8 +11,8 @@ from contextlib import AbstractContextManager, contextmanager
 from typing import Protocol
 
 from forge.envgen.grading_sandbox import grading_sandbox
-from forge.taskfactory.runner import SeedError, StepResult, fingerprint_of
-from forge.taskfactory.schemas import Check, GoldenStep, TaskDraft
+from forge.taskfactory.runner import RunnableTask, SeedError, StepResult, fingerprint_of
+from forge.taskfactory.schemas import Check, GoldenStep
 from forge.taskfactory.state_checks import CheckOutcome
 
 COMMAND_TIMEOUT_S = 120
@@ -60,7 +60,7 @@ class CliRunner:
             self._runtime.discard_cli_snapshot(snapshot)
 
     @contextmanager
-    def session(self, draft: TaskDraft) -> Iterator["_CliSession"]:
+    def session(self, draft: RunnableTask) -> Iterator["_CliSession"]:
         if self._snapshot is None:
             raise RuntimeError("a CLI session needs an open batch, which holds the snapshot")
         with self._runtime.cli_episode(self._env_name, self._snapshot, refill=False) as container_id:

@@ -12,6 +12,7 @@ schema and the per-kind required fields are checked in code.
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -172,10 +173,17 @@ class ReviewVerdict(BaseModel):
     # golden solution handle it? None means no verdict was given.
     edge_case_ok: bool | None = None
     edge_case_reason: str = ""
+    # Checks that test something the objective never asks for, found from the
+    # validator's per-check traces. Empty means every check traces to the
+    # objective. None only on verdicts stored before checks were traced.
+    unstated_requirements: list[str] | None = None
 
     @property
     def accepted(self) -> bool:
-        return self.realistic and self.fair and self.sensible and self.edge_case_ok is not False
+        return (
+            self.realistic and self.fair and self.sensible
+            and self.edge_case_ok is not False and not self.unstated_requirements
+        )
 
     def rejection_reason(self) -> str:
         reasons = [
@@ -188,11 +196,14 @@ class ReviewVerdict(BaseModel):
             )
             if not ok
         ]
+        if self.unstated_requirements:
+            reasons.append("checks test what the objective never asks for: " + "; ".join(self.unstated_requirements))
         return "; ".join(reasons)
 
 
-class ReviewVerdictBatch(BaseModel):
-    verdicts: list[ReviewVerdict]
+def step_budget(golden: Sequence[GoldenStep]) -> int:
+    """How many steps a model gets for a task: twice the golden solution."""
+    return 2 * len(golden)
 
 
 class SyntheticTask(BaseModel):
