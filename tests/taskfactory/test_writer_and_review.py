@@ -233,6 +233,67 @@ def test_an_edge_case_task_without_an_edge_case_verdict_is_rejected():
     assert "edge case" in verdicts[0].rejection_reason()
 
 
+class _CallByCallReviewClient:
+    """Gives each extract call its own answers, in order."""
+
+    def __init__(self, *calls: list[dict]) -> None:
+        self._calls = list(calls)
+        self.prompts: list[str] = []
+
+    def extract(self, system, user, schema):
+        self.prompts.append(user)
+        return schema.model_validate({"verdicts": self._calls[len(self.prompts) - 1]})
+
+
+def test_a_blank_edge_case_answer_is_asked_again_for_that_task_only():
+    client = _CallByCallReviewClient(
+        [_edge_verdict(0, None), _edge_verdict(1, True)],
+        [_edge_verdict(0, True)],
+    )
+
+    verdicts = TaskReviewer(client).review(PROFILE, [(_edge_slot(0), _draft(0)), (_edge_slot(1), _draft(1))])
+
+    assert verdicts[0].accepted and verdicts[1].accepted
+    assert len(client.prompts) == 2
+    assert "slot 0" in client.prompts[1] and "slot 1" not in client.prompts[1]
+
+
+def test_a_second_blank_edge_case_answer_rejects_the_task_as_unanswered():
+    client = _CallByCallReviewClient([_edge_verdict(0, None)], [_edge_verdict(0, None)])
+
+    verdicts = TaskReviewer(client).review(PROFILE, [(_edge_slot(0), _draft(0))])
+
+    assert not verdicts[0].accepted
+    assert "gave no verdict on edge case conflicting_state" in verdicts[0].rejection_reason()
+    assert len(client.prompts) == 2
+
+
+def test_a_retry_that_skips_the_task_keeps_it_rejected():
+    client = _CallByCallReviewClient([_edge_verdict(0, None)], [])
+
+    verdicts = TaskReviewer(client).review(PROFILE, [(_edge_slot(0), _draft(0))])
+
+    assert not verdicts[0].accepted
+    assert "gave no verdict on edge case" in verdicts[0].rejection_reason()
+
+
+def test_the_retry_takes_a_no_answer_at_its_word():
+    client = _CallByCallReviewClient([_edge_verdict(0, None)], [_edge_verdict(0, False)])
+
+    verdicts = TaskReviewer(client).review(PROFILE, [(_edge_slot(0), _draft(0))])
+
+    assert not verdicts[0].accepted
+    assert "never plants the stale record" in verdicts[0].rejection_reason()
+
+
+def test_answered_edge_cases_and_plain_tasks_are_not_asked_again():
+    client = _CallByCallReviewClient([_edge_verdict(0, False), _edge_verdict(1, None)])
+
+    TaskReviewer(client).review(PROFILE, [(_edge_slot(0), _draft(0)), (_edge_slot(1, None), _draft(1))])
+
+    assert len(client.prompts) == 1
+
+
 def test_a_confirmed_edge_case_is_accepted():
     client = _ScriptedReviewClient([_edge_verdict(0, True)])
 
