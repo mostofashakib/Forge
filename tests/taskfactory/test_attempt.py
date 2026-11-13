@@ -81,6 +81,7 @@ def test_replaying_the_golden_solution_passes():
     assert attempt.passed
     assert attempt.termination == "submitted"
     assert [turn.step for turn in attempt.turns] == GOLDEN
+    assert attempt_labels(attempt, TASK)["passed"] is True
     assert attempt_labels(attempt, TASK)["failed_checks"] == []
 
 
@@ -166,19 +167,20 @@ def test_labels_name_tools_the_golden_solution_never_used():
 # The summary of why a task's attempts failed (D3)
 # ---------------------------------------------------------------------------
 
-def _attempts(*policies):
-    return [run_attempt(_runner(), TASK, policy) for policy in policies]
+def _labels(*policies):
+    # Summaries are built from stored labels, so a run's rows are enough to rebuild them.
+    return [attempt_labels(run_attempt(_runner(), TASK, policy), TASK) for policy in policies]
 
 
 def test_the_summary_counts_failures_by_cause_and_names_the_most_common():
-    attempts = _attempts(
+    labels = _labels(
         _Scripted(Submit()),
         _Scripted(Submit()),
         _Scripted(GoldenStep(tool="star")),
         _Scripted(*GOLDEN, Submit()),
     )
 
-    summary = summarize_failures(attempts, TASK)
+    summary = summarize_failures(labels)
 
     assert summary["failed"] == 3
     assert summary["attempts"] == 4
@@ -189,12 +191,12 @@ def test_the_summary_counts_failures_by_cause_and_names_the_most_common():
 
 
 def test_a_task_whose_attempts_all_passed_has_no_failure_summary():
-    assert summarize_failures(_attempts(_Scripted(*GOLDEN, Submit())), TASK) is None
+    assert summarize_failures(_labels(_Scripted(*GOLDEN, Submit()))) is None
 
 
 def test_a_summary_of_no_attempts_is_rejected():
     with pytest.raises(ValueError):
-        summarize_failures([], TASK)
+        summarize_failures([])
 
 
 # ---------------------------------------------------------------------------

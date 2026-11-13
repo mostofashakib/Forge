@@ -65,6 +65,7 @@ def attempt_labels(attempt: Attempt, task: SyntheticTask) -> dict:
     """Why an attempt went the way it did, from what was recorded. No model is asked."""
     golden_tools = {step.tool for step in task.golden}
     return {
+        "passed": attempt.passed,
         "termination": attempt.termination,
         "failed_checks": [
             _check_name(check)
@@ -76,27 +77,27 @@ def attempt_labels(attempt: Attempt, task: SyntheticTask) -> dict:
     }
 
 
-def summarize_failures(attempts: Sequence[Attempt], task: SyntheticTask) -> dict | None:
-    """Why a task's failed attempts failed, counted across them. None when every attempt passed."""
-    if not attempts:
+def summarize_failures(labels: Sequence[dict]) -> dict | None:
+    """Why a task's failed attempts failed, counted across their labels. None when every attempt passed."""
+    if not labels:
         raise ValueError("a failure summary needs at least one attempt")
-    failed = [attempt for attempt in attempts if not attempt.passed]
+    failed = [label for label in labels if not label["passed"]]
     if not failed:
         return None
-    terminations = Counter(attempt.termination for attempt in failed)
-    failed_checks = Counter(name for attempt in failed for name in attempt_labels(attempt, task)["failed_checks"])
+    terminations = Counter(label["termination"] for label in failed)
+    failed_checks = Counter(name for label in failed for name in label["failed_checks"])
     causes = failed_checks + Counter({
         _ENDINGS[name]: count for name, count in terminations.items() if name in _ENDINGS
     })
     cause, count = causes.most_common(1)[0]
     endings = ", ".join(f"{name} {n}" for name, n in terminations.most_common())
     return {
-        "attempts": len(attempts),
+        "attempts": len(labels),
         "failed": len(failed),
         "terminations": dict(terminations),
         "failed_checks": dict(failed_checks),
         "text": (
-            f"{len(failed)} of {len(attempts)} attempts failed. "
+            f"{len(failed)} of {len(labels)} attempts failed. "
             f"Most common cause: {cause} ({count}). Ended by: {endings}."
         ),
     }
