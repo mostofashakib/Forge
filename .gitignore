@@ -80,3 +80,6 @@ dump.rdb
 
 # IDE
 .vscode/
+
+# local working notes and plans
+/working.md

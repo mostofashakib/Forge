@@ -1,7 +1,7 @@
 """How often a target model solves each task, and what that says about the batch.
 
-The bands follow D4 in working.md: a task the model solved on every attempt is
-too easy, one it never solved is unsolved, and the rest are the frontier.
+A task the model solved on every attempt is too easy, one it never solved
+is unsolved, and the rest are the frontier.
 """
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from typing import Literal
 
 Band = Literal["too_easy", "frontier", "unsolved"]
 BANDS: tuple[Band, ...] = ("too_easy", "frontier", "unsolved")
-# D3: at most five attempts per task.
+# At most five attempts per task.
 MIN_ATTEMPTS, MAX_ATTEMPTS = 1, 5
 
 
