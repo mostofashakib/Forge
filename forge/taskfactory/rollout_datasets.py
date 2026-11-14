@@ -41,26 +41,31 @@ def dataset_rows(
     if fmt not in FORMATS:
         raise ValueError(f"format must be one of {', '.join(FORMATS)}, got {fmt!r}")
     if fmt == "failures":
-        return [_failure(item.task, a) for item in calibrated for a in item.attempts if not a["passed"]]
+        return [
+            _failure(item.task, a, env_name, run_id) for item in calibrated for a in item.attempts if not a["passed"]
+        ]
     frontier = [item for item in calibrated if item.on_frontier]
     if fmt == "grpo":
         return [_rollout(item.task, a, env_name, run_id, target_model) for item in frontier for a in item.model_attempts]
     if fmt == "sft":
-        return [_demonstration(item.task, a, env_name) for item in frontier for a in item.model_attempts if a["passed"]]
+        return [
+            row for item in frontier for a in item.model_attempts if a["passed"]
+            for row in _demonstrations(item.task, a, env_name, run_id)
+        ]
     return [pair for item in frontier for pair in _pairs(item, env_name)]
 
 
 def _rollout(task: SyntheticTask, attempt: dict, env_name: str, run_id: str, target_model: str) -> dict:
     reward = 1.0 if attempt["passed"] else 0.0
     record = RolloutRecord(
-        episode_id=f"{run_id}/{task.id}/{attempt['attempt_index']}",
+        episode_id=_episode_id(run_id, task, attempt),
         env_name=env_name, task_name=task.id, prompt=task.objective, completion=_completion(attempt),
         total_reward=reward, passed=attempt["passed"], outcome="success" if attempt["passed"] else "failure",
         steps=len(attempt["steps"]), error=attempt["error"] or None, behavior_model=target_model,
         termination_reason=attempt["termination"], verification_results=attempt["checks"],
         reward_breakdown={"total_reward": reward, "components": [{"name": "task_checks", "value": reward}]},
     )
-    return record.model_dump()
+    return {**record.model_dump(), "agent_id": target_model, "total_steps": record.steps}
 
 
 def _pairs(item: Calibrated, env_name: str) -> list[dict]:
@@ -80,19 +85,38 @@ def _pairs(item: Calibrated, env_name: str) -> list[dict]:
     ]
 
 
-def _demonstration(task: SyntheticTask, attempt: dict, env_name: str) -> dict:
-    return {
-        "messages": _messages(task, attempt), "env_name": env_name,
-        "task_id": task.id, "attempt_index": attempt["attempt_index"], "reward": 1.0,
-    }
+def _demonstrations(task: SyntheticTask, attempt: dict, env_name: str, run_id: str) -> list[dict]:
+    """One row per step: the objective and the steps before it, then the step the model took."""
+    lines = [step_text(turn["step"]) for turn in attempt["steps"]]
+    rows = []
+    for index, line in enumerate(lines):
+        context = task.objective
+        if index:
+            context += "\nPrevious actions:\n" + "\n".join(lines[:index])
+        rows.append({
+            "messages": [{"role": "user", "content": context}, {"role": "assistant", "content": line}],
+            "episode_id": _episode_id(run_id, task, attempt), "step_index": index, "total_reward": 1.0,
+            "env_name": env_name, "task_name": task.id,
+        })
+    return rows
 
 
-def _failure(task: SyntheticTask, attempt: dict) -> dict:
+def _failure(task: SyntheticTask, attempt: dict, env_name: str, run_id: str) -> dict:
     return {
-        "task_id": task.id, "attempt_index": attempt["attempt_index"], "prompt": task.objective,
-        "termination": attempt["termination"], "error": attempt["error"], "steps": attempt["steps"],
+        "episode_id": _episode_id(run_id, task, attempt), "env_name": env_name, "task_name": task.id,
+        "total_reward": 0.0, "total_steps": len(attempt["steps"]),
+        "steps": [
+            {"step_index": index, "command": step_text(turn["step"]), "action": turn["step"],
+             "ok": turn["ok"], "output": turn["output"], "error": turn["error"]}
+            for index, turn in enumerate(attempt["steps"])
+        ],
+        "prompt": task.objective, "termination": attempt["termination"], "error": attempt["error"],
         "checks": attempt["checks"], "failed_checks": attempt["labels"]["failed_checks"], "labels": attempt["labels"],
     }
+
+
+def _episode_id(run_id: str, task: SyntheticTask, attempt: dict) -> str:
+    return f"{run_id}/{task.id}/{attempt['attempt_index']}"
 
 
 def _messages(task: SyntheticTask, attempt: dict) -> list[dict]:

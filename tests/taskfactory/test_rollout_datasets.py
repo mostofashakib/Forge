@@ -115,26 +115,66 @@ def test_preference_makes_no_pair_for_a_task_with_only_passes_or_only_fails():
     assert rows == []
 
 
-def test_sft_keeps_passing_attempts_from_frontier_tasks_only():
+def test_grpo_rows_carry_every_column_the_episode_grpo_writer_writes():
+    row = dataset_rows("grpo", [_calibrated(2, [True, False])], **RUN)[0]
+
+    writer_columns = {
+        "episode_id", "env_name", "task_name", "seed", "agent_id", "prompt", "completion", "total_reward", "passed",
+        "total_steps", "per_step_rewards", "behavior_model", "termination_reason", "verification_results",
+        "reward_breakdown",
+    }
+    assert writer_columns <= set(row)
+    assert row["agent_id"] == "ollama:m"
+    assert row["total_steps"] == 1
+
+
+def test_sft_has_one_row_per_step_of_each_passing_frontier_attempt():
     rows = dataset_rows("sft", RUN_TASKS, **RUN)
 
-    assert [(row["task_id"], row["attempt_index"]) for row in rows] == [("t-00002", 0), ("t-00003", 1), ("t-00003", 2)]
+    assert [(row["episode_id"], row["step_index"]) for row in rows] == [
+        ("cr_1/t-00002/0", 0), ("cr_1/t-00003/1", 0), ("cr_1/t-00003/2", 0),
+    ]
     assert rows[0]["messages"] == [
         {"role": "user", "content": "objective 2"}, {"role": "assistant", "content": "$ touch /done-0"},
     ]
+    assert rows[0]["total_reward"] == 1.0
 
 
-def test_failures_keep_every_failing_attempt_with_its_checks_and_labels():
+def test_a_later_sft_step_sees_the_steps_before_it():
+    calibrated = _calibrated(2, [True, False])
+    first = calibrated.attempts[0]["steps"][0]
+    calibrated.attempts[0]["steps"] = [first, {**first, "step": {"tool": "shell", "args": {"command": "ls /"}}}]
+
+    rows = dataset_rows("sft", [calibrated], **RUN)
+
+    assert [row["step_index"] for row in rows] == [0, 1]
+    assert rows[1]["messages"] == [
+        {"role": "user", "content": "objective 2\nPrevious actions:\n$ touch /done-0"},
+        {"role": "assistant", "content": "$ ls /"},
+    ]
+
+
+def test_failures_keep_every_failing_attempt_in_the_failure_writer_shape():
     rows = dataset_rows("failures", RUN_TASKS, **RUN)
 
-    assert [(row["task_id"], row["attempt_index"]) for row in rows] == [
-        ("t-00002", 1), ("t-00002", 2), ("t-00003", 0), ("t-00004", 0), ("t-00004", 1), ("t-00004", 2),
+    assert [row["episode_id"] for row in rows] == [
+        "cr_1/t-00002/1", "cr_1/t-00002/2", "cr_1/t-00003/0", "cr_1/t-00004/0", "cr_1/t-00004/1", "cr_1/t-00004/2",
     ]
     first = rows[0]
+    assert (first["env_name"], first["task_name"], first["total_reward"], first["total_steps"]) == ("ops", "t-00002", 0.0, 1)
+    assert first["steps"] == [{
+        "step_index": 0, "command": "$ touch /done-wrong-1",
+        "action": {"tool": "shell", "args": {"command": "touch /done-wrong-1"}}, "ok": True, "output": "", "error": "",
+    }]
+
+
+def test_a_failure_carries_its_failed_checks_and_labels():
+    first = dataset_rows("failures", RUN_TASKS, **RUN)[0]
+
+    assert first["prompt"] == "objective 2"
     assert first["failed_checks"] == ["done exists"]
     assert first["checks"] == [{"passed": False, "detail": "exit 1"}]
     assert first["labels"]["termination"] == "submitted"
-    assert first["steps"][0]["step"]["args"]["command"] == "touch /done-wrong-1"
 
 
 def test_every_format_is_known_and_another_is_refused():
