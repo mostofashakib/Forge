@@ -243,6 +243,27 @@ def test_exported_preference_pairs_compare_drafts_written_for_the_same_slot(clie
     }]
 
 
+def test_an_sft_export_completion_holds_each_golden_command(client):
+    batch_id = _batch_of(client, [_task("t-1", "Find the logs", ["ls /var/log", "cat /var/log/app.log"])])
+
+    item = client.get(f"/api/task-factory/batches/{batch_id}/export").json()["sft_items"][0]
+
+    assert item["completion"] == "$ ls /var/log\n$ cat /var/log/app.log"
+
+
+def test_an_exported_state_step_keeps_its_arguments(client):
+    from forge.taskfactory.schemas import GoldenStep
+
+    task = _task("t-1", "Archive e1", []).model_copy(update={
+        "golden": [GoldenStep(tool="/archive_email", args={"id": "e1"})],
+    })
+    batch_id = _batch_of(client, [task])
+
+    item = client.get(f"/api/task-factory/batches/{batch_id}/export").json()["sft_items"][0]
+
+    assert item["completion"] == '/archive_email {"id": "e1"}'
+
+
 def test_a_preference_batch_without_rejected_drafts_exports_no_pairs(client):
     with client.session_factory() as db:
         batch_id = task_registry.create_batch(

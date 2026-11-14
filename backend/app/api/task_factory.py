@@ -21,7 +21,7 @@ from forge.safety.config import SafetyConfigError
 from forge.settings import redis_url
 from forge.taskfactory.model_settings import VALIDATOR_VARS, TaskFactoryConfigError, require_sdks, resolve_models
 from forge.taskfactory.pipeline import MAX_COUNT, MAX_K, MIN_COUNT, MIN_K, preference_pairs
-from forge.taskfactory.rollout_datasets import FORMATS
+from forge.taskfactory.rollout_datasets import FORMATS, step_text
 from forge.taskfactory.schemas import FAMILY_EDGE_CASES, SyntheticTask, TaskRejection
 from forge.taskfactory.slots import edge_case_problems
 
@@ -188,7 +188,7 @@ def judge_task(batch_id: str, task_id: str, body: JudgmentRequest, db: Session =
 
 
 def _commands(steps: list[dict]) -> str:
-    return "\n".join(step.get("command") or step.get("tool", "") for step in steps)
+    return "\n".join(step_text(step) for step in steps)
 
 
 def _exported_pairs(detail: dict) -> list[dict]:

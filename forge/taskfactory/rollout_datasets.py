@@ -100,10 +100,12 @@ def _messages(task: SyntheticTask, attempt: dict) -> list[dict]:
 
 
 def _completion(attempt: dict) -> str:
-    return "\n".join(_line(turn["step"]) for turn in attempt["steps"])
+    return "\n".join(step_text(turn["step"]) for turn in attempt["steps"])
 
 
-def _line(step: dict) -> str:
+def step_text(step: dict) -> str:
+    """One step as a line of a completion: a shell command, or a tool with its arguments."""
+    args = step.get("args") or {}
     if step["tool"] == "shell":
-        return f"$ {step['args'].get('command', '')}"
-    return f"{step['tool']} {json.dumps(step['args'])}"
+        return f"$ {args.get('command', '')}"
+    return f"{step['tool']} {json.dumps(args)}" if args else step["tool"]
