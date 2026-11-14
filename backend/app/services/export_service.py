@@ -37,7 +37,7 @@ def run_export(export_job_id: str, db: Session) -> None:
                 continue
             writer(job.env_name, db, out_dir, gate)
 
-        # Write standard dataset manifest for consumers like Autotune
+        # Write the standard dataset manifest that describes this export
         manifest = {
             "manifest_version": "1.0.0",
             "export_job_id": export_job_id,

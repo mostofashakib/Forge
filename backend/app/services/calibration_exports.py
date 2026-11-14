@@ -1,6 +1,6 @@
 """A calibration run's attempts as a training dataset: one data file and its manifest, zipped.
 
-File names match what Autotune reads from a Forge bundle. Tasks a person
+File names match the episode export writers in `export_writers/`. Tasks a person
 marked unfair, and suspect tasks nobody has marked hard, stay out, as they do
 in the batch export. Every row passes the safety gate before it is written.
 """
