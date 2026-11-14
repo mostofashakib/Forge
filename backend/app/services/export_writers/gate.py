@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 
 from forge.safety.config import safety_service_from_env
@@ -47,6 +48,13 @@ class DatasetGate:
         with self._quarantine_path.open("a") as handle:
             handle.write(json.dumps(entry) + "\n")
         return None
+
+    def admitted(self, records: Iterable[dict], source: str) -> Iterator[dict]:
+        """The scrubbed rows that may enter the dataset, in order. Flagged rows go to quarantine."""
+        for record in records:
+            kept = self.admit(record, source)
+            if kept is not None:
+                yield kept
 
     def stats(self) -> dict:
         return {

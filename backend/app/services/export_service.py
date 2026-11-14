@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from backend.app.models import ExportJob
 from backend.app.services.export_writers import WRITERS
 from backend.app.services.export_writers.gate import QUARANTINE_FILE, gate_from_env
+from backend.app.services.export_writers.manifest import MANIFEST_FILE, dataset_manifest
 from forge.safety.types import DataSource
 from forge.settings import generated_envs_root
 
@@ -37,20 +38,17 @@ def run_export(export_job_id: str, db: Session) -> None:
                 continue
             writer(job.env_name, db, out_dir, gate)
 
-        # Write the standard dataset manifest that describes this export
-        manifest = {
-            "manifest_version": "1.0.0",
-            "export_job_id": export_job_id,
-            "env_name": job.env_name,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "formats": formats,
-            "files": sorted(
+        manifest = dataset_manifest(
+            files=sorted(
                 f.name for f in out_dir.iterdir()
-                if f.is_file() and f.name not in ("dataset_manifest.json", QUARANTINE_FILE)
+                if f.is_file() and f.name not in (MANIFEST_FILE, QUARANTINE_FILE)
             ),
-            "safety": gate.stats(),
-        }
-        (out_dir / "dataset_manifest.json").write_text(json.dumps(manifest, indent=2))
+            safety=gate.stats(),
+            export_job_id=export_job_id,
+            env_name=job.env_name,
+            formats=formats,
+        )
+        (out_dir / MANIFEST_FILE).write_text(json.dumps(manifest, indent=2))
 
         job.output_path = str(out_dir)
         job.status = "completed"

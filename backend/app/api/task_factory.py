@@ -9,19 +9,19 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from backend.app.api._guards import batch_run, live_batch, screening_gate
 from backend.app.api._pubsub_relay import stream_channel
 from backend.app.database import get_db, get_session_factory
-from backend.app.models import CalibrationRun, TaskBatch
+from backend.app.models import TaskBatch
 from backend.app.services import calibration_exports, task_judgments, task_registry
-from backend.app.services.download_gate import download_gate
 from backend.app.services.env_file import environ_with_saved
 from backend.app.services.task_factory_targets import list_targets
 from backend.app.worker.task_factory import channel_for, create_task_batch_task
-from forge.safety.config import SafetyConfigError
+from forge.contracts.dataset_rows import steps_text
 from forge.settings import redis_url
 from forge.taskfactory.model_settings import VALIDATOR_VARS, TaskFactoryConfigError, require_sdks, resolve_models
 from forge.taskfactory.pipeline import MAX_COUNT, MAX_K, MIN_COUNT, MIN_K, preference_pairs
-from forge.taskfactory.rollout_datasets import FORMATS, step_text
+from forge.taskfactory.rollout_datasets import FORMATS
 from forge.taskfactory.schemas import FAMILY_EDGE_CASES, SyntheticTask, TaskRejection
 from forge.taskfactory.slots import edge_case_problems
 
@@ -119,19 +119,13 @@ def export_batch(
         raise HTTPException(status_code=404, detail="batch not found")
     if detail["version"] is None:
         raise HTTPException(status_code=409, detail="only a saved batch can be exported")
-    try:
-        gate = download_gate(detail["env_name"], f"batch-{batch_id}")
-    except SafetyConfigError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    gate = screening_gate(detail["env_name"], f"batch-{batch_id}")
     held = task_judgments.held_out(db, batch_id)
     detail["held_out"] = [{"task_id": task_id, "reason": reason} for task_id, reason in sorted(held.items())]
     detail["tasks"] = [task for task in detail.get("tasks", []) if task["id"] not in held]
     # Every task and rejected draft is a dataset row, screened before pairs are built from them.
     for rows, kind in (("tasks", "task"), ("rejections", "rejection")):
-        detail[rows] = [
-            kept for row in detail.get(rows, [])
-            if (kept := gate.admit(row, f"batch {batch_id} {kind}")) is not None
-        ]
+        detail[rows] = list(gate.admitted(detail.get(rows, []), f"batch {batch_id} {kind}"))
     data_type = detail.get("data_type", "rl_tasks")
     if data_type == "preference_pairs":
         detail["preference_pairs"] = _exported_pairs(detail)
@@ -139,7 +133,7 @@ def export_batch(
         detail["sft_items"] = [
             {
                 "prompt": task.get("objective", ""),
-                "completion": _commands(task.get("golden", [])),
+                "completion": steps_text(task.get("golden", [])),
                 "trajectory": task.get("golden", []),
                 "metadata": {"task_id": task.get("id"), "difficulty": task.get("difficulty")},
             }
@@ -154,20 +148,13 @@ def export_batch(
 
 def _export_calibration(db: Session, batch_id: str, run_id: str, dataset_format: str | None) -> Response:
     """A calibration run's attempts in one training format, zipped with its manifest."""
-    batch = db.get(TaskBatch, batch_id)
-    if batch is None or batch.deleted_at is not None:
-        raise HTTPException(status_code=404, detail="batch not found")
-    run = db.get(CalibrationRun, run_id)
-    if run is None or run.batch_id != batch_id:
-        raise HTTPException(status_code=404, detail="calibration not found")
+    batch = live_batch(db, batch_id)
+    run = batch_run(db, batch_id, run_id)
     if dataset_format not in FORMATS:
         raise HTTPException(status_code=422, detail=f"format must be one of {', '.join(FORMATS)}")
     if run.status != "complete":
         raise HTTPException(status_code=409, detail=f"only a complete calibration can be exported, this one is {run.status}")
-    try:
-        gate = download_gate(batch.env_name, f"calibration-{run_id}")
-    except SafetyConfigError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    gate = screening_gate(batch.env_name, f"calibration-{run_id}")
     data = calibration_exports.bundle(db, batch, run, dataset_format, gate)
     filename = f"{batch.env_name}-v{batch.version}-{run_id}-{dataset_format}.zip"
     return Response(
@@ -177,18 +164,12 @@ def _export_calibration(db: Session, batch_id: str, run_id: str, dataset_format:
 
 @router.put("/batches/{batch_id}/tasks/{task_id}/judgment")
 def judge_task(batch_id: str, task_id: str, body: JudgmentRequest, db: Session = Depends(get_db)) -> dict:
-    batch = db.get(TaskBatch, batch_id)
-    if batch is None or batch.deleted_at is not None:
-        raise HTTPException(status_code=404, detail="batch not found")
+    live_batch(db, batch_id)
     try:
         task_judgments.judge(db, batch_id, task_id, body.verdict)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return {"task_id": task_id, "verdict": body.verdict}
-
-
-def _commands(steps: list[dict]) -> str:
-    return "\n".join(step_text(step) for step in steps)
 
 
 def _exported_pairs(detail: dict) -> list[dict]:
@@ -200,8 +181,8 @@ def _exported_pairs(detail: dict) -> list[dict]:
     return [
         {
             "prompt": pair.task_prompt,
-            "preferred_response": _commands(pair.preferred["golden"]),
-            "dispreferred_response": _commands(pair.dispreferred["golden"]),
+            "preferred_response": steps_text(pair.preferred["golden"]),
+            "dispreferred_response": steps_text(pair.dispreferred["golden"]),
             "metadata": {
                 "task_id": pair.preferred["id"],
                 "difficulty": pair.difficulty,
@@ -214,9 +195,7 @@ def _exported_pairs(detail: dict) -> list[dict]:
 
 @router.delete("/batches/{batch_id}", status_code=204)
 def delete_batch(batch_id: str, db: Session = Depends(get_db)) -> Response:
-    batch = db.get(TaskBatch, batch_id)
-    if batch is None or batch.deleted_at is not None:
-        raise HTTPException(status_code=404, detail="batch not found")
+    batch = live_batch(db, batch_id)
     if batch.status not in _FINISHED:
         raise HTTPException(status_code=409, detail="a batch can be deleted once it finishes")
     task_registry.delete_batch(db, batch_id)

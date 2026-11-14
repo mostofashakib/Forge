@@ -4,6 +4,7 @@ from __future__ import annotations
 import pytest
 
 from forge.contracts import RolloutRecord
+from forge.contracts.dataset_rows import RolloutRow
 from forge.taskfactory.rollout_datasets import FORMATS, Calibrated, dataset_rows
 from forge.taskfactory.schemas import (
     Check,
@@ -115,15 +116,10 @@ def test_preference_makes_no_pair_for_a_task_with_only_passes_or_only_fails():
     assert rows == []
 
 
-def test_grpo_rows_carry_every_column_the_episode_grpo_writer_writes():
+def test_grpo_rows_are_the_shared_rollout_row_with_the_target_as_agent():
     row = dataset_rows("grpo", [_calibrated(2, [True, False])], **RUN)[0]
 
-    writer_columns = {
-        "episode_id", "env_name", "task_name", "seed", "agent_id", "prompt", "completion", "total_reward", "passed",
-        "total_steps", "per_step_rewards", "behavior_model", "termination_reason", "verification_results",
-        "reward_breakdown",
-    }
-    assert writer_columns <= set(row)
+    assert list(row) == list(RolloutRow.model_fields)
     assert row["agent_id"] == "ollama:m"
     assert row["total_steps"] == 1
 

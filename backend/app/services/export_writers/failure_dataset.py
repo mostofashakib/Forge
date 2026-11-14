@@ -1,10 +1,20 @@
 from __future__ import annotations
+
 import json
+from collections.abc import Iterator
 from pathlib import Path
+
 from sqlalchemy.orm import Session
-from .gate import DatasetGate
+
+from forge.contracts.dataset_rows import FailureEpisode, action_command
+
 from ._queries import get_episodes, get_steps_by_episode
-from .common import action_to_command
+from .files import write_jsonl
+from .gate import DatasetGate
+
+
+class EpisodeFailure(FailureEpisode):
+    seed: int
 
 
 def write(env_name: str, db: Session, out_dir: Path, gate: DatasetGate) -> None:
@@ -13,43 +23,39 @@ def write(env_name: str, db: Session, out_dir: Path, gate: DatasetGate) -> None:
     Each record includes step-level actions, rewards, and verifier diagnostics
     so failure modes can be studied or used for contrastive/adversarial training.
     """
-    episodes = get_episodes(env_name, db)
+    write_jsonl(out_dir / "failure_dataset.jsonl", gate.admitted(_rows(env_name, db), "failure_dataset"))
+
+
+def _rows(env_name: str, db: Session) -> Iterator[dict]:
     steps_by_episode = get_steps_by_episode(env_name, db)
-    with (out_dir / "failure_dataset.jsonl").open("w") as f:
-        for ep in episodes:
-            if ep.passed:
-                continue
-            steps = steps_by_episode.get(ep.id, [])
-            step_records = []
-            for s in steps:
-                try:
-                    action = json.loads(s.action) if s.action else {}
-                except (json.JSONDecodeError, TypeError):
-                    action = {}
-                try:
-                    verifier = json.loads(s.verifier_results) if s.verifier_results else []
-                except (json.JSONDecodeError, TypeError):
-                    verifier = []
+    for ep in get_episodes(env_name, db):
+        if ep.passed:
+            continue
+        yield EpisodeFailure(
+            episode_id=ep.id,
+            env_name=ep.env_name,
+            task_name=ep.task_name,
+            seed=ep.seed,
+            total_reward=ep.total_reward,
+            total_steps=ep.total_steps,
+            steps=[_step(s) for s in steps_by_episode.get(ep.id, [])],
+        ).model_dump()
 
-                step_records.append({
-                    "step_index": s.step_index,
-                    "command": action_to_command(s.action),
-                    "action": action,
-                    "reward": s.reward,
-                    "verifier_results": verifier,
-                    "terminated": s.terminated,
-                    "truncated": s.truncated,
-                })
 
-            record = {
-                "episode_id": ep.id,
-                "env_name": ep.env_name,
-                "task_name": ep.task_name,
-                "seed": ep.seed,
-                "total_reward": ep.total_reward,
-                "total_steps": ep.total_steps,
-                "steps": step_records,
-            }
-            row = gate.admit(record, "failure_dataset")
-            if row is not None:
-                f.write(json.dumps(row) + "\n")
+def _step(s) -> dict:
+    return {
+        "step_index": s.step_index,
+        "command": action_command(s.action),
+        "action": _json(s.action, {}),
+        "reward": s.reward,
+        "verifier_results": _json(s.verifier_results, []),
+        "terminated": s.terminated,
+        "truncated": s.truncated,
+    }
+
+
+def _json(raw: str, empty):
+    try:
+        return json.loads(raw) if raw else empty
+    except (json.JSONDecodeError, TypeError):
+        return empty

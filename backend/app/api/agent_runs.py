@@ -10,11 +10,11 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from backend.app.api._guards import screening_gate
 from backend.app.database import get_db
 from backend.app.models import AgentRun, AgentEpisode, SandboxEnvironment
-from backend.app.services.download_gate import download_gate, screened_lines
+from backend.app.services.download_gate import screened_lines
 from backend.app.services.trajectory_files import iter_trajectory_lines, read_trajectory
-from forge.safety.config import SafetyConfigError
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/sandbox", tags=["agent-runs"])
@@ -193,10 +193,7 @@ def get_trajectory(env_name: str, run_id: str, episode_id: str, db: Session = De
 def export_trajectories(env_name: str, run_id: str, db: Session = Depends(get_db)):
     """Return all completed episode trajectories concatenated as JSONL text, screened row by row."""
     _require_run(env_name, run_id, db)
-    try:
-        gate = download_gate(env_name, f"run-{run_id[:8]}")
-    except SafetyConfigError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    gate = screening_gate(env_name, f"run-{run_id[:8]}")
 
     paths = (
         db.query(AgentEpisode.jsonl_path)

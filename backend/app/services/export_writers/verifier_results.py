@@ -1,23 +1,26 @@
 from __future__ import annotations
+
 import json
+from collections.abc import Iterator
 from pathlib import Path
+
 from sqlalchemy.orm import Session
-from .gate import DatasetGate
+
 from ._queries import get_episodes, get_steps_by_episode
+from .files import write_jsonl
+from .gate import DatasetGate
 
 
 def write(env_name: str, db: Session, out_dir: Path, gate: DatasetGate) -> None:
-    episodes = get_episodes(env_name, db)
+    write_jsonl(out_dir / "verifier_results.jsonl", gate.admitted(_rows(env_name, db), "verifier_results"))
+
+
+def _rows(env_name: str, db: Session) -> Iterator[dict]:
     steps_by_episode = get_steps_by_episode(env_name, db)
-    with (out_dir / "verifier_results.jsonl").open("w") as f:
-        for ep in episodes:
-            steps = steps_by_episode.get(ep.id, [])
-            for s in steps:
-                record = {
-                    "episode_id": ep.id,
-                    "step_index": s.step_index,
-                    "results": json.loads(s.verifier_results),
-                }
-                row = gate.admit(record, "verifier_results")
-                if row is not None:
-                    f.write(json.dumps(row) + "\n")
+    for ep in get_episodes(env_name, db):
+        for s in steps_by_episode.get(ep.id, []):
+            yield {
+                "episode_id": ep.id,
+                "step_index": s.step_index,
+                "results": json.loads(s.verifier_results),
+            }
