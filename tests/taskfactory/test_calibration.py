@@ -4,11 +4,14 @@ from __future__ import annotations
 import pytest
 
 from forge.taskfactory.calibration import (
+    FRONTIER_MAX,
+    FRONTIER_MIN,
     MAX_ATTEMPTS,
     TaskRate,
     attempt_count_problem,
     band,
     calibration_summary,
+    classify,
 )
 
 
@@ -29,6 +32,28 @@ def test_a_task_solved_sometimes_is_on_the_frontier(passed):
 def test_impossible_counts_are_rejected(passed, attempts):
     with pytest.raises(ValueError):
         band(passed=passed, attempts=attempts)
+
+
+def test_the_frontier_is_solved_at_least_once_and_failed_at_least_once():
+    # D4: start with 0 < solve rate < 1, both bounds exclusive.
+    assert (FRONTIER_MIN, FRONTIER_MAX) == (0.0, 1.0)
+
+
+@pytest.mark.parametrize("rate, expected", [
+    (FRONTIER_MIN, "unsolved"),
+    (FRONTIER_MIN + 0.01, "frontier"),
+    (0.5, "frontier"),
+    (FRONTIER_MAX - 0.01, "frontier"),
+    (FRONTIER_MAX, "too_easy"),
+])
+def test_classify_puts_each_band_edge_in_one_band(rate, expected):
+    assert classify(rate) == expected
+
+
+@pytest.mark.parametrize("rate", [-0.1, 1.1])
+def test_classify_rejects_a_rate_outside_zero_to_one(rate):
+    with pytest.raises(ValueError):
+        classify(rate)
 
 
 def test_attempts_are_capped_at_five():

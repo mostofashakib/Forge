@@ -142,6 +142,20 @@ def test_a_tasks_attempts_come_back_in_order_with_their_steps(db):
     assert attempts[0]["labels"]["failed_checks"] == ["x is 1"]
 
 
+def test_a_runs_attempts_come_grouped_by_task_in_the_task_attempts_shape(db):
+    tasks = [_task(1), _task(2)]
+    run_id = calibration_registry.create_run(db, batch_id=_saved_batch(db, tasks), target_model="ollama:m", attempts=2)
+    calibration_registry.record_attempts(db, run_id, tasks[1], [_attempt(True), _attempt(False)])
+    calibration_registry.record_attempts(db, run_id, tasks[0], [_attempt(False), _attempt(False)])
+
+    grouped = calibration_registry.attempts_by_task(db, run_id)
+
+    assert sorted(grouped) == ["t-00001", "t-00002"]
+    assert grouped["t-00002"] == calibration_registry.task_attempts(db, run_id, "t-00002")
+    assert [a["attempt_index"] for a in grouped["t-00002"]] == [0, 1]
+    assert calibration_registry.attempts_by_task(db, "cr_missing") == {}
+
+
 def test_an_unknown_run_or_task_has_no_detail(db):
     assert calibration_registry.get_run(db, "cr_missing") is None
     assert calibration_registry.task_attempts(db, "cr_missing", "t-00001") == []

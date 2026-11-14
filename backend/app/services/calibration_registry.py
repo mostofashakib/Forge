@@ -94,15 +94,23 @@ def get_run(db: Session, run_id: str) -> dict | None:
 
 
 def task_attempts(db: Session, run_id: str, task_id: str) -> list[dict]:
-    rows = [row for row in _rows(db, run_id) if row.task_id == task_id]
-    return [
-        {
-            "attempt_index": row.attempt_index, "passed": row.passed, "termination": row.termination,
-            "error": row.error, "steps": json.loads(row.steps_json), "checks": json.loads(row.checks_json),
-            "labels": json.loads(row.labels_json),
-        }
-        for row in rows
-    ]
+    return [_attempt(row) for row in _rows(db, run_id) if row.task_id == task_id]
+
+
+def attempts_by_task(db: Session, run_id: str) -> dict[str, list[dict]]:
+    """Every attempt of a run, grouped by task, each in the `task_attempts` shape."""
+    grouped: dict[str, list[dict]] = {}
+    for row in _rows(db, run_id):
+        grouped.setdefault(row.task_id, []).append(_attempt(row))
+    return grouped
+
+
+def _attempt(row: CalibrationAttempt) -> dict:
+    return {
+        "attempt_index": row.attempt_index, "passed": row.passed, "termination": row.termination,
+        "error": row.error, "steps": json.loads(row.steps_json), "checks": json.loads(row.checks_json),
+        "labels": json.loads(row.labels_json),
+    }
 
 
 def suspect_tasks(db: Session, batch_id: str) -> dict[str, tuple[str, list[str]]]:

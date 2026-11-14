@@ -4,15 +4,15 @@ from __future__ import annotations
 import logging
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Response, WebSocket
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, WebSocket
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from backend.app.api._pubsub_relay import stream_channel
 from backend.app.database import get_db, get_session_factory
-from backend.app.models import TaskBatch
-from backend.app.services import task_judgments, task_registry
+from backend.app.models import CalibrationRun, TaskBatch
+from backend.app.services import calibration_exports, task_judgments, task_registry
 from backend.app.services.download_gate import download_gate
 from backend.app.services.env_file import environ_with_saved
 from backend.app.services.task_factory_targets import list_targets
@@ -21,6 +21,7 @@ from forge.safety.config import SafetyConfigError
 from forge.settings import redis_url
 from forge.taskfactory.model_settings import VALIDATOR_VARS, TaskFactoryConfigError, require_sdks, resolve_models
 from forge.taskfactory.pipeline import MAX_COUNT, MAX_K, MIN_COUNT, MIN_K, preference_pairs
+from forge.taskfactory.rollout_datasets import FORMATS, step_text
 from forge.taskfactory.schemas import FAMILY_EDGE_CASES, SyntheticTask, TaskRejection
 from forge.taskfactory.slots import edge_case_problems
 
@@ -105,7 +106,14 @@ def get_batch(batch_id: str, db: Session = Depends(get_db)) -> dict:
 
 
 @router.get("/batches/{batch_id}/export")
-def export_batch(batch_id: str, db: Session = Depends(get_db)) -> JSONResponse:
+def export_batch(
+    batch_id: str,
+    calibration: str | None = None,
+    dataset_format: str | None = Query(default=None, alias="format"),
+    db: Session = Depends(get_db),
+) -> Response:
+    if calibration is not None:
+        return _export_calibration(db, batch_id, calibration, dataset_format)
     detail = task_registry.get_batch(db, batch_id)
     if detail is None:
         raise HTTPException(status_code=404, detail="batch not found")
@@ -144,6 +152,29 @@ def export_batch(batch_id: str, db: Session = Depends(get_db)) -> JSONResponse:
     return JSONResponse(detail, headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
 
+def _export_calibration(db: Session, batch_id: str, run_id: str, dataset_format: str | None) -> Response:
+    """A calibration run's attempts in one training format, zipped with its manifest."""
+    batch = db.get(TaskBatch, batch_id)
+    if batch is None or batch.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="batch not found")
+    run = db.get(CalibrationRun, run_id)
+    if run is None or run.batch_id != batch_id:
+        raise HTTPException(status_code=404, detail="calibration not found")
+    if dataset_format not in FORMATS:
+        raise HTTPException(status_code=422, detail=f"format must be one of {', '.join(FORMATS)}")
+    if run.status != "complete":
+        raise HTTPException(status_code=409, detail=f"only a complete calibration can be exported, this one is {run.status}")
+    try:
+        gate = download_gate(batch.env_name, f"calibration-{run_id}")
+    except SafetyConfigError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    data = calibration_exports.bundle(db, batch, run, dataset_format, gate)
+    filename = f"{batch.env_name}-v{batch.version}-{run_id}-{dataset_format}.zip"
+    return Response(
+        data, media_type="application/zip", headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @router.put("/batches/{batch_id}/tasks/{task_id}/judgment")
 def judge_task(batch_id: str, task_id: str, body: JudgmentRequest, db: Session = Depends(get_db)) -> dict:
     batch = db.get(TaskBatch, batch_id)
@@ -157,7 +188,7 @@ def judge_task(batch_id: str, task_id: str, body: JudgmentRequest, db: Session =
 
 
 def _commands(steps: list[dict]) -> str:
-    return "\n".join(step.get("command") or step.get("tool", "") for step in steps)
+    return "\n".join(step_text(step) for step in steps)
 
 
 def _exported_pairs(detail: dict) -> list[dict]:

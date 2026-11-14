@@ -15,6 +15,9 @@ Band = Literal["too_easy", "frontier", "unsolved", "suspect"]
 BANDS: tuple[Band, ...] = ("too_easy", "frontier", "unsolved", "suspect")
 # At most five attempts per task.
 MIN_ATTEMPTS, MAX_ATTEMPTS = 1, 5
+# D4: the frontier is every solve rate strictly between these bounds. Tighten
+# them once experiments show where training data helps most.
+FRONTIER_MIN, FRONTIER_MAX = 0.0, 1.0
 
 
 @dataclass(frozen=True)
@@ -48,9 +51,15 @@ def attempt_count_problem(attempts: int) -> str | None:
 def band(passed: int, attempts: int) -> Band:
     if attempts < 1 or not 0 <= passed <= attempts:
         raise ValueError(f"{passed} passes out of {attempts} attempts is not a result")
-    if passed == attempts:
+    return classify(passed / attempts)
+
+
+def classify(solve_rate: float) -> Band:
+    if not 0 <= solve_rate <= 1:
+        raise ValueError(f"a solve rate is 0 to 1, got {solve_rate}")
+    if solve_rate >= FRONTIER_MAX:
         return "too_easy"
-    return "unsolved" if passed == 0 else "frontier"
+    return "unsolved" if solve_rate <= FRONTIER_MIN else "frontier"
 
 
 def calibration_summary(rates: Sequence[TaskRate]) -> dict:
