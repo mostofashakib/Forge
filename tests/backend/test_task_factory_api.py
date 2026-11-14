@@ -1,16 +1,20 @@
 """The task factory API: pick an environment and a count, then browse versions."""
 from __future__ import annotations
 
+import io
 import json
+import zipfile
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
+import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
 
 from backend.app.main import app
 from backend.app.models import SandboxEnvironment
-from backend.app.services import env_file, task_registry
+from backend.app.services import calibration_registry, env_file, task_registry
+from forge.taskfactory.calibration import FRONTIER_MAX, FRONTIER_MIN
 from forge.taskfactory.model_settings import ModelSpec
 from forge.taskfactory.pipeline import PipelineResult
 from forge.taskfactory.schemas import Taxonomy, TaxonomyCategory
@@ -454,3 +458,146 @@ def test_a_task_marked_unfair_leaves_the_export(client):
 
     assert body["tasks"] == []
     assert sorted(held["task_id"] for held in body["held_out"]) == ["t-00001", "t-00002"]
+
+
+# Calibration exports: a run's attempts as training data, through the batch export route.
+
+FILES = {
+    "grpo": "grpo_rollouts.parquet", "preference": "preference_pairs.jsonl",
+    "sft": "sft_pairs.jsonl", "failures": "failure_dataset.jsonl",
+}
+
+
+def _calibrated_batch(client, *, complete: bool = True) -> tuple[str, str]:
+    """t-00001 is suspect, t-00002 is on the frontier, t-00003 is too easy."""
+    from tests.backend.test_calibration_registry import _attempt, _task
+
+    tasks = [_task(1), _task(2), _task(3)]
+    taxonomy = Taxonomy(categories=[TaxonomyCategory(name="triage", description="sort", exercises=[], difficulties=[1])])
+    with client.session_factory() as db:
+        batch_id = task_registry.create_batch(
+            db, env_name="mail", requested=3, pass_k=3,
+            writer=ModelSpec("anthropic", "claude-sonnet-5"), validator=ModelSpec("openai", "gpt-5"),
+        )
+        task_registry.save_result(db, batch_id, PipelineResult(requested=3, taxonomy=taxonomy, tasks=tasks))
+        run_id = calibration_registry.create_run(db, batch_id=batch_id, target_model="ollama:m", attempts=3)
+        calibration_registry.record_attempts(db, run_id, tasks[0], [_attempt(False)] * 3)
+        calibration_registry.record_attempts(db, run_id, tasks[1], [_attempt(True), _attempt(False), _attempt(False)])
+        calibration_registry.record_attempts(db, run_id, tasks[2], [_attempt(True)] * 3)
+        if complete:
+            calibration_registry.complete_run(db, run_id)
+    return batch_id, run_id
+
+
+def _export(client, batch_id: str, run_id: str, fmt: str):
+    return client.get(f"/api/task-factory/batches/{batch_id}/export", params={"calibration": run_id, "format": fmt})
+
+
+def _bundle(resp) -> tuple[dict, list[dict]]:
+    """The manifest and the dataset rows of an exported zip."""
+    archive = zipfile.ZipFile(io.BytesIO(resp.content))
+    manifest = json.loads(archive.read("dataset_manifest.json"))
+    (name,) = manifest["files"]
+    data = archive.read(name)
+    if name.endswith(".parquet"):
+        return manifest, pd.read_parquet(io.BytesIO(data)).to_dict("records")
+    return manifest, [json.loads(line) for line in data.decode().splitlines()]
+
+
+@pytest.mark.parametrize("fmt", sorted(FILES))
+def test_each_format_downloads_as_a_zip_with_its_file_and_a_manifest(client, fmt):
+    batch_id, run_id = _calibrated_batch(client)
+
+    resp = _export(client, batch_id, run_id, fmt)
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "application/zip"
+    assert f"{fmt}" in resp.headers["content-disposition"]
+    names = zipfile.ZipFile(io.BytesIO(resp.content)).namelist()
+    assert sorted(names) == sorted(["dataset_manifest.json", FILES[fmt]])
+
+
+def test_grpo_holds_one_group_for_the_frontier_task(client):
+    batch_id, run_id = _calibrated_batch(client)
+
+    _, rows = _bundle(_export(client, batch_id, run_id, "grpo"))
+
+    assert [(row["task_name"], row["total_reward"]) for row in rows] == [
+        ("t-00002", 1.0), ("t-00002", 0.0), ("t-00002", 0.0),
+    ]
+
+
+def test_the_manifest_names_the_run_the_model_and_the_band(client):
+    batch_id, run_id = _calibrated_batch(client)
+
+    manifest, rows = _bundle(_export(client, batch_id, run_id, "preference"))
+
+    assert manifest["source"] == "model_rollouts"
+    assert manifest["calibration_run_id"] == run_id
+    assert manifest["target_model"] == "ollama:m"
+    assert manifest["attempts_per_task"] == 3
+    assert manifest["frontier"] == {"min": FRONTIER_MIN, "max": FRONTIER_MAX}
+    assert manifest["format"] == "preference" and manifest["batch_id"] == batch_id
+    assert manifest["rows"] == len(rows) == 2
+    assert manifest["safety"]["rows_seen"] == 2
+
+
+def test_a_suspect_task_stays_out_until_a_person_marks_it_hard(client):
+    batch_id, run_id = _calibrated_batch(client)
+
+    before, before_rows = _bundle(_export(client, batch_id, run_id, "failures"))
+    client.put(f"/api/task-factory/batches/{batch_id}/tasks/t-00001/judgment", json={"verdict": "hard"})
+    after, after_rows = _bundle(_export(client, batch_id, run_id, "failures"))
+
+    assert {row["task_id"] for row in before_rows} == {"t-00002"}
+    assert [held["task_id"] for held in before["held_out"]] == ["t-00001"]
+    assert {row["task_id"] for row in after_rows} == {"t-00001", "t-00002"}
+    assert after["held_out"] == []
+
+
+@pytest.mark.parametrize("fmt", sorted(FILES))
+def test_a_task_marked_unfair_is_missing_from_every_format(client, fmt):
+    batch_id, run_id = _calibrated_batch(client)
+    client.put(f"/api/task-factory/batches/{batch_id}/tasks/t-00002/judgment", json={"verdict": "unfair"})
+
+    manifest, rows = _bundle(_export(client, batch_id, run_id, fmt))
+
+    assert all("t-00002" not in json.dumps(row) for row in rows)
+    assert "t-00002" in {held["task_id"] for held in manifest["held_out"]}
+
+
+def test_a_run_that_has_not_finished_cannot_be_exported(client):
+    batch_id, run_id = _calibrated_batch(client, complete=False)
+
+    resp = _export(client, batch_id, run_id, "grpo")
+
+    assert resp.status_code == 409
+    assert "complete" in resp.json()["detail"]
+
+
+def test_a_run_of_another_batch_or_an_unknown_run_is_not_found(client):
+    batch_id, _ = _calibrated_batch(client)
+    _, other_run = _calibrated_batch(client)
+
+    assert _export(client, batch_id, other_run, "grpo").status_code == 404
+    assert _export(client, batch_id, "cr_missing", "grpo").status_code == 404
+
+
+def test_an_unknown_or_missing_format_is_refused(client):
+    batch_id, run_id = _calibrated_batch(client)
+
+    unknown = _export(client, batch_id, run_id, "dpo")
+    missing = client.get(f"/api/task-factory/batches/{batch_id}/export", params={"calibration": run_id})
+
+    assert unknown.status_code == 422 and "grpo, preference, sft, failures" in unknown.json()["detail"]
+    assert missing.status_code == 422
+
+
+def test_the_batch_export_without_a_calibration_is_unchanged(client):
+    batch_id, _ = _calibrated_batch(client)
+
+    resp = client.get(f"/api/task-factory/batches/{batch_id}/export")
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "application/json"
+    assert [task["id"] for task in resp.json()["tasks"]] == ["t-00002", "t-00003"]
