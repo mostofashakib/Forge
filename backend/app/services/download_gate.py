@@ -11,6 +11,7 @@ import logging
 from collections.abc import Iterable, Iterator
 from datetime import datetime, timezone
 
+from backend.app.services.export_writers.files import jsonl_lines
 from backend.app.services.export_writers.gate import DatasetGate, gate_from_env
 from forge.safety.types import DataSource
 from forge.settings import generated_envs_root
@@ -27,15 +28,17 @@ def download_gate(env_name: str, label: str) -> DatasetGate:
 
 def screened_lines(lines: Iterable[str], gate: DatasetGate, source: str) -> Iterator[str]:
     """JSONL lines that passed the gate, scrubbed. A line that is not a JSON object cannot be screened and is dropped."""
+    yield from jsonl_lines(gate.admitted(_records(lines, source), source))
+    logger.info("Screened download %s: %s", source, gate.stats())
+
+
+def _records(lines: Iterable[str], source: str) -> Iterator[dict]:
     for line in lines:
         try:
             record = json.loads(line)
         except ValueError:
             record = None
-        if not isinstance(record, dict):
+        if isinstance(record, dict):
+            yield record
+        else:
             logger.warning("Dropping an unscreenable trajectory line from %s", source)
-            continue
-        kept = gate.admit(record, source)
-        if kept is not None:
-            yield json.dumps(kept) + "\n"
-    logger.info("Screened download %s: %s", source, gate.stats())

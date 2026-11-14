@@ -1,10 +1,19 @@
 from __future__ import annotations
-import json
+
+from collections.abc import Iterator
 from pathlib import Path
+
 from sqlalchemy.orm import Session
-from .gate import DatasetGate
+
+from forge.contracts.dataset_rows import SftStep, action_line, step_exchanges
+
 from ._queries import get_episodes, get_steps_by_episode
-from .common import action_to_command
+from .files import write_jsonl
+from .gate import DatasetGate
+
+
+class EpisodeSftStep(SftStep):
+    step_reward: float
 
 
 def write(env_name: str, db: Session, out_dir: Path, gate: DatasetGate) -> None:
@@ -13,34 +22,18 @@ def write(env_name: str, db: Session, out_dir: Path, gate: DatasetGate) -> None:
     Format: messages array with user (task) and assistant (command sequence).
     Compatible with OpenAI fine-tuning, TRL SFTTrainer, and Axolotl.
     """
-    episodes = get_episodes(env_name, db)
+    write_jsonl(out_dir / "sft_pairs.jsonl", gate.admitted(_rows(env_name, db), "sft_pairs"))
+
+
+def _rows(env_name: str, db: Session) -> Iterator[dict]:
     steps_by_episode = get_steps_by_episode(env_name, db)
-    with (out_dir / "sft_pairs.jsonl").open("w") as f:
-        for ep in episodes:
-            if not ep.passed:
-                continue
-            steps = steps_by_episode.get(ep.id, [])
-            if not steps:
-                continue
-            command_history: list[str] = []
-            for step in steps:
-                command = action_to_command(step.action)
-                context = f"Task: {ep.task_name}\nEnvironment: {ep.env_name}"
-                if command_history:
-                    context += "\nPrevious actions:\n" + "\n".join(
-                        f"$ {previous}" for previous in command_history
-                    )
-                record = {
-                    "messages": [
-                        {"role": "user", "content": context},
-                        {"role": "assistant", "content": f"$ {command}"},
-                    ],
-                    "episode_id": ep.id,
-                    "step_index": step.step_index,
-                    "total_reward": ep.total_reward,
-                    "step_reward": step.reward,
-                }
-                row = gate.admit(record, "sft_pairs")
-                if row is not None:
-                    f.write(json.dumps(row) + "\n")
-                command_history.append(command)
+    for ep in get_episodes(env_name, db):
+        if not ep.passed:
+            continue
+        steps = steps_by_episode.get(ep.id, [])
+        prompt = f"Task: {ep.task_name}\nEnvironment: {ep.env_name}"
+        for step, messages in zip(steps, step_exchanges(prompt, [action_line(s.action) for s in steps])):
+            yield EpisodeSftStep(
+                messages=messages, episode_id=ep.id, step_index=step.step_index,
+                total_reward=ep.total_reward, step_reward=step.reward,
+            ).model_dump()
