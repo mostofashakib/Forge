@@ -71,7 +71,7 @@ def _jsonl(rows: list[dict]) -> str:
 
 def _parquet(rows: list[dict]) -> bytes:
     stored = [{**row, **{column: json.dumps(row[column]) for column in _JSON_COLUMNS}} for row in rows]
-    frame = pd.DataFrame(stored, columns=list(RolloutRecord.model_fields))
+    frame = pd.DataFrame(stored, columns=[*RolloutRecord.model_fields, "agent_id", "total_steps"])
     buffer = io.BytesIO()
     frame.to_parquet(buffer, index=False)
     return buffer.getvalue()

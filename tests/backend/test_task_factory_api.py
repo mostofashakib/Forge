@@ -548,6 +548,14 @@ def test_grpo_holds_one_group_for_the_frontier_task(client):
     ]
 
 
+def test_the_grpo_file_keeps_the_episode_writer_columns(client):
+    batch_id, run_id = _calibrated_batch(client)
+
+    _, rows = _bundle(_export(client, batch_id, run_id, "grpo"))
+
+    assert (rows[0]["agent_id"], rows[0]["total_steps"]) == ("ollama:m", 1)
+
+
 def test_the_manifest_names_the_run_the_model_and_the_band(client):
     batch_id, run_id = _calibrated_batch(client)
 
@@ -570,9 +578,9 @@ def test_a_suspect_task_stays_out_until_a_person_marks_it_hard(client):
     client.put(f"/api/task-factory/batches/{batch_id}/tasks/t-00001/judgment", json={"verdict": "hard"})
     after, after_rows = _bundle(_export(client, batch_id, run_id, "failures"))
 
-    assert {row["task_id"] for row in before_rows} == {"t-00002"}
+    assert {row["task_name"] for row in before_rows} == {"t-00002"}
     assert [held["task_id"] for held in before["held_out"]] == ["t-00001"]
-    assert {row["task_id"] for row in after_rows} == {"t-00001", "t-00002"}
+    assert {row["task_name"] for row in after_rows} == {"t-00001", "t-00002"}
     assert after["held_out"] == []
 
 
