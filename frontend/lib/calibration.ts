@@ -37,6 +37,9 @@ export type FailureSummary = {
   text: string;
 };
 
+// A person's call on an unsolved or suspect task: hard keeps it, unfair holds it out of exports.
+export type Judgment = "hard" | "unfair";
+
 export type TaskResult = {
   task_id: string;
   title: string;
@@ -48,6 +51,7 @@ export type TaskResult = {
   solve_rate: number;
   band: Band;
   failure_summary: FailureSummary | null;
+  judgment: Judgment | null;
 };
 
 export type BandCounts = Record<Band, number>;
@@ -95,4 +99,16 @@ export function histogramRows(histogram: Record<string, number>): { label: strin
 
 export function isActive(status: CalibrationRun["status"]): boolean {
   return status === "queued" || status === "running";
+}
+
+/** A task the model never solved needs a person to say whether it is hard or unfair. */
+export function needsJudgment(task: Pick<TaskResult, "band">): boolean {
+  return task.band === "unsolved" || task.band === "suspect";
+}
+
+/** What the batch export does with this task. Mirrors the API's held-out rule. */
+export function exportNote(task: Pick<TaskResult, "band" | "judgment">): string {
+  if (task.judgment === "unfair") return "Held out of exports.";
+  if (task.band === "suspect" && task.judgment !== "hard") return "Held out until you mark it hard.";
+  return "Exported.";
 }

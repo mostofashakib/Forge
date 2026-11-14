@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Response, WebSocket
 from fastapi.responses import JSONResponse
@@ -11,7 +12,7 @@ from sqlalchemy.orm import Session
 from backend.app.api._pubsub_relay import stream_channel
 from backend.app.database import get_db, get_session_factory
 from backend.app.models import TaskBatch
-from backend.app.services import task_registry
+from backend.app.services import task_judgments, task_registry
 from backend.app.services.download_gate import download_gate
 from backend.app.services.env_file import environ_with_saved
 from backend.app.services.task_factory_targets import list_targets
@@ -36,6 +37,10 @@ class CreateBatchRequest(BaseModel):
     k: int = Field(default=3, ge=MIN_K, le=MAX_K)
     data_type: str = Field(default="rl_tasks")
     edge_cases: list[str] = Field(default_factory=list)
+
+
+class JudgmentRequest(BaseModel):
+    verdict: Literal["hard", "unfair"]
 
 
 @router.get("/environments")
@@ -110,6 +115,9 @@ def export_batch(batch_id: str, db: Session = Depends(get_db)) -> JSONResponse:
         gate = download_gate(detail["env_name"], f"batch-{batch_id}")
     except SafetyConfigError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    held = task_judgments.held_out(db, batch_id)
+    detail["held_out"] = [{"task_id": task_id, "reason": reason} for task_id, reason in sorted(held.items())]
+    detail["tasks"] = [task for task in detail.get("tasks", []) if task["id"] not in held]
     # Every task and rejected draft is a dataset row, screened before pairs are built from them.
     for rows, kind in (("tasks", "task"), ("rejections", "rejection")):
         detail[rows] = [
@@ -134,6 +142,18 @@ def export_batch(batch_id: str, db: Session = Depends(get_db)) -> JSONResponse:
     date = (detail["created_at"] or "")[:10]
     filename = f"{detail['env_name']}-{data_type}-v{detail['version']}-{date}.json"
     return JSONResponse(detail, headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+@router.put("/batches/{batch_id}/tasks/{task_id}/judgment")
+def judge_task(batch_id: str, task_id: str, body: JudgmentRequest, db: Session = Depends(get_db)) -> dict:
+    batch = db.get(TaskBatch, batch_id)
+    if batch is None or batch.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="batch not found")
+    try:
+        task_judgments.judge(db, batch_id, task_id, body.verdict)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"task_id": task_id, "verdict": body.verdict}
 
 
 def _commands(steps: list[dict]) -> str:

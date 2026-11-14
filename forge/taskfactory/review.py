@@ -86,7 +86,30 @@ class TaskReviewer:
     def review(
         self, profile: EnvironmentProfile, tasks: Sequence[tuple[Slot, TaskDraft]]
     ) -> dict[int, ReviewVerdict]:
-        """Return the verdicts the reviewer gave, keyed by slot index."""
+        """Return the verdicts the reviewer gave, keyed by slot index.
+
+        Models sometimes leave the edge-case answer blank. Those tasks are asked
+        once more, and a second blank rejects the task as unanswered.
+        """
+        verdicts = self._verdicts(profile, tasks)
+        blank = [
+            (slot, draft) for slot, draft in tasks
+            if slot.edge_case and slot.index in verdicts and verdicts[slot.index].edge_case_ok is None
+        ]
+        if blank:
+            retried = self._verdicts(profile, blank)
+            for slot, _ in blank:
+                if slot.index in retried:
+                    verdicts[slot.index] = verdicts[slot.index].model_copy(update={
+                        "edge_case_ok": retried[slot.index].edge_case_ok,
+                        "edge_case_reason": retried[slot.index].edge_case_reason,
+                    })
+        slots = {slot.index: slot for slot, _ in tasks}
+        return {index: _settle_edge_case(verdict, slots[index]) for index, verdict in verdicts.items()}
+
+    def _verdicts(
+        self, profile: EnvironmentProfile, tasks: Sequence[tuple[Slot, TaskDraft]]
+    ) -> dict[int, ReviewVerdict]:
         verdicts: dict[int, ReviewVerdict] = {}
         for start in range(0, len(tasks), CHUNK_SIZE):
             chunk = tasks[start:start + CHUNK_SIZE]
@@ -95,12 +118,11 @@ class TaskReviewer:
             wanted = {slot.index: (slot, draft) for slot, draft in chunk}
             for answer in batch.verdicts:
                 if answer.slot in wanted and answer.slot not in verdicts:
-                    slot, draft = wanted[answer.slot]
-                    verdict = ReviewVerdict(
+                    _, draft = wanted[answer.slot]
+                    verdicts[answer.slot] = ReviewVerdict(
                         **answer.model_dump(exclude={"check_traces"}),
                         unstated_requirements=_unstated(answer.check_traces, draft),
                     )
-                    verdicts[answer.slot] = _settle_edge_case(verdict, slot)
         return verdicts
 
 

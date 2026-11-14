@@ -3,8 +3,10 @@ import { test } from "node:test";
 import {
   BAND_LABELS,
   MAX_ATTEMPTS,
+  exportNote,
   histogramRows,
   isActive,
+  needsJudgment,
   targetModelProblem,
 } from "../lib/calibration.ts";
 
@@ -46,4 +48,19 @@ test("only queued and running runs are polled", () => {
 
 test("every band has a label", () => {
   assert.deepEqual(Object.keys(BAND_LABELS).sort(), ["frontier", "suspect", "too_easy", "unsolved"]);
+});
+
+test("only unsolved and suspect tasks ask a person for a judgment", () => {
+  assert.equal(needsJudgment({ band: "suspect" }), true);
+  assert.equal(needsJudgment({ band: "unsolved" }), true);
+  assert.equal(needsJudgment({ band: "frontier" }), false);
+  assert.equal(needsJudgment({ band: "too_easy" }), false);
+});
+
+test("the export note says whether the task leaves the export and how to change it", () => {
+  assert.match(exportNote({ band: "suspect", judgment: null }), /held out until you mark it hard/i);
+  assert.match(exportNote({ band: "suspect", judgment: "hard" }), /exported/i);
+  assert.match(exportNote({ band: "unsolved", judgment: null }), /exported/i);
+  assert.match(exportNote({ band: "unsolved", judgment: "unfair" }), /held out/i);
+  assert.match(exportNote({ band: "suspect", judgment: "unfair" }), /held out/i);
 });

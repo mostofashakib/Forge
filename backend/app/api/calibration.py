@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from backend.app.api._pubsub_relay import stream_channel
 from backend.app.database import get_db, get_session_factory
 from backend.app.models import CalibrationRun, TaskBatch
-from backend.app.services import calibration_registry, task_registry
+from backend.app.services import calibration_registry, task_judgments, task_registry
 from backend.app.worker.calibration import channel_for, run_calibration_task
 from forge.settings import redis_url
 from forge.taskfactory.calibration import MAX_ATTEMPTS, MIN_ATTEMPTS
@@ -55,7 +55,10 @@ def list_calibrations(batch_id: str, db: Session = Depends(get_db)) -> list[dict
 @router.get("/batches/{batch_id}/calibrations/{run_id}")
 def get_calibration(batch_id: str, run_id: str, db: Session = Depends(get_db)) -> dict:
     _run(db, batch_id, run_id)
-    return calibration_registry.get_run(db, run_id)
+    detail = calibration_registry.get_run(db, run_id)
+    verdicts = task_judgments.judgments(db, batch_id)
+    detail["tasks"] = [{**task, "judgment": verdicts.get(task["task_id"])} for task in detail["tasks"]]
+    return detail
 
 
 @router.get("/batches/{batch_id}/calibrations/{run_id}/tasks/{task_id}")

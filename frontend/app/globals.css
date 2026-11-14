@@ -468,6 +468,9 @@
   .tasks-button { @apply inline-flex items-center bg-primary px-4 py-2.5 text-[0.65rem] font-semibold uppercase tracking-[0.14em] text-primary-foreground transition-all disabled:opacity-40; box-shadow: 3px 3px 0 var(--foreground); }
   .tasks-button:hover:not(:disabled) { @apply -translate-y-0.5 bg-foreground text-background; }
   .tasks-button--ghost { @apply border border-foreground/40 bg-transparent text-foreground; box-shadow: none; }
+  .calib-judgment { @apply flex flex-wrap items-center gap-2; }
+  .calib-judgment .tasks-button { @apply px-2.5 py-1.5; }
+  .calib-judgment small { @apply basis-full text-[0.65rem] text-muted-foreground; }
   .tasks-taxonomy { @apply grid gap-px bg-foreground/15 sm:grid-cols-2 xl:grid-cols-3; }
   .tasks-taxonomy__item { @apply bg-card p-5; }
   .tasks-taxonomy__item strong { @apply text-sm font-semibold; }
